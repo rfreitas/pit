@@ -28,21 +28,24 @@ No per-worktree marker files — the registry is the single source of truth.
 
 ---
 
-## UUID as the shared identity
+## Identity
 
 `pit` generates one UUID per worktree at creation time.
-That UUID is used in three places:
+That UUID is used in the worktree dir and branch name only:
 
 ```
 branch:   pi/<slug>-<uuid>
 worktree: <repo>-wt-<slug>-<uuid>
-session:  ~/.pi/agent/sessions/--<worktree-path-encoded>--/<timestamp>_<uuid>.jsonl
 ```
 
-This means the worktree dir, branch, and Pi session file are all
-linked by the same UUID without any secondary lookup.
+The Pi session is created naturally by Pi itself when it launches.
+No pre-creation of session files — Pi owns its own session format.
 
-The registry stores only the UUID — everything else is derivable from it.
+The session is found from the worktree path via bucket dir derivation:
+
+```
+worktree path → encode → session bucket dir → read .jsonl files inside
+```
 
 ---
 
@@ -50,12 +53,9 @@ The registry stores only the UUID — everything else is derivable from it.
 
 1. Generate a UUID
 2. Create the git branch and worktree dir (`<repo>-wt-<slug>-<uuid>`)
-3. Pre-create the Pi session file at the correct bucket path with the UUID:
-   - write the JSONL header line: `{"type":"session","version":3,"id":"<uuid>","timestamp":"...","cwd":"<worktree-path>"}`
-4. Append entry to `~/.pi/pit/registry.json`
-5. Launch `pi --session <session-file-path>` inside the worktree
+3. Append entry to `~/.pi/pit/registry.json`
+4. Launch `pi` inside the worktree — Pi creates its own session normally
 
-Pi loads the pre-created session and continues normally.
 The user experience is identical to plain `pi`.
 
 ---
@@ -82,7 +82,7 @@ Everything else is derivable from `uuid`, `task`, and `repo`:
 - branch: `pi/<slug(task)>-<uuid>`
 - worktree: `<repo-parent>/<repo-name>-wt-<slug(task)>-<uuid>`
 - session bucket: `~/.pi/agent/sessions/--<encoded-worktree-path>--/`
-- session file: `<timestamp>_<uuid>.jsonl` inside that bucket
+- session file: latest `.jsonl` inside that bucket (Pi creates it on first launch)
 
 ---
 
