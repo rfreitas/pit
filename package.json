@@ -1,0 +1,22 @@
+{
+  "name": "@ricfr/pi-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal Pi agent extensions, scripts, and tooling",
+  "keywords": ["pi-package"],
+  "scripts": {
+    "typecheck": "tsc"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "*",
+    "@sinclair/typebox": "^0.34.0",
+    "typescript": "^5.0.0"
+  }
+}
