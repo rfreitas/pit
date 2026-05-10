@@ -5,9 +5,10 @@
 `git worktree list` shows all worktrees for a repo — there is no built-in way to distinguish:
 
 - worktrees created by `pit` (pi agent tasks)
-- worktrees created by the developer manually for other purposes
+- worktrees created by the developer manually
 
-There is also no cross-repo visibility. If you have 3 repos each with 2 active `pit` worktrees, there is no single place to see all 6.
+There is also no cross-repo visibility, and no way to show the same
+session name that Pi shows in its session picker.
 
 ---
 
@@ -23,21 +24,39 @@ Follow Pi's own architecture:
 | Tab in picker shows all sessions | `pit list --all` shows all repos |
 
 One central store. Local view by default. Global on demand.
-
 No per-worktree marker files — the registry is the single source of truth.
-Liveness is checked by testing if the worktree dir still exists on disk.
 
 ---
 
-## Current state
+## UUID as the shared identity
 
-`pit` already does light namespacing:
+`pit` generates one UUID per worktree at creation time.
+That UUID is used in three places:
 
-- **branch name:** `pi/<slug>-<timestamp>`
-- **worktree dir:** `<repo>-wt-<slug>-<timestamp>`
+```
+branch:   pi/<slug>-<uuid>
+worktree: <repo>-wt-<slug>-<uuid>
+session:  ~/.pi/agent/sessions/--<worktree-path-encoded>--/<timestamp>_<uuid>.jsonl
+```
 
-This is enough to identify pit worktrees by convention but has no
-persistent tracking and no cross-repo visibility.
+This means the worktree dir, branch, and Pi session file are all
+linked by the same UUID without any secondary lookup.
+
+The registry stores only the UUID — everything else is derivable from it.
+
+---
+
+## How pit new works
+
+1. Generate a UUID
+2. Create the git branch and worktree dir (`<repo>-wt-<slug>-<uuid>`)
+3. Pre-create the Pi session file at the correct bucket path with the UUID:
+   - write the JSONL header line: `{"type":"session","version":3,"id":"<uuid>","timestamp":"...","cwd":"<worktree-path>"}`
+4. Append entry to `~/.pi/pit/registry.json`
+5. Launch `pi --session <session-file-path>` inside the worktree
+
+Pi loads the pre-created session and continues normally.
+The user experience is identical to plain `pi`.
 
 ---
 
@@ -45,45 +64,53 @@ persistent tracking and no cross-repo visibility.
 
 Location: `~/.pi/pit/registry.json`
 
-Structure:
-
 ```json
 {
   "worktrees": [
     {
+      "uuid": "019e129c-224f-7512-8e88-1c7e392cc26b",
       "task": "fix-login",
-      "branch": "pi/fix-login-20260510-153000",
       "repo": "C:/Users/ricfr/Repos/myrepo",
-      "worktree": "C:/Users/ricfr/Repos/myrepo-wt-fix-login-20260510-153000",
       "created": "2026-05-10T15:30:00Z"
     }
   ]
 }
 ```
 
-- `pit new` → appends entry
-- `pit clean` → removes entry
-- `pit list` → reads registry, filters to current repo by default
+Everything else is derivable from `uuid`, `task`, and `repo`:
+
+- branch: `pi/<slug(task)>-<uuid>`
+- worktree: `<repo-parent>/<repo-name>-wt-<slug(task)>-<uuid>`
+- session bucket: `~/.pi/agent/sessions/--<encoded-worktree-path>--/`
+- session file: `<timestamp>_<uuid>.jsonl` inside that bucket
 
 ---
 
-## pit list behaviour
+## pit list — display name
 
-Default (current repo only):
+`pit list` reads each session file and extracts the display name
+exactly as Pi does:
+
+1. scan the JSONL for the latest `session_info` entry → use its `name` field
+2. if none found, scan for the first `message` entry with `role: "user"` → use its text as preview
+
+This means `pit list` shows the same name that Pi's session picker shows.
+
+Default output (current repo):
 
 ```
-TASK          BRANCH                          WORKTREE                                  STATUS
-fix-login     pi/fix-login-20260510-153000    myrepo-wt-fix-login-20260510-153000       active
-write-tests   pi/write-tests-20260509-0900    myrepo-wt-write-tests-20260509-090000     orphaned
+TASK        BRANCH                                    SESSION NAME               STATUS
+fix-login   pi/fix-login-019e129c                     refactor the auth flow     active
+write-tests pi/write-tests-deadbeef                   (no session yet)           active
+old-task    pi/old-task-cafebabe                      add unit tests             orphaned
 ```
 
-With `--all` (all repos):
+With `--all`:
 
 ```
-REPO          TASK          BRANCH                          STATUS
-myrepo        fix-login     pi/fix-login-20260510-153000    active
-myrepo        write-tests   pi/write-tests-20260509-0900    orphaned
-other-repo    refactor      pi/refactor-20260508-1200       active
+REPO        TASK        BRANCH                        SESSION NAME               STATUS
+myrepo      fix-login   pi/fix-login-019e129c          refactor the auth flow     active
+other-repo  refactor    pi/refactor-cafebabe           (no session yet)           active
 ```
 
 Status:
@@ -92,35 +119,21 @@ Status:
 
 ---
 
-## pit clean behaviour
+## pit clean
 
 ```bash
-pit clean <task>          # remove specific worktree by task name (fuzzy match)
-pit clean --orphaned      # remove all registry entries whose dir no longer exists
+pit clean <task>       # remove worktree + branch + registry entry (fuzzy match on task)
+pit clean --orphaned   # remove all registry entries whose worktree dir no longer exists
 ```
-
-`pit clean` → removes worktree dir, deletes branch, removes registry entry.
-
----
-
-## Session file resolution
-
-Pi stores sessions at:
-
-```
-~/.pi/agent/sessions/--<worktree-path-encoded>--/<timestamp>_<uuid>.jsonl
-```
-
-Since the path encoding is deterministic, `pit` can derive the session
-bucket dir from the worktree path without storing it in the registry.
-
-This keeps the registry minimal — no need to track session paths explicitly.
 
 ---
 
 ## Implementation order
 
-1. Add `~/.pi/pit/registry.json` read/write to `pit new` and `pit clean`
-2. Update `pit list` to read from registry, default to current repo
-3. Add `pit list --all` for global view
-4. Add `pit clean --orphaned`
+1. UUID generation on `pit new`
+2. Pre-create Pi session file with UUID
+3. Launch `pi --session <path>`
+4. Registry read/write in `pit new` and `pit clean`
+5. `pit list` with session name resolution
+6. `pit list --all`
+7. `pit clean --orphaned`
