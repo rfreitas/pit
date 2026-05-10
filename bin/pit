@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# pit — pi tree
+# Creates a git worktree + branch and launches pi inside it.
+#
+# Usage:
+#   pit <task>          Create worktree for task and launch pi
+#   pit list            List active pi worktrees
+#   pit clean <task>    Remove a finished worktree and its branch
+
+set -euo pipefail
+
+BRANCH_PREFIX="pi"
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+usage() {
+  echo "Usage:"
+  echo "  pit <task>          Create worktree for task and launch pi"
+  echo "  pit list            List active pi worktrees"
+  echo "  pit clean <task>    Remove worktree and branch for task"
+  exit 1
+}
+
+require_git_repo() {
+  if ! git rev-parse --show-toplevel &>/dev/null; then
+    echo "pit: not inside a git repository" >&2
+    exit 1
+  fi
+}
+
+repo_root() {
+  git rev-parse --show-toplevel
+}
+
+slug() {
+  printf '%s' "$*" \
+    | tr '[:upper:]' '[:lower:]' \
+    | tr ' /' '--' \
+    | tr -cd 'a-z0-9._-'
+}
+
+timestamp() {
+  date +%Y%m%d-%H%M%S
+}
+
+branch_name() {
+  local task="$1"
+  echo "${BRANCH_PREFIX}/$(slug "$task")-$(timestamp)"
+}
+
+worktree_dir() {
+  local root="$1"
+  local task="$2"
+  echo "${root%/*}/$(basename "$root")-wt-$(slug "$task")-$(timestamp)"
+}
+
+# ── commands ─────────────────────────────────────────────────────────────────
+
+cmd_new() {
+  local task="${*:-task}"
+  require_git_repo
+
+  local root branch dir
+  root="$(repo_root)"
+  branch="$(branch_name "$task")"
+  dir="$(worktree_dir "$root" "$task")"
+
+  echo "pit: creating worktree"
+  echo "  branch:   $branch"
+  echo "  worktree: $dir"
+
+  git worktree add -b "$branch" "$dir" HEAD
+
+  echo "pit: launching pi in $dir"
+  cd "$dir"
+  exec pi
+}
+
+cmd_list() {
+  require_git_repo
+  echo "pit worktrees:"
+  git worktree list | grep -E "wt-" || echo "  (none)"
+}
+
+cmd_clean() {
+  local task="${*:-}"
+  if [[ -z "$task" ]]; then
+    echo "pit clean: provide a task name or branch suffix" >&2
+    exit 1
+  fi
+
+  require_git_repo
+
+  local root pattern
+  root="$(repo_root)"
+  pattern="$(slug "$task")"
+
+  # Find matching worktrees
+  local matches
+  matches=$(git worktree list --porcelain \
+    | awk '/^worktree /{wt=$2} /^branch /{br=$2} br ~ pattern && wt ~ "wt-" {print wt "|" br}' \
+      pattern="$pattern")
+
+  if [[ -z "$matches" ]]; then
+    echo "pit clean: no worktree matching '$task' found" >&2
+    exit 1
+  fi
+
+  while IFS='|' read -r wt br; do
+    local short_branch="${br#refs/heads/}"
+    echo "pit: removing worktree: $wt"
+    git worktree remove --force "$wt"
+    echo "pit: deleting branch:   $short_branch"
+    git branch -D "$short_branch"
+  done <<< "$matches"
+
+  echo "pit: done"
+}
+
+# ── dispatch ──────────────────────────────────────────────────────────────────
+
+if [[ $# -eq 0 ]]; then
+  usage
+fi
+
+case "$1" in
+  list)
+    cmd_list
+    ;;
+  clean)
+    shift
+    cmd_clean "$@"
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    cmd_new "$@"
+    ;;
+esac
