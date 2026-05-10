@@ -1,25 +1,19 @@
 #!/usr/bin/env bash
 # pit — pi tree
-# Creates a git worktree + branch and launches pi inside it.
+# Creates a git worktree and launches pi inside it.
 #
 # Usage:
-#   pit <task>          Create worktree for task and launch pi
-#   pit list            List active pi worktrees
-#   pit clean <task>    Remove a finished worktree and its branch
+#   pit                  Create a worktree and launch pi
+#   pit list             List pit worktrees for current repo
+#   pit list --all       List all pit worktrees across all repos
+#   pit clean            Remove orphaned registry entries
+#   pit clean <id>       Remove a specific worktree by id
 
 set -euo pipefail
 
-BRANCH_PREFIX="pi"
+REGISTRY="${HOME}/.pi/pit/registry.json"
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-usage() {
-  echo "Usage:"
-  echo "  pit <task>          Create worktree for task and launch pi"
-  echo "  pit list            List active pi worktrees"
-  echo "  pit clean <task>    Remove worktree and branch for task"
-  exit 1
-}
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 require_git_repo() {
   if ! git rev-parse --show-toplevel &>/dev/null; then
@@ -32,109 +26,273 @@ repo_root() {
   git rev-parse --show-toplevel
 }
 
-slug() {
-  printf '%s' "$*" \
-    | tr '[:upper:]' '[:lower:]' \
-    | tr ' /' '--' \
-    | tr -cd 'a-z0-9._-'
+# Generate a short random id (8 hex chars)
+gen_id() {
+  cat /dev/urandom | tr -dc 'a-f0-9' | head -c 8
 }
 
-timestamp() {
-  date +%Y%m%d-%H%M%S
+# Convert a filesystem path to a Pi session bucket name
+# e.g. C:\Users\ricfr\Repos\myrepo-wt-a1b2c3d4 → --C--Users-ricfr-Repos-myrepo-wt-a1b2c3d4--
+path_to_bucket() {
+  local p="$1"
+  # Normalise to forward slashes, replace : and / with -, wrap with --..--
+  echo "--$(echo "$p" | sed 's|\\|/|g' | sed 's|:|-|g' | sed 's|/|-|g')--"
 }
 
-branch_name() {
-  local task="$1"
-  echo "${BRANCH_PREFIX}/$(slug "$task")-$(timestamp)"
+# Get the Pi sessions root directory
+sessions_dir() {
+  echo "${HOME}/.pi/agent/sessions"
 }
 
-worktree_dir() {
-  local root="$1"
-  local task="$2"
-  echo "${root%/*}/$(basename "$root")-wt-$(slug "$task")-$(timestamp)"
+# Find the latest session file for a given worktree path
+session_file_for() {
+  local worktree="$1"
+  local bucket
+  bucket="$(sessions_dir)/$(path_to_bucket "$worktree")"
+  if [[ -d "$bucket" ]]; then
+    ls -t "$bucket"/*.jsonl 2>/dev/null | head -1
+  fi
 }
 
-# ── commands ─────────────────────────────────────────────────────────────────
+# Extract display name from a session file (mirrors what Pi shows)
+session_name() {
+  local file="$1"
+  if [[ -z "$file" || ! -f "$file" ]]; then
+    echo "(no session yet)"
+    return
+  fi
+
+  # Latest session_info name
+  local name
+  name=$(grep '"type":"session_info"' "$file" | tail -1 | \
+    python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('name',''))" 2>/dev/null || true)
+  if [[ -n "$name" ]]; then
+    echo "$name"
+    return
+  fi
+
+  # First user message as preview
+  local preview
+  preview=$(grep '"role":"user"' "$file" | head -1 | \
+    python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+content = d.get('message', {}).get('content', [])
+for c in content:
+    if isinstance(c, dict) and c.get('type') == 'text':
+        text = c['text'][:60].replace('\n', ' ')
+        print(text)
+        break
+" 2>/dev/null || true)
+  if [[ -n "$preview" ]]; then
+    echo "$preview"
+    return
+  fi
+
+  echo "(no session yet)"
+}
+
+# ── registry ──────────────────────────────────────────────────────────────────
+
+registry_init() {
+  mkdir -p "$(dirname "$REGISTRY")"
+  if [[ ! -f "$REGISTRY" ]]; then
+    echo '{"worktrees":[]}' > "$REGISTRY"
+  fi
+}
+
+registry_add() {
+  local id="$1" repo="$2" worktree="$3" branch="$4" created="$5"
+  registry_init
+  local tmp
+  tmp=$(mktemp)
+  python3 -c "
+import sys, json
+with open('$REGISTRY') as f:
+    reg = json.load(f)
+reg['worktrees'].append({
+    'id': '$id',
+    'repo': '$repo',
+    'worktree': '$worktree',
+    'branch': '$branch',
+    'created': '$created'
+})
+print(json.dumps(reg, indent=2))
+" > "$tmp" && mv "$tmp" "$REGISTRY"
+}
+
+registry_remove() {
+  local id="$1"
+  registry_init
+  local tmp
+  tmp=$(mktemp)
+  python3 -c "
+import sys, json
+with open('$REGISTRY') as f:
+    reg = json.load(f)
+reg['worktrees'] = [w for w in reg['worktrees'] if w['id'] != '$id']
+print(json.dumps(reg, indent=2))
+" > "$tmp" && mv "$tmp" "$REGISTRY"
+}
+
+registry_entries() {
+  registry_init
+  python3 -c "
+import json
+with open('$REGISTRY') as f:
+    reg = json.load(f)
+for w in reg['worktrees']:
+    print(w['id'] + '|' + w['repo'] + '|' + w['worktree'] + '|' + w['branch'] + '|' + w['created'])
+"
+}
+
+# ── commands ──────────────────────────────────────────────────────────────────
 
 cmd_new() {
-  local task="${*:-task}"
   require_git_repo
 
-  local root branch dir
+  local id root branch worktree created
+  id="$(gen_id)"
   root="$(repo_root)"
-  branch="$(branch_name "$task")"
-  dir="$(worktree_dir "$root" "$task")"
+  branch="pi/${id}"
+  worktree="${root%/*}/$(basename "$root")-wt-${id}"
+  created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   echo "pit: creating worktree"
+  echo "  id:       $id"
   echo "  branch:   $branch"
-  echo "  worktree: $dir"
+  echo "  worktree: $worktree"
 
-  git worktree add -b "$branch" "$dir" HEAD
+  git worktree add -b "$branch" "$worktree" HEAD
 
-  echo "pit: launching pi in $dir"
-  cd "$dir"
+  registry_add "$id" "$root" "$worktree" "$branch" "$created"
+
+  echo "pit: launching pi"
+  cd "$worktree"
   exec pi
 }
 
 cmd_list() {
-  require_git_repo
-  echo "pit worktrees:"
-  git worktree list | grep -E "wt-" || echo "  (none)"
+  local show_all="${1:-}"
+  local current_repo=""
+
+  if [[ "$show_all" != "--all" ]]; then
+    if git rev-parse --show-toplevel &>/dev/null; then
+      current_repo="$(repo_root)"
+    fi
+  fi
+
+  registry_init
+
+  local entries
+  entries="$(registry_entries)"
+
+  if [[ -z "$entries" ]]; then
+    echo "no pit worktrees"
+    return
+  fi
+
+  if [[ "$show_all" == "--all" ]]; then
+    printf "%-10s  %-20s  %-40s  %s\n" "ID" "REPO" "SESSION NAME" "STATUS"
+    printf "%-10s  %-20s  %-40s  %s\n" "----------" "--------------------" "----------------------------------------" "--------"
+  else
+    printf "%-10s  %-14s  %-40s  %s\n" "ID" "BRANCH" "SESSION NAME" "STATUS"
+    printf "%-10s  %-14s  %-40s  %s\n" "----------" "--------------" "----------------------------------------" "--------"
+  fi
+
+  while IFS='|' read -r id repo worktree branch created; do
+    [[ -z "$id" ]] && continue
+
+    if [[ "$show_all" != "--all" && -n "$current_repo" && "$repo" != "$current_repo" ]]; then
+      continue
+    fi
+
+    local status session_file name
+    if [[ -d "$worktree" ]]; then
+      status="active"
+    else
+      status="orphaned"
+    fi
+
+    session_file="$(session_file_for "$worktree")"
+    name="$(session_name "$session_file")"
+
+    if [[ "$show_all" == "--all" ]]; then
+      local short_repo
+      short_repo="$(basename "$repo")"
+      printf "%-10s  %-20s  %-40s  %s\n" "$id" "$short_repo" "${name:0:40}" "$status"
+    else
+      printf "%-10s  %-14s  %-40s  %s\n" "$id" "$branch" "${name:0:40}" "$status"
+    fi
+  done <<< "$entries"
 }
 
 cmd_clean() {
-  local task="${*:-}"
-  if [[ -z "$task" ]]; then
-    echo "pit clean: provide a task name or branch suffix" >&2
-    exit 1
+  local id="${1:-}"
+
+  if [[ -n "$id" ]]; then
+    # Remove specific worktree
+    local entry
+    entry=$(registry_entries | grep "^${id}|" || true)
+    if [[ -z "$entry" ]]; then
+      echo "pit clean: no worktree with id '$id'" >&2
+      exit 1
+    fi
+
+    local repo worktree branch created
+    IFS='|' read -r _ repo worktree branch created <<< "$entry"
+
+    if [[ -d "$worktree" ]]; then
+      echo "pit: removing worktree: $worktree"
+      git -C "$repo" worktree remove --force "$worktree"
+    fi
+
+    local short_branch="${branch#refs/heads/}"
+    if git -C "$repo" show-ref --verify --quiet "refs/heads/${short_branch}" 2>/dev/null; then
+      echo "pit: deleting branch: $short_branch"
+      git -C "$repo" branch -D "$short_branch"
+    fi
+
+    registry_remove "$id"
+    echo "pit: done"
+  else
+    # Remove orphaned entries
+    local removed=0
+    while IFS='|' read -r id repo worktree branch created; do
+      [[ -z "$id" ]] && continue
+      if [[ ! -d "$worktree" ]]; then
+        echo "pit: removing orphaned entry: $id ($worktree)"
+        registry_remove "$id"
+        removed=$((removed + 1))
+      fi
+    done <<< "$(registry_entries)"
+
+    if [[ $removed -eq 0 ]]; then
+      echo "pit: no orphaned entries"
+    else
+      echo "pit: removed $removed orphaned entries"
+    fi
   fi
-
-  require_git_repo
-
-  local root pattern
-  root="$(repo_root)"
-  pattern="$(slug "$task")"
-
-  # Find matching worktrees
-  local matches
-  matches=$(git worktree list --porcelain \
-    | awk '/^worktree /{wt=$2} /^branch /{br=$2} br ~ pattern && wt ~ "wt-" {print wt "|" br}' \
-      pattern="$pattern")
-
-  if [[ -z "$matches" ]]; then
-    echo "pit clean: no worktree matching '$task' found" >&2
-    exit 1
-  fi
-
-  while IFS='|' read -r wt br; do
-    local short_branch="${br#refs/heads/}"
-    echo "pit: removing worktree: $wt"
-    git worktree remove --force "$wt"
-    echo "pit: deleting branch:   $short_branch"
-    git branch -D "$short_branch"
-  done <<< "$matches"
-
-  echo "pit: done"
 }
 
 # ── dispatch ──────────────────────────────────────────────────────────────────
 
-if [[ $# -eq 0 ]]; then
-  usage
-fi
-
-case "$1" in
+case "${1:-}" in
   list)
-    cmd_list
+    cmd_list "${2:-}"
     ;;
   clean)
     shift
-    cmd_clean "$@"
+    cmd_clean "${1:-}"
     ;;
   -h|--help)
-    usage
+    sed -n '2,8p' "$0" | sed 's/^# //'
+    ;;
+  "")
+    cmd_new
     ;;
   *)
-    cmd_new "$@"
+    echo "pit: unknown command '$1'" >&2
+    exit 1
     ;;
 esac
