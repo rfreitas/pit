@@ -136,6 +136,12 @@ export default function (pi: ExtensionAPI) {
 			const result = await ctx.switchSession(newSessionFile, {
 				withSession: async (newCtx) => {
 					newCtx.ui.notify(`Session handed off to ${targetPath}`, "info");
+					if (process.cwd() !== targetPath) {
+						newCtx.ui.notify(
+							`Note: the session CWD is now ${targetPath} but the process CWD is still ${process.cwd()}. Tool calls and relative paths may behave unexpectedly until you restart pi from the new directory.`,
+							"warning"
+						);
+					}
 					// Delete original now that we are safely in the new session
 					try {
 						fs.unlinkSync(originalSessionFile);
