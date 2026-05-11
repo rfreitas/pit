@@ -10,6 +10,6 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true
   },
-  "include": ["extensions/**/*.ts"],
+  "include": ["extensions/**/*.ts", "bin/**/*.ts"],
   "exclude": ["node_modules"]
 }
