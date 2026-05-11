@@ -1,0 +1,14 @@
+{
+  "lastChangelogVersion": "0.74.0",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "claude-sonnet-4.6",
+  "extensions": [
+    "/mnt/c/Users/ricfr/Repos/agent/extensions"
+  ],
+  "packages": [
+    "npm:@casualjim/pi-heimdall",
+    "npm:@spences10/pi-confirm-destructive",
+    "npm:@jerryan/pi-sanity"
+  ],
+  "defaultThinkingLevel": "medium"
+}

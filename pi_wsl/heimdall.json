@@ -1,0 +1,10 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "network": "host",
+    "paths": {
+      "/mnt/c": { "mode": "deny" },
+      "./.pi": { "mode": "read" }
+    }
+  }
+}
