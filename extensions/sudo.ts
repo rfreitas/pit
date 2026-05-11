@@ -14,25 +14,7 @@ import { Type } from "typebox";
 import { spawn } from "node:child_process";
 import { matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
 
-const SUDO_CACHE_MS = 15 * 60 * 1000; // 15 minutes
-
-interface SudoCache {
-  password: string;
-  at: number;
-}
-
 export default function (pi: ExtensionAPI) {
-  let cache: SudoCache | null = null;
-
-  function getCached(): string | null {
-    if (!cache) return null;
-    if (Date.now() - cache.at > SUDO_CACHE_MS) {
-      cache = null;
-      return null;
-    }
-    return cache.password;
-  }
-
   function runCommand(
     command: string,
     password: string | null,
@@ -40,8 +22,8 @@ export default function (pi: ExtensionAPI) {
   ): Promise<{ stdout: string; stderr: string; code: number }> {
     return new Promise((resolve, reject) => {
       const args = password !== null
-        ? ["-S", "-k", "--", "sh", "-c", command]   // -k: ignore cached creds, force stdin
-        : ["-n", "--", "sh", "-c", command];          // -n: non-interactive (no prompt)
+        ? ["-S", "--", "sh", "-c", command]   // -S: read password from stdin
+        : ["-n", "--", "sh", "-c", command];  // -n: non-interactive (no prompt)
 
       const proc = spawn("sudo", args, { stdio: ["pipe", "pipe", "pipe"] });
 
@@ -164,29 +146,22 @@ export default function (pi: ExtensionAPI) {
         throw e;
       }
 
-      // 2. Check in-memory cache
-      let password = getCached();
-
-      // 3. Prompt if needed
+      // 2. Prompt for password
+      onUpdate?.({ content: [{ type: "text", text: "Waiting for password…" }], details: {} });
+      const password = await promptPassword(params.command, ctx);
       if (password === null) {
-        onUpdate?.({ content: [{ type: "text", text: "Waiting for password…" }], details: {} });
-        password = await promptPassword(params.command, ctx);
-        if (password === null) {
-          return {
-            content: [{ type: "text", text: "Cancelled by user" }],
-            isError: true,
-            details: {},
-          };
-        }
+        return {
+          content: [{ type: "text", text: "Cancelled by user" }],
+          isError: true,
+          details: {},
+        };
       }
 
-      // 4. Run with password
+      // 3. Run with password
       try {
         const result = await runCommand(params.command, password, signal ?? new AbortController().signal);
 
         if (result.code === 0) {
-          // 5. Cache on success
-          cache = { password, at: Date.now() };
           return {
             content: [{ type: "text", text: result.stdout || "(no output)" }],
             details: { stderr: result.stderr, code: result.code },
@@ -199,7 +174,6 @@ export default function (pi: ExtensionAPI) {
           || result.stderr.toLowerCase().includes("sorry");
 
         if (isAuthFailure) {
-          cache = null;
           ctx.ui.notify("Incorrect password", "error");
         }
 
