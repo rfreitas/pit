@@ -17,13 +17,13 @@ import { matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
 export default function (pi: ExtensionAPI) {
   function runCommand(
     command: string,
-    password: string | null,
+    password: string,
     signal: AbortSignal
   ): Promise<{ stdout: string; stderr: string; code: number }> {
     return new Promise((resolve, reject) => {
-      const args = password !== null
-        ? ["-S", "--", "sh", "-c", command]   // -S: read password from stdin
-        : ["-n", "--", "sh", "-c", command];  // -n: non-interactive (no prompt)
+      // -k: ignore kernel cache + don't update it (strict per-command auth)
+      // -S: read password from stdin
+      const args = ["-k", "-S", "--", "sh", "-c", command];
 
       const proc = spawn("sudo", args, { stdio: ["pipe", "pipe", "pipe"] });
 
@@ -35,6 +35,8 @@ export default function (pi: ExtensionAPI) {
 
       if (password !== null) {
         proc.stdin.write(password + "\n");
+        proc.stdin.end();
+      } else {
         proc.stdin.end();
       }
 
@@ -121,32 +123,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      // 1. Try non-interactive first (NOPASSWD or kernel-cached creds)
-      try {
-        const result = await runCommand(params.command, null, signal ?? new AbortController().signal);
-        if (result.code === 0) {
-          return {
-            content: [{ type: "text", text: result.stdout || "(no output)" }],
-            details: { stderr: result.stderr, code: result.code },
-          };
-        }
-        // code 1 from -n means password required — fall through
-        // any other error is a real failure
-        if (result.code !== 1) {
-          return {
-            content: [{ type: "text", text: result.stderr || `exited with code ${result.code}` }],
-            isError: true,
-            details: { stderr: result.stderr, code: result.code },
-          };
-        }
-      } catch (e: any) {
-        if (e.message === "aborted") {
-          return { content: [{ type: "text", text: "Cancelled" }], isError: true, details: {} };
-        }
-        throw e;
-      }
-
-      // 2. Prompt for password
+      // 1. Prompt for password
       onUpdate?.({ content: [{ type: "text", text: "Waiting for password…" }], details: {} });
       const password = await promptPassword(params.command, ctx);
       if (password === null) {
@@ -157,7 +134,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      // 3. Run with password
+      // 2. Run with password
       try {
         const result = await runCommand(params.command, password, signal ?? new AbortController().signal);
 
