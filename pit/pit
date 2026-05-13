@@ -1,20 +1,2 @@
 #!/usr/bin/env bash
-# pit — pi tree launcher
-#
-# Ensures @earendil-works/pi-coding-agent is resolvable from pit.ts even when
-# the repo lives on a Windows-mounted path (/mnt/c/...) where Node's ESM
-# walk-up resolver never reaches the global node_modules. We symlink the
-# package into pit/node_modules/ on first run; git ignores node_modules/.
-
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-NODE_BIN="$(which node)"
-NODE_PREFIX="$(dirname "$(dirname "$NODE_BIN")")"
-GLOBAL_NM="${NODE_PREFIX}/lib/node_modules"
-LINK="${SCRIPT_DIR}/node_modules/@earendil-works/pi-coding-agent"
-
-if [[ ! -e "$LINK" ]]; then
-  mkdir -p "${SCRIPT_DIR}/node_modules/@earendil-works"
-  ln -sf "${GLOBAL_NM}/@earendil-works/pi-coding-agent" "$LINK"
-fi
-
-exec node --experimental-strip-types --no-warnings "${SCRIPT_DIR}/pit.ts" "$@"
+exec node --experimental-strip-types --no-warnings "$(dirname "$(readlink -f "$0")")/pit.ts" "$@"
