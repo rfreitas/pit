@@ -1,14 +1,22 @@
 # Agent Instructions
 
-This repo contains personal Pi agent extensions and tooling.
+This repo contains personal Pi agent extensions and tooling. Read `README.md` for the full structure overview.
 
-## Extensions
+## Documentation principles
 
-Extensions live in `extensions/`. They are auto-loaded by Pi via `~/.pi/agent/settings.json`.
+- Human docs (`README.md`, package READMEs) hold the detail — keep them authoritative
+- Agent docs (`AGENTS.md`) stay lean: point to human docs rather than duplicate them
+- After structural changes, read `README.md` and relevant `AGENTS.md` files and update them to reflect the new structure
 
-### Adding dependencies
+## Working on a package
 
-Pi bundles the following packages at runtime — do NOT add them to `package.json`, just import them directly:
+Each package in `packages/` has its own `AGENTS.md`. Read it before making changes:
+
+- `packages/handoff/AGENTS.md` — `/handoff` extension
+
+## Extension dependencies
+
+Pi bundles these at runtime — import directly, do NOT add to `package.json`:
 
 - `@earendil-works/pi-coding-agent`
 - `@earendil-works/pi-tui`
@@ -17,15 +25,18 @@ Pi bundles the following packages at runtime — do NOT add them to `package.jso
 
 Node.js built-ins (`node:fs`, `node:path`, `node:crypto`, etc.) are always available.
 
-For anything else, install it explicitly:
+For anything else:
 
 ```bash
 cd C:/Users/ricfr/Repos/agent   # always install here, not globally
 npm install <package>
 ```
 
-This installs into `node_modules/` local to this repo. Jiti resolves imports by walking up from the extension file's path, so it will find packages here regardless of what directory pi is running from. Do not use `npm install -g`.
+**If you add a non-bundled import without running `npm install`, it will crash at runtime.**
 
-**If you add a non-bundled import to any extension without running `npm install`, it will crash at runtime.**
+## After any change
 
-After installing, run `npm run typecheck` to verify.
+```bash
+npm run typecheck   # must pass
+npm test            # must pass if tests exist for the changed code
+```

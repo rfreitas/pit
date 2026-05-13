@@ -22,7 +22,7 @@ import * as path from "path";
  * List directories matching a typed prefix, for use in argument completion.
  * Handles absolute paths, relative paths, and partial names.
  */
-function getDirectoryCompletions(prefix: string, cwd: string): AutocompleteItem[] {
+export function getDirectoryCompletions(prefix: string, cwd: string): AutocompleteItem[] {
 	try {
 		let listDir: string;
 		let filterStr: string;
@@ -61,7 +61,7 @@ function getDirectoryCompletions(prefix: string, cwd: string): AutocompleteItem[
  * Convert an absolute path to a Pi session bucket directory name.
  * e.g. C:\Users\ricfr\Repos\agent → --C--Users-ricfr-Repos-agent--
  */
-function pathToBucketName(targetPath: string): string {
+export function pathToBucketName(targetPath: string): string {
 	return "--" + targetPath.replace(/^[\/\\]/, "").replace(/[\/\\:]/g, "-") + "--";
 }
 
