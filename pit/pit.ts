@@ -55,7 +55,6 @@ interface PitSession {
 
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "/";
 const AGENT_DIR = getAgentDir();
-const PIT_SCRIPT = process.argv[1];
 
 /** Subcommands that have nothing to do with sessions — forward to pi directly */
 const PI_SUBCOMMANDS = new Set([
@@ -255,7 +254,7 @@ async function pickPitSession(idArg?: string): Promise<PitSession | null> {
         pitSessions.push({
           meta: pitEntry.data,
           sessionFile: info.path,
-          name: info.name ?? info.firstMessage.slice(0, 60) || "(no name)",
+          name: info.name ?? (info.firstMessage.slice(0, 60) || "(no name)"),
           modified: info.modified,
         });
       }
@@ -354,17 +353,17 @@ function getExtensionMounts(): string[] {
 }
 
 /**
- * Spawn the sandboxed inner launcher via bwrap.
- * Never returns — exits the process.
+ * Spawn the sandboxed pi session via bwrap.
+ * The outer process handles all worktree/session setup; bwrap only wraps
+ * the actual pi session. Never returns — exits the process.
  */
 function bwrapLaunch(cwd: string, piArgs: string[]): never {
-  const bwrap = findBwrap()!; // caller must check first
+  const bwrap = findBwrap()!; // caller checks first
   const nodeBin = process.execPath;
   const nodeDir = path.dirname(path.dirname(nodeBin));
-  const realScript = fs.existsSync(PIT_SCRIPT)
-    ? fs.realpathSync(PIT_SCRIPT)
-    : PIT_SCRIPT;
-  const pitDir = path.dirname(realScript);
+  const piScript = fs.realpathSync(
+    execSync("which pi", { encoding: "utf8" }).trim()
+  );
   const piAgentDir = fs.existsSync(AGENT_DIR)
     ? fs.realpathSync(AGENT_DIR)
     : AGENT_DIR;
@@ -379,7 +378,7 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     "--ro-bind-try", "/lib64", "/lib64",
     "--ro-bind-try", "/bin", "/bin",
     "--ro-bind-try", "/sbin", "/sbin",
-    // node runtime
+    // node runtime (includes pi + global node_modules)
     "--ro-bind", nodeDir, nodeDir,
     // pi config: ro, with sessions rw on top
     "--dir", path.dirname(AGENT_DIR),
@@ -387,8 +386,6 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     "--bind", path.join(piAgentDir, "sessions"), path.join(AGENT_DIR, "sessions"),
     // worktree (rw — the whole point)
     "--bind", cwd, cwd,
-    // pit script dir (ro — needed for --_launch inside sandbox)
-    "--ro-bind", pitDir, pitDir,
   ];
 
   for (const mount of getExtensionMounts()) {
@@ -404,7 +401,7 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     "--setenv", "PI_CODING_AGENT", "true",
     "--chdir", cwd,
     "--",
-    nodeBin, realScript, "--_launch", cwd, "--", ...piArgs
+    nodeBin, piScript, ...piArgs
   );
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
@@ -435,17 +432,6 @@ async function launch(
 const argv = process.argv.slice(2);
 
 void (async () => {
-  // ── --_launch: internal entry point used by bwrap subprocess ────────────
-  // Usage: --_launch <cwd> -- [piArgs...]
-  if (argv[0] === "--_launch") {
-    const [, cwd, ...rest] = argv;
-    const sep = rest.indexOf("--");
-    const piArgs = sep >= 0 ? rest.slice(sep + 1) : rest;
-    process.chdir(cwd);
-    await main(piArgs);
-    return;
-  }
-
   // ── strip --no-sandbox (pit-only flag) ───────────────────────────────────
   let sandbox = true;
   const filteredArgv: string[] = [];
