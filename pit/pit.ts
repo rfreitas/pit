@@ -15,7 +15,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import * as readline from "node:readline";
 import { execSync, execFileSync, spawnSync } from "node:child_process";
 import {
   main,
@@ -23,6 +22,7 @@ import {
   getAgentDir,
   CURRENT_SESSION_VERSION,
   type CustomEntry,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -43,13 +43,6 @@ interface WorktreeResult {
   mode: "worktree" | "no-tree";
   cwd: string;
   meta: PitMetadata;
-}
-
-interface PitSession {
-  meta: PitMetadata;
-  sessionFile: string;
-  name: string;
-  modified: Date;
 }
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -261,86 +254,40 @@ function setupNewSession(result: WorktreeResult): string {
   return sessionFile;
 }
 
-// ── resume picker ─────────────────────────────────────────────────────────────
+// ── resume via pi's native picker ────────────────────────────────────────────────────
 
-async function pickPitSession(idArg?: string): Promise<PitSession | null> {
-  const allSessions = await SessionManager.listAll();
+/**
+ * Run pi's native session picker. If the user picks a pit session, intercept
+ * it via session_before_switch (before it renders), cancel the switch, and
+ * return the selection so pit can do the worktree check and relaunch.
+ * Non-pit sessions open normally inside this call and null is returned.
+ */
+async function runPickerIntercept(
+  piArgs: string[]
+): Promise<{ sessionFile: string; meta: PitMetadata } | null> {
+  let intercepted: { sessionFile: string; meta: PitMetadata } | null = null;
 
-  const pitSessions: PitSession[] = [];
-  for (const info of allSessions) {
-    try {
-      const sm = SessionManager.open(info.path);
-      const entries = sm.getEntries();
-      const pitEntry = entries.find(
-        (e): e is CustomEntry<PitMetadata> =>
-          e.type === "custom" && (e as CustomEntry).customType === "pit"
-      );
-      if (pitEntry?.data) {
-        pitSessions.push({
-          meta: pitEntry.data,
-          sessionFile: info.path,
-          name: info.name ?? (info.firstMessage.slice(0, 60) || "(no name)"),
-          modified: info.modified,
-        });
+  const factory: ExtensionFactory = (pi) => {
+    pi.on("session_before_switch", (ctx, event) => {
+      if (event.reason !== "resume" || !event.targetSessionFile) return {};
+      try {
+        const sm = SessionManager.open(event.targetSessionFile);
+        const pitEntry = sm.getEntries().find(
+          (e): e is CustomEntry<PitMetadata> =>
+            e.type === "custom" && (e as CustomEntry).customType === "pit"
+        );
+        if (!pitEntry?.data) return {}; // not a pit session — open normally
+        intercepted = { sessionFile: event.targetSessionFile, meta: pitEntry.data };
+        ctx.shutdown();
+        return { cancel: true };
+      } catch {
+        return {};
       }
-    } catch {
-      // skip unreadable sessions
-    }
-  }
+    });
+  };
 
-  // Most recently modified first
-  pitSessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-
-  if (pitSessions.length === 0) {
-    console.log("pit: no pit sessions found");
-    return null;
-  }
-
-  if (idArg) {
-    const match = pitSessions.find(
-      (s) => s.meta.id === idArg || s.meta.id.startsWith(idArg)
-    );
-    if (!match) {
-      console.error(`pit: no session with id '${idArg}'`);
-      process.exit(1);
-    }
-    return match;
-  }
-
-  // Interactive numbered list
-  console.log("\npit sessions:\n");
-  for (let i = 0; i < pitSessions.length; i++) {
-    const s = pitSessions[i];
-    const status =
-      s.meta.mode === "no-tree"
-        ? "no-tree"
-        : fs.existsSync(s.meta.worktree)
-          ? "present"
-          : "missing";
-    const icon = status === "present" ? "✓" : status === "no-tree" ? "·" : "✗";
-    const repo = path.basename(s.meta.repo);
-    const branchShort = s.meta.branch ? s.meta.branch.replace("pi/", "") : "—";
-    console.log(
-      `  ${String(i + 1).padStart(2)}.  ${icon}  [${s.meta.id}]  ` +
-        `${s.name.slice(0, 48).padEnd(48)}  ${repo}/${branchShort}`
-    );
-  }
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  const answer = await new Promise<string>((resolve) => {
-    rl.question(`\nPick [1–${pitSessions.length}]: `, resolve);
-  });
-  rl.close();
-
-  const n = parseInt(answer.trim(), 10);
-  if (isNaN(n) || n < 1 || n > pitSessions.length) {
-    console.error("pit: invalid selection");
-    process.exit(1);
-  }
-  return pitSessions[n - 1];
+  await main(["--resume", ...piArgs], { extensionFactories: [factory] });
+  return intercepted;
 }
 
 // ── sandbox ───────────────────────────────────────────────────────────────────
@@ -474,18 +421,13 @@ void (async () => {
 
   // ── pit -r [id]: worktree-aware resume picker ────────────────────────────
   if (filteredArgv[0] === "-r" || filteredArgv[0] === "--resume") {
-    const rest = filteredArgv.slice(1);
-    let idArg: string | undefined;
-    let piArgs: string[];
-    // treat first arg as id only if it doesn't look like a flag
-    if (rest.length > 0 && !rest[0].startsWith("-")) {
-      [idArg, ...piArgs] = rest;
-    } else {
-      piArgs = rest;
-    }
-
-    const picked = await pickPitSession(idArg);
-    if (!picked) return;
+    const piArgs = filteredArgv.slice(1);
+    // Pi's picker runs in the outer process (no bwrap yet).
+    // runPickerIntercept intercepts pit sessions before they render,
+    // returning the selection so we can do worktree check + relaunch.
+    // Non-pit sessions open normally inside this call.
+    const picked = await runPickerIntercept(piArgs);
+    if (!picked) return; // user cancelled or opened a non-pit session normally
 
     const result = worktreeCheck(picked.meta);
     await launch(result.cwd, ["--session", picked.sessionFile, ...piArgs], sandbox);
