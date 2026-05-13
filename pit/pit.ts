@@ -360,6 +360,8 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     "--proc", "/proc",
     "--ro-bind", "/usr", "/usr",
     "--ro-bind", "/etc", "/etc",
+    // /etc/resolv.conf is a symlink to /mnt/wsl/resolv.conf on WSL
+    "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
     "--ro-bind-try", "/lib", "/lib",
     "--ro-bind-try", "/lib64", "/lib64",
     "--ro-bind-try", "/bin", "/bin",
