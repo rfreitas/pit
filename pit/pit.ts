@@ -389,9 +389,7 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
   const piScript = fs.realpathSync(
     execSync("which pi", { encoding: "utf8" }).trim()
   );
-  const piAgentDir = fs.existsSync(AGENT_DIR)
-    ? fs.realpathSync(AGENT_DIR)
-    : AGENT_DIR;
+  const piAgentDir = AGENT_DIR;
 
   const args: string[] = [
     "--tmpfs", "/",
