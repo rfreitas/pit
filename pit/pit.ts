@@ -389,7 +389,6 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
   const piScript = fs.realpathSync(
     execSync("which pi", { encoding: "utf8" }).trim()
   );
-  const piAgentDir = AGENT_DIR;
 
   const args: string[] = [
     "--tmpfs", "/",
@@ -403,10 +402,8 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     "--ro-bind-try", "/sbin", "/sbin",
     // node runtime (includes pi + global node_modules)
     "--ro-bind", nodeDir, nodeDir,
-    // pi config: ro, with sessions rw on top
-    "--dir", path.dirname(AGENT_DIR),
-    "--ro-bind", piAgentDir, AGENT_DIR,
-    "--bind", path.join(piAgentDir, "sessions"), path.join(AGENT_DIR, "sessions"),
+    // pi config dir (read-write — auth token refresh and settings need write access)
+    "--bind", AGENT_DIR, AGENT_DIR,
     // worktree (rw — the whole point)
     "--bind", cwd, cwd,
   ];
