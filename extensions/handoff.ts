@@ -66,9 +66,21 @@ function pathToBucketName(targetPath: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	// Track session cwd so getArgumentCompletions (which has no ctx) can use it
+	let sessionCwd: string = process.cwd();
+
+	pi.on("session_start", (_event, ctx) => {
+		sessionCwd = ctx.cwd;
+		if (process.cwd() !== ctx.cwd) {
+			ctx.ui.setStatus("cwd-mismatch", `⚠ session dir: ${ctx.cwd} (process is in ${process.cwd()})`);
+		} else {
+			ctx.ui.setStatus("cwd-mismatch", undefined);
+		}
+	});
+
 	pi.registerCommand("handoff", {
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
-			const items = getDirectoryCompletions(prefix, process.cwd());
+			const items = getDirectoryCompletions(prefix, sessionCwd);
 			return items.length > 0 ? items : null;
 		},
 		description: "Move current session to another project directory. Usage: /handoff <target-directory>",
