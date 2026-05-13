@@ -20,9 +20,9 @@ import { execSync, execFileSync, spawnSync } from "node:child_process";
 import {
   main,
   SessionManager,
+  SessionSelectorComponent,
   getAgentDir,
   type CustomEntry,
-  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import {
   type PitMetadata,
@@ -216,42 +216,60 @@ function setupNewSession(result: WorktreeResult): string {
   return _setupNewSession(result, AGENT_DIR);
 }
 
-// ── resume via pi's native picker ────────────────────────────────────────────────────
+// ── resume via session picker ───────────────────────────────────────────────────────
 
 /**
- * Run pi's native session picker. If the user picks a pit session, intercept
- * it via session_before_switch (before it renders), cancel the switch, and
- * return the selection so pit can do the worktree check and relaunch.
- * Non-pit sessions open normally inside this call and null is returned.
+ * Show pi's native session picker directly via TUI + SessionSelectorComponent,
+ * without launching a full pi session in the outer process. No session opens,
+ * no cancel/shutdown gymnastics — just the picker UI, then a clean bwrap launch.
+ *
+ * If the user picks a pit session: return the selection for worktree check + relaunch.
+ * If the user picks a non-pit session: open it normally via launch() and return null.
+ * If the user cancels: return null.
  */
-async function runPickerIntercept(
-  piArgs: string[]
+async function showPicker(
+  piArgs: string[],
+  sandbox: boolean
 ): Promise<{ sessionFile: string; meta: PitMetadata } | null> {
-  let intercepted: { sessionFile: string; meta: PitMetadata } | null = null;
+  const { TUI, ProcessTerminal } = await import("@earendil-works/pi-tui");
 
-  const factory: ExtensionFactory = (pi) => {
-    pi.on("session_before_switch", (ctx, event) => {
-      if (event.reason !== "resume" || !event.targetSessionFile) return {};
-      try {
-        const sm = SessionManager.open(event.targetSessionFile);
-        const pitEntry = sm.getEntries().find(
-          (e): e is CustomEntry<PitMetadata> =>
-            e.type === "custom" && (e as CustomEntry).customType === "pit"
-        );
-        if (!pitEntry?.data) return {}; // not a pit session — open normally
-        intercepted = { sessionFile: event.targetSessionFile, meta: pitEntry.data };
-        ctx.shutdown();
-        return { cancel: true };
-      } catch {
-        return {};
-      }
-    });
-  };
+  const selectedPath = await new Promise<string | null>((resolve) => {
+    const terminal = new ProcessTerminal();
+    const tui = new TUI(terminal, true);
 
-  await main(["--resume", ...piArgs], { extensionFactories: [factory] });
-  return intercepted;
+    const selector = new SessionSelectorComponent(
+      (progress) => SessionManager.list(process.cwd(), undefined, progress),
+      (progress) => SessionManager.listAll(progress),
+      (sessionPath) => { tui.stop(); resolve(sessionPath); }, // onSelect
+      () => { tui.stop(); resolve(null); },                   // onCancel
+      () => { tui.stop(); resolve(null); },                   // onExit
+      () => tui.requestRender(),
+    );
+
+    tui.start();
+    tui.showOverlay(selector, { width: "90%", minWidth: 60 });
+    tui.setFocus(selector);
+  });
+
+  if (!selectedPath) return null;
+
+  // Check if the selected session is a pit session
+  try {
+    const sm = SessionManager.open(selectedPath);
+    const pitEntry = sm.getEntries().find(
+      (e): e is CustomEntry<PitMetadata> =>
+        e.type === "custom" && (e as CustomEntry).customType === "pit"
+    );
+    if (!pitEntry?.data) {
+      // Non-pit session — open normally without worktree management
+      await launch(process.cwd(), ["--session", selectedPath, ...piArgs], sandbox);
+      return null;
+    }
+    return { sessionFile: selectedPath, meta: pitEntry.data };
+  } catch {
+    return null;
+  }
 }
-
 // ── sandbox ───────────────────────────────────────────────────────────────────
 
 function findBwrap(): string | null {
@@ -381,12 +399,8 @@ void (async () => {
   // ── pit -r [id]: worktree-aware resume picker ────────────────────────────
   if (filteredArgv[0] === "-r" || filteredArgv[0] === "--resume") {
     const piArgs = filteredArgv.slice(1);
-    // Pi's picker runs in the outer process (no bwrap yet).
-    // runPickerIntercept intercepts pit sessions before they render,
-    // returning the selection so we can do worktree check + relaunch.
-    // Non-pit sessions open normally inside this call.
-    const picked = await runPickerIntercept(piArgs);
-    if (!picked) return; // user cancelled or opened a non-pit session normally
+    const picked = await showPicker(piArgs, sandbox);
+    if (!picked) return;
 
     const result = worktreeCheck(picked.meta);
     await launch(result.cwd, ["--session", picked.sessionFile, ...piArgs], sandbox);
