@@ -125,4 +125,35 @@ describe("pit bwrap sandbox", () => {
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
     expect(result.stdout).toBe("ok");
   });
+
+  it.skipIf(!hasBwrap)("auth.json is readable and writable inside bwrap", () => {
+    const result = runInBwrap(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      const authFile = process.env.HOME + "/.pi/agent/auth.json";
+      // readable
+      const content = readFileSync(authFile, "utf8");
+      const data = JSON.parse(content);
+      process.stdout.write(JSON.stringify({ providers: Object.keys(data) }));
+      // writable — write the same content back (no-op change)
+      writeFileSync(authFile, content, "utf8");
+    `);
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    const { providers } = JSON.parse(result.stdout);
+    expect(providers.length).toBeGreaterThan(0);
+  });
+
+  it.skipIf(!hasBwrap)("models are available via SDK inside bwrap", () => {
+    const nodeDir = path.dirname(path.dirname(process.execPath));
+    const pkg = path.join(nodeDir, "lib", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
+    const result = runInBwrap(`
+      import { AuthStorage, ModelRegistry } from "${pkg}";
+      const auth = AuthStorage.create();
+      const registry = ModelRegistry.create(auth);
+      const available = await registry.getAvailable();
+      process.stdout.write(JSON.stringify({ count: available.length }));
+    `);
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    const { count } = JSON.parse(result.stdout);
+    expect(count, "no models available — auth likely not loading inside bwrap").toBeGreaterThan(0);
+  });
 });

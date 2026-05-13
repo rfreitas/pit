@@ -21,30 +21,16 @@ import {
   main,
   SessionManager,
   getAgentDir,
-  CURRENT_SESSION_VERSION,
   type CustomEntry,
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-
-// ── types ─────────────────────────────────────────────────────────────────────
-
-interface PitMetadata {
-  id: string;
-  /** repo root, or original cwd for no-tree sessions */
-  repo: string;
-  /** worktree path, or original cwd for no-tree sessions */
-  worktree: string;
-  /** git branch name; empty string for no-tree sessions */
-  branch: string;
-  created: string;
-  mode: "worktree" | "no-tree";
-}
-
-interface WorktreeResult {
-  mode: "worktree" | "no-tree";
-  cwd: string;
-  meta: PitMetadata;
-}
+import {
+  type PitMetadata,
+  type WorktreeResult,
+  cwdToBucket as _cwdToBucket,
+  parseFlags,
+  setupNewSession as _setupNewSession,
+} from "./utils.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -224,51 +210,8 @@ function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): Worktre
 
 // ── session pre-seeding ───────────────────────────────────────────────────────
 
-/**
- * Derive the session bucket directory name for a cwd path.
- * Matches pi's internal naming: strip leading slash, replace separators
- * with dashes, wrap with "--".
- */
-function cwdToBucket(cwd: string): string {
-  return "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
-}
-
-/**
- * Write a new session JSONL file pre-seeded with pit metadata and a visible
- * mode announcement. Returns the file path to pass as --session to pi.
- *
- * Uses direct file I/O because SessionManager buffers entries in-memory and
- * only flushes them once pi opens the session internally.
- */
 function setupNewSession(result: WorktreeResult): string {
-  const bucket = cwdToBucket(result.cwd);
-  const sessionDir = path.join(AGENT_DIR, "sessions", bucket);
-  fs.mkdirSync(sessionDir, { recursive: true });
-
-  const isoTs = new Date().toISOString();
-  const fileTs = isoTs.replace(/:/g, "-").replace(".", "-");
-  const sessionId = crypto.randomUUID();
-  const sessionFile = path.join(sessionDir, `${fileTs}_${sessionId}.jsonl`);
-
-  const id1 = crypto.randomBytes(4).toString("hex");
-  const id2 = crypto.randomBytes(4).toString("hex");
-  const { meta } = result;
-
-  const announcement =
-    meta.mode === "worktree"
-      ? `**pit — worktree mode**\nbranch: \`${meta.branch}\`   worktree: \`${meta.worktree}\``
-      : `**pit — no-tree mode**\nnot inside a git repository — running in current directory`;
-
-  const lines = [
-    { type: "session", version: CURRENT_SESSION_VERSION, id: sessionId, timestamp: isoTs, cwd: result.cwd },
-    { type: "custom", id: id1, parentId: null, timestamp: isoTs, customType: "pit", data: meta },
-    { type: "custom_message", id: id2, parentId: id1, timestamp: isoTs, customType: "pit", content: announcement, display: true },
-  ]
-    .map((o) => JSON.stringify(o))
-    .join("\n") + "\n";
-
-  fs.writeFileSync(sessionFile, lines, "utf8");
-  return sessionFile;
+  return _setupNewSession(result, AGENT_DIR);
 }
 
 // ── resume via pi's native picker ────────────────────────────────────────────────────
@@ -419,14 +362,7 @@ const argv = process.argv.slice(2);
 
 void (async () => {
   // ── strip pit-only flags (--no-sandbox, -nt / --no-tree) ─────────────────
-  let sandbox = true;
-  let noTree = false;
-  const filteredArgv: string[] = [];
-  for (const arg of argv) {
-    if (arg === "--no-sandbox") sandbox = false;
-    else if (arg === "-nt" || arg === "--no-tree") noTree = true;
-    else filteredArgv.push(arg);
-  }
+  const { sandbox, noTree, filteredArgv } = parseFlags(argv);
 
   // ── pi subcommands: forward directly ────────────────────────────────────
   if (filteredArgv.length > 0 && PI_SUBCOMMANDS.has(filteredArgv[0])) {
