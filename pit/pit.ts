@@ -255,7 +255,7 @@ async function pickPitSession(idArg?: string): Promise<PitSession | null> {
         pitSessions.push({
           meta: pitEntry.data,
           sessionFile: info.path,
-          name: info.name ?? info.firstMessage.slice(0, 60) || "(no name)",
+          name: info.name ?? (info.firstMessage.slice(0, 60) || "(no name)"),
           modified: info.modified,
         });
       }
