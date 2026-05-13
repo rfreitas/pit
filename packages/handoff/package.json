@@ -1,0 +1,13 @@
+{
+  "name": "@ricfr/pi-handoff-tests",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "install:ext": "cp src/handoff.ts ../../extensions/handoff.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "*"
+  }
+}

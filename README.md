@@ -6,6 +6,9 @@ Personal [Pi coding agent](https://pi.dev) extensions, scripts, and tooling. Cro
 
 ```
 extensions/   Pi extensions — auto-loaded globally via ~/.pi/agent/settings.json
+              Simple single-file extensions live here directly.
+              Extensions with tests/multiple files live in packages/ with a copy installed here.
+packages/     Extension subprojects (source + tests). See each package's AGENTS.md.
 bin/          Shell scripts (Git Bash / WSL on Windows, bash on Unix)
 plans/        Design docs and notes
 ```
@@ -47,16 +50,7 @@ npm run typecheck
 
 ### `/handoff` — Move session to another project
 
-Moves the current Pi session file into a different project's session bucket and switches Pi's working directory. Useful when a conversation naturally evolves into work on a different repo.
-
-```
-/handoff <target-directory>
-```
-
-- Supports directory autocomplete on the path argument
-- Updates the session's `cwd` header so Pi operates in the new directory
-- Prefixes the session name with `handedoff:` for easy identification in the session picker
-- Deletes the original session file after a successful switch
+Source lives in `packages/handoff/`. The `extensions/handoff.ts` file is a gitignored copy — see `packages/handoff/AGENTS.md` for development workflow.
 
 ### `/rename` — Ask the model to name the session
 
