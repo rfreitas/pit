@@ -62,7 +62,7 @@ function getDirectoryCompletions(prefix: string, cwd: string): AutocompleteItem[
  * e.g. C:\Users\ricfr\Repos\agent → --C--Users-ricfr-Repos-agent--
  */
 function pathToBucketName(targetPath: string): string {
-	return "--" + targetPath.replace(/[/\\]/g, "-").replace(/:/g, "-") + "--";
+	return "--" + targetPath.replace(/^[\/\\]/, "").replace(/[\/\\:]/g, "-") + "--";
 }
 
 export default function (pi: ExtensionAPI) {
@@ -85,8 +85,11 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Resolve target path relative to current working directory
-			const targetPath = path.resolve(ctx.cwd, targetArg);
+			// Resolve target path relative to current working directory, then resolve symlinks
+			const targetPath = (() => {
+				const resolved = path.resolve(ctx.cwd, targetArg);
+				try { return fs.realpathSync(resolved); } catch { return resolved; }
+			})();
 			if (!fs.existsSync(targetPath)) {
 				ctx.ui.notify(`Directory not found: ${targetPath}`, "error");
 				return;
