@@ -2,6 +2,9 @@
 
 > Sandboxed Pi with Git Worktrees — controlled agents running free.
 
+> [!WARNING]
+> This project is still in development. Expect rough edges and breaking changes.
+
 `pit` is a transparent wrapper around the [Pi coding agent](https://pi.dev) that does two things every time you start a session:
 
 1. **Isolates work** — creates a fresh git worktree on its own branch (`pi/<id>`), so the agent operates on a copy of your code, not your main branch.
