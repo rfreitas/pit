@@ -21,6 +21,7 @@ import {
   main,
   SessionManager,
   getAgentDir,
+  CURRENT_SESSION_VERSION,
   type CustomEntry,
 } from "@earendil-works/pi-coding-agent";
 
@@ -214,26 +215,50 @@ function worktreeCheck(existingMeta?: PitMetadata): WorktreeResult {
 // ── session pre-seeding ───────────────────────────────────────────────────────
 
 /**
- * Create a new session file pre-seeded with pit metadata and a visible mode
- * announcement. Returns the session file path to pass as --session to main().
+ * Derive the session bucket directory name for a cwd path.
+ * Matches pi's internal naming: strip leading slash, replace separators
+ * with dashes, wrap with "--".
+ */
+function cwdToBucket(cwd: string): string {
+  return "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
+}
+
+/**
+ * Write a new session JSONL file pre-seeded with pit metadata and a visible
+ * mode announcement. Returns the file path to pass as --session to pi.
+ *
+ * Uses direct file I/O because SessionManager buffers entries in-memory and
+ * only flushes them once pi opens the session internally.
  */
 function setupNewSession(result: WorktreeResult): string {
-  const sm = SessionManager.create(result.cwd);
+  const bucket = cwdToBucket(result.cwd);
+  const sessionDir = path.join(AGENT_DIR, "sessions", bucket);
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  const isoTs = new Date().toISOString();
+  const fileTs = isoTs.replace(/:/g, "-").replace(".", "-");
+  const sessionId = crypto.randomUUID();
+  const sessionFile = path.join(sessionDir, `${fileTs}_${sessionId}.jsonl`);
+
+  const id1 = crypto.randomBytes(4).toString("hex");
+  const id2 = crypto.randomBytes(4).toString("hex");
   const { meta } = result;
 
-  // Metadata entry: persists pit info in the session file, not sent to LLM
-  sm.appendCustomEntry("pit", meta);
-
-  // Mode announcement: visible in TUI and included in LLM context
   const announcement =
     meta.mode === "worktree"
       ? `**pit — worktree mode**\nbranch: \`${meta.branch}\`   worktree: \`${meta.worktree}\``
       : `**pit — no-tree mode**\nnot inside a git repository — running in current directory`;
-  sm.appendCustomMessageEntry("pit", announcement, /* display */ true);
 
-  const file = sm.getSessionFile();
-  if (!file) throw new Error("pit: failed to obtain session file path");
-  return file;
+  const lines = [
+    { type: "session", version: CURRENT_SESSION_VERSION, id: sessionId, timestamp: isoTs, cwd: result.cwd },
+    { type: "custom", id: id1, parentId: null, timestamp: isoTs, customType: "pit", data: meta },
+    { type: "custom_message", id: id2, parentId: id1, timestamp: isoTs, customType: "pit", content: announcement, display: true },
+  ]
+    .map((o) => JSON.stringify(o))
+    .join("\n") + "\n";
+
+  fs.writeFileSync(sessionFile, lines, "utf8");
+  return sessionFile;
 }
 
 // ── resume picker ─────────────────────────────────────────────────────────────
