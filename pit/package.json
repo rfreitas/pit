@@ -1,0 +1,16 @@
+{
+  "name": "@ricfr/pit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "pit — git worktree manager for Pi",
+  "scripts": {
+    "typecheck": "tsc"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typescript": "^5.0.0"
+  }
+}

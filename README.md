@@ -6,7 +6,7 @@ Personal [Pi coding agent](https://pi.dev) extensions, scripts, and tooling. Cro
 
 ```
 extensions/   Pi extensions — auto-loaded globally via ~/.pi/agent/settings.json
-bin/          Shell scripts (Git Bash / WSL on Windows, bash on Unix)
+pit/          pit — git worktree manager for Pi (own package.json + tsconfig)
 plans/        Design docs and notes
 ```
 
@@ -72,7 +72,7 @@ Reads the conversation history, calls the active model with a structured JSON pr
 
 ---
 
-## bin/
+## pit/
 
 ### `pit` — Git worktree manager for Pi
 
@@ -90,11 +90,11 @@ Each worktree gets a short random id (8 hex chars). Pi is launched inside the wo
 
 **Registry:** `~/.pi/pit/registry.json` — single source of truth, no per-worktree marker files.
 
-**Platform:** requires bash + git. On Windows, use Git Bash or WSL. Add `bin/` to your `PATH`:
+**Platform:** requires bash + git. On Windows, use Git Bash or WSL. Add `pit/` to your `PATH`:
 
 ```bash
 # Git Bash / WSL (~/.bashrc or ~/.bash_profile)
-export PATH="$HOME/Repos/agent/bin:$PATH"
+export PATH="$HOME/Repos/agent/pit:$PATH"
 ```
 
 ---
@@ -126,10 +126,10 @@ On Unix:
 }
 ```
 
-### 3. Add bin/ to PATH (optional, for `pit`)
+### 3. Add pit/ to PATH (optional, for `pit`)
 
 ```bash
-export PATH="$HOME/Repos/agent/bin:$PATH"
+export PATH="$HOME/Repos/agent/pit:$PATH"
 ```
 
 ### 4. Reload Pi
