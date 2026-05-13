@@ -14,18 +14,14 @@ The result: you can hand a task to an agent and let it run freely, knowing it ca
 ## Usage
 
 ```bash
-pit                  # create worktree (branch: pi/<id>), launch Pi sandboxed
-pit -nt              # skip worktree; run in current dir (sandbox still applies)
-pit -r               # resume a previous pit session (worktree-aware picker)
-pit list             # list pit worktrees for this repo
-pit list --all       # list pit worktrees across all repos
-pit clean            # remove orphaned registry entries
-pit clean <id>       # remove a specific worktree, branch, and registry entry
+pit                          # create worktree (branch: pi/<id>), launch Pi sandboxed
+pit -nt / --no-tree          # inside a git repo, skip worktree; run in current dir instead
+pit --no-sandbox             # disable bwrap sandboxing (combinable with any other flag)
 ```
 
 All standard Pi flags pass through unchanged.
 
-**Platform:** requires bash + git + Linux (bwrap). On Windows, use WSL.
+**Platform:** requires bash + git + Linux. On Windows, use WSL.
 
 ```bash
 # Add to PATH (~/.bashrc or ~/.bash_profile)
@@ -36,7 +32,7 @@ export PATH="$HOME/Repos/agent/pit:$PATH"
 
 ## Security model
 
-pit's sandbox is **OS-level** and **allowlist-based**. When bwrap is available, Pi is launched inside a new Linux user/PID namespace with a minimal filesystem:
+pit's sandbox is **OS-level** and **allowlist-based**. Worktree creation and session setup run in the outer process; once that's done, the Pi session itself is launched inside a [`bwrap`](https://github.com/containers/bubblewrap) user/PID namespace with a minimal filesystem. If bwrap is not found, pit warns and runs unsandboxed.
 
 | Mount | Access | Why |
 |---|---|---|
@@ -81,7 +77,7 @@ Each `pit` session creates:
 
 The agent works entirely in that directory. Your main working tree is untouched. When the work is done you review and merge (or discard) like any branch.
 
-Sessions and worktrees are tracked in `~/.pi/pit/registry.json`. Use `pit clean` to remove them when you're done.
+Session metadata (id, branch, worktree path) is embedded directly in Pi's session file, so pit sessions appear normally in Pi's session picker and resume correctly.
 
 ---
 
@@ -94,7 +90,7 @@ npm install
 export PATH="$HOME/Repos/agent/pit:$PATH"
 ```
 
-Requires: Node.js ≥ 22, git, bwrap (install via your distro's package manager — `bubblewrap` on Debian/Ubuntu/Arch).
+Requires: Node.js ≥ 22, git. bwrap is optional but recommended for sandboxing — install via your distro's package manager (`bubblewrap` on Debian/Ubuntu/Arch). Without it, pit runs unsandboxed.
 
 ---
 
