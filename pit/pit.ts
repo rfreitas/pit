@@ -2,41 +2,89 @@
 /**
  * pit — pi tree
  *
+ * A transparent wrapper around pi that manages git worktrees.
+ * Every pi flag works identically. pit adds --no-sandbox and intercepts -r.
+ *
  * Usage:
- *   pit                  Create a worktree and launch pi
- *   pit --sandbox        Create a worktree and launch pi inside a bwrap sandbox
- *   pit list             List pit worktrees for current repo
- *   pit list --all       List all pit worktrees across all repos
- *   pit clean            Remove orphaned registry entries
- *   pit clean <id>       Remove a specific worktree by id
+ *   pit [pi-flags...] [messages...]   Create a worktree (if in git repo) and launch pi
+ *   pit --no-sandbox [...]            Same, without bwrap sandboxing
+ *   pit -r [id] [pi-flags...]         Pick or directly open an existing pit session
+ *   pit install/remove/update/...     Forwarded directly to pi
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
+import * as readline from "node:readline";
 import { execSync, execFileSync, spawnSync } from "node:child_process";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  main,
+  SessionManager,
+  getAgentDir,
+  type CustomEntry,
+} from "@earendil-works/pi-coding-agent";
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
-interface WorktreeEntry {
+interface PitMetadata {
   id: string;
+  /** repo root, or original cwd for no-tree sessions */
   repo: string;
+  /** worktree path, or original cwd for no-tree sessions */
   worktree: string;
+  /** git branch name; empty string for no-tree sessions */
   branch: string;
   created: string;
+  mode: "worktree" | "no-tree";
 }
 
-interface Registry {
-  worktrees: WorktreeEntry[];
+interface WorktreeResult {
+  mode: "worktree" | "no-tree";
+  cwd: string;
+  meta: PitMetadata;
+}
+
+interface PitSession {
+  meta: PitMetadata;
+  sessionFile: string;
+  name: string;
+  modified: Date;
 }
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
-const HOME = process.env.HOME!;
-const AGENT_DIR = getAgentDir(); // respects PI_CODING_AGENT_DIR env override
-const REGISTRY = path.join(path.dirname(AGENT_DIR), "pit", "registry.json");
+const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "/";
+const AGENT_DIR = getAgentDir();
+const PIT_SCRIPT = process.argv[1];
+
+/** Subcommands that have nothing to do with sessions — forward to pi directly */
+const PI_SUBCOMMANDS = new Set([
+  "install",
+  "remove",
+  "uninstall",
+  "update",
+  "list",
+  "config",
+]);
+
+/** Flags where pit should skip worktree creation and just pass through to pi */
+const INFO_ONLY_FLAGS = new Set([
+  "-h",
+  "--help",
+  "-v",
+  "--version",
+  "--list-models",
+  "--export",
+]);
+
+/** Flags indicating the user is explicitly managing their own session */
+const SESSION_FLAGS = new Set([
+  "-c",
+  "--continue",
+  "--session",
+  "--no-session",
+  "--fork",
+]);
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -44,114 +92,252 @@ function genId(): string {
   return crypto.randomBytes(4).toString("hex");
 }
 
-function pathToBucketName(p: string): string {
-  return "--" + p.replace(/[/\\]/g, "-").replace(/:/g, "-") + "--";
-}
-
-function sessionsDir(): string {
-  return path.join(AGENT_DIR, "sessions");
-}
-
-function sessionFileFor(worktree: string): string | null {
-  const bucket = path.join(sessionsDir(), pathToBucketName(worktree));
-  if (!fs.existsSync(bucket)) return null;
-  const files = fs
-    .readdirSync(bucket)
-    .filter((f) => f.endsWith(".jsonl"))
-    .map((f) => path.join(bucket, f))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-  return files[0] ?? null;
-}
-
-function sessionName(file: string | null): string {
-  if (!file || !fs.existsSync(file)) return "(no session yet)";
-
-  const lines = fs
-    .readFileSync(file, "utf8")
-    .split("\n")
-    .filter((l) => l.trim());
-
-  // latest session_info name
-  for (let i = lines.length - 1; i >= 0; i--) {
-    try {
-      const entry = JSON.parse(lines[i]);
-      if (entry.type === "session_info" && entry.name) return entry.name;
-    } catch {}
-  }
-
-  // first user message as preview
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      if (entry.message?.role === "user") {
-        const content = entry.message.content;
-        if (Array.isArray(content)) {
-          for (const c of content) {
-            if (c.type === "text" && c.text)
-              return (c.text as string).slice(0, 60).replace(/\n/g, " ");
-          }
-        }
-      }
-    } catch {}
-  }
-
-  return "(no session yet)";
-}
-
-// ── registry ──────────────────────────────────────────────────────────────────
-
-function registryLoad(): Registry {
-  fs.mkdirSync(path.dirname(REGISTRY), { recursive: true });
-  if (!fs.existsSync(REGISTRY))
-    fs.writeFileSync(REGISTRY, JSON.stringify({ worktrees: [] }, null, 2));
-  return JSON.parse(fs.readFileSync(REGISTRY, "utf8")) as Registry;
-}
-
-function registrySave(reg: Registry): void {
-  fs.writeFileSync(REGISTRY, JSON.stringify(reg, null, 2));
-}
-
-function registryAdd(entry: WorktreeEntry): void {
-  const reg = registryLoad();
-  reg.worktrees.push(entry);
-  registrySave(reg);
-}
-
-function registryRemove(id: string): void {
-  const reg = registryLoad();
-  reg.worktrees = reg.worktrees.filter((w) => w.id !== id);
-  registrySave(reg);
-}
-
 // ── git ───────────────────────────────────────────────────────────────────────
 
-function requireGitRepo(): void {
+function gitRepoRoot(): string | null {
   try {
-    execSync("git rev-parse --show-toplevel", { stdio: "ignore" });
+    return execSync("git rev-parse --show-toplevel", {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
   } catch {
-    console.error("pit: not inside a git repository");
-    process.exit(1);
+    return null;
   }
 }
 
-function repoRoot(): string {
-  return execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+function branchExists(repo: string, branch: string): boolean {
+  try {
+    execFileSync(
+      "git",
+      ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+      { stdio: "ignore" }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── worktree check ────────────────────────────────────────────────────────────
+
+/**
+ * Determine launch mode and cwd.
+ *
+ * - Resume (existingMeta provided): verify/recreate the existing worktree.
+ * - New session: check for git, create a worktree if possible, else no-tree.
+ *
+ * Always returns a fully populated WorktreeResult.
+ */
+function worktreeCheck(existingMeta?: PitMetadata): WorktreeResult {
+  // ── resume path ────────────────────────────────────────────────────────────
+  if (existingMeta) {
+    if (existingMeta.mode === "no-tree") {
+      return { mode: "no-tree", cwd: existingMeta.worktree, meta: existingMeta };
+    }
+
+    if (fs.existsSync(existingMeta.worktree)) {
+      return { mode: "worktree", cwd: existingMeta.worktree, meta: existingMeta };
+    }
+
+    // Worktree directory missing — try to recreate
+    console.log("pit: worktree missing, attempting to recreate…");
+    if (!branchExists(existingMeta.repo, existingMeta.branch)) {
+      console.error(
+        `pit: branch '${existingMeta.branch}' no longer exists — cannot recreate worktree`
+      );
+      process.exit(1);
+    }
+    try {
+      execSync("git worktree prune", { cwd: existingMeta.repo, stdio: "ignore" });
+      execFileSync(
+        "git",
+        [
+          "-C",
+          existingMeta.repo,
+          "worktree",
+          "add",
+          existingMeta.worktree,
+          existingMeta.branch,
+        ],
+        { stdio: "inherit" }
+      );
+    } catch (e: unknown) {
+      console.error(
+        `pit: failed to recreate worktree: ${e instanceof Error ? e.message : String(e)}`
+      );
+      process.exit(1);
+    }
+    console.log(`pit: worktree recreated at ${existingMeta.worktree}`);
+    return { mode: "worktree", cwd: existingMeta.worktree, meta: existingMeta };
+  }
+
+  // ── new session path ───────────────────────────────────────────────────────
+  const repo = gitRepoRoot();
+
+  if (!repo) {
+    const cwd = process.cwd();
+    const meta: PitMetadata = {
+      id: genId(),
+      repo: cwd,
+      worktree: cwd,
+      branch: "",
+      created: new Date().toISOString(),
+      mode: "no-tree",
+    };
+    return { mode: "no-tree", cwd, meta };
+  }
+
+  const id = genId();
+  const branch = `pi/${id}`;
+  const worktree = path.join(
+    path.dirname(repo),
+    `${path.basename(repo)}-wt-${id}`
+  );
+  const meta: PitMetadata = {
+    id,
+    repo,
+    worktree,
+    branch,
+    created: new Date().toISOString(),
+    mode: "worktree",
+  };
+
+  console.log("pit: creating worktree");
+  console.log(`  branch:   ${branch}`);
+  console.log(`  worktree: ${worktree}`);
+  execFileSync("git", ["worktree", "add", "-b", branch, worktree, "HEAD"], {
+    stdio: "inherit",
+  });
+
+  return { mode: "worktree", cwd: worktree, meta };
+}
+
+// ── session pre-seeding ───────────────────────────────────────────────────────
+
+/**
+ * Create a new session file pre-seeded with pit metadata and a visible mode
+ * announcement. Returns the session file path to pass as --session to main().
+ */
+function setupNewSession(result: WorktreeResult): string {
+  const sm = SessionManager.create(result.cwd);
+  const { meta } = result;
+
+  // Metadata entry: persists pit info in the session file, not sent to LLM
+  sm.appendCustomEntry("pit", meta);
+
+  // Mode announcement: visible in TUI and included in LLM context
+  const announcement =
+    meta.mode === "worktree"
+      ? `**pit — worktree mode**\nbranch: \`${meta.branch}\`   worktree: \`${meta.worktree}\``
+      : `**pit — no-tree mode**\nnot inside a git repository — running in current directory`;
+  sm.appendCustomMessageEntry("pit", announcement, /* display */ true);
+
+  const file = sm.getSessionFile();
+  if (!file) throw new Error("pit: failed to obtain session file path");
+  return file;
+}
+
+// ── resume picker ─────────────────────────────────────────────────────────────
+
+async function pickPitSession(idArg?: string): Promise<PitSession | null> {
+  const allSessions = await SessionManager.listAll();
+
+  const pitSessions: PitSession[] = [];
+  for (const info of allSessions) {
+    try {
+      const sm = SessionManager.open(info.path);
+      const entries = sm.getEntries();
+      const pitEntry = entries.find(
+        (e): e is CustomEntry<PitMetadata> =>
+          e.type === "custom" && (e as CustomEntry).customType === "pit"
+      );
+      if (pitEntry?.data) {
+        pitSessions.push({
+          meta: pitEntry.data,
+          sessionFile: info.path,
+          name: info.name ?? info.firstMessage.slice(0, 60) || "(no name)",
+          modified: info.modified,
+        });
+      }
+    } catch {
+      // skip unreadable sessions
+    }
+  }
+
+  // Most recently modified first
+  pitSessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+
+  if (pitSessions.length === 0) {
+    console.log("pit: no pit sessions found");
+    return null;
+  }
+
+  if (idArg) {
+    const match = pitSessions.find(
+      (s) => s.meta.id === idArg || s.meta.id.startsWith(idArg)
+    );
+    if (!match) {
+      console.error(`pit: no session with id '${idArg}'`);
+      process.exit(1);
+    }
+    return match;
+  }
+
+  // Interactive numbered list
+  console.log("\npit sessions:\n");
+  for (let i = 0; i < pitSessions.length; i++) {
+    const s = pitSessions[i];
+    const status =
+      s.meta.mode === "no-tree"
+        ? "no-tree"
+        : fs.existsSync(s.meta.worktree)
+          ? "present"
+          : "missing";
+    const icon = status === "present" ? "✓" : status === "no-tree" ? "·" : "✗";
+    const repo = path.basename(s.meta.repo);
+    const branchShort = s.meta.branch ? s.meta.branch.replace("pi/", "") : "—";
+    console.log(
+      `  ${String(i + 1).padStart(2)}.  ${icon}  [${s.meta.id}]  ` +
+        `${s.name.slice(0, 48).padEnd(48)}  ${repo}/${branchShort}`
+    );
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  const answer = await new Promise<string>((resolve) => {
+    rl.question(`\nPick [1–${pitSessions.length}]: `, resolve);
+  });
+  rl.close();
+
+  const n = parseInt(answer.trim(), 10);
+  if (isNaN(n) || n < 1 || n > pitSessions.length) {
+    console.error("pit: invalid selection");
+    process.exit(1);
+  }
+  return pitSessions[n - 1];
 }
 
 // ── sandbox ───────────────────────────────────────────────────────────────────
 
+function findBwrap(): string | null {
+  for (const p of ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 function getExtensionMounts(): string[] {
   const settingsFile = path.join(AGENT_DIR, "settings.json");
   if (!fs.existsSync(settingsFile)) return [];
-
-  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
-  const extensions: string[] = settings.extensions ?? [];
+  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8")) as {
+    extensions?: string[];
+  };
   const mounts = new Set<string>();
-
-  for (const ext of extensions) {
+  for (const ext of settings.extensions ?? []) {
     if (!fs.existsSync(ext)) continue;
     mounts.add(ext);
-    // walk up looking for node_modules
     let parent = path.dirname(ext);
     while (true) {
       const nm = path.join(parent, "node_modules");
@@ -164,66 +350,47 @@ function getExtensionMounts(): string[] {
       parent = up;
     }
   }
-
   return [...mounts].sort();
 }
 
-function findBwrap(): string | null {
-  for (const p of ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
-
-function launchSandboxed(worktree: string): never {
-  const bwrap = findBwrap();
-  if (!bwrap) {
-    console.error("pit: bwrap not found — falling back to unsandboxed launch");
-    return launchUnsandboxed(worktree);
-  }
-
-  // process.execPath is the running node binary — no `which node` needed
+/**
+ * Spawn the sandboxed inner launcher via bwrap.
+ * Never returns — exits the process.
+ */
+function bwrapLaunch(cwd: string, piArgs: string[]): never {
+  const bwrap = findBwrap()!; // caller must check first
   const nodeBin = process.execPath;
   const nodeDir = path.dirname(path.dirname(nodeBin));
-  // pi script: resolve via `which pi` since import.meta.resolve finds the local
-  // copy, not the global binary on PATH that is actually running
-  const piScript = fs.realpathSync(
-    execSync("which pi", { encoding: "utf8" }).trim()
-  );
-  // AGENT_DIR already respects PI_CODING_AGENT_DIR
-  const piAgentDir = fs.realpathSync(AGENT_DIR);
-  const pitDir = path.dirname(REGISTRY);
-  fs.mkdirSync(pitDir, { recursive: true });
+  const realScript = fs.existsSync(PIT_SCRIPT)
+    ? fs.realpathSync(PIT_SCRIPT)
+    : PIT_SCRIPT;
+  const pitDir = path.dirname(realScript);
+  const piAgentDir = fs.existsSync(AGENT_DIR)
+    ? fs.realpathSync(AGENT_DIR)
+    : AGENT_DIR;
 
   const args: string[] = [
     "--tmpfs", "/",
     "--dev", "/dev",
     "--proc", "/proc",
-
-    // system (read-only)
     "--ro-bind", "/usr", "/usr",
     "--ro-bind", "/etc", "/etc",
     "--ro-bind-try", "/lib", "/lib",
     "--ro-bind-try", "/lib64", "/lib64",
     "--ro-bind-try", "/bin", "/bin",
     "--ro-bind-try", "/sbin", "/sbin",
-
-    // node + pi runtime (read-only)
+    // node runtime
     "--ro-bind", nodeDir, nodeDir,
-
-    // pi config: mount real target at AGENT_DIR, sessions rw on top
+    // pi config: ro, with sessions rw on top
     "--dir", path.dirname(AGENT_DIR),
     "--ro-bind", piAgentDir, AGENT_DIR,
     "--bind", path.join(piAgentDir, "sessions"), path.join(AGENT_DIR, "sessions"),
-
-    // pit registry (read-write)
-    "--bind", pitDir, pitDir,
-
-    // worktree (read-write — the whole point)
-    "--bind", worktree, worktree,
+    // worktree (rw — the whole point)
+    "--bind", cwd, cwd,
+    // pit script dir (ro — needed for --_launch inside sandbox)
+    "--ro-bind", pitDir, pitDir,
   ];
 
-  // extension dirs and their node_modules (read-only)
   for (const mount of getExtensionMounts()) {
     args.push("--ro-bind", mount, mount);
   }
@@ -232,198 +399,109 @@ function launchSandboxed(worktree: string): never {
     "--unshare-user",
     "--unshare-pid",
     "--die-with-parent",
-
     "--setenv", "HOME", HOME,
     "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
     "--setenv", "PI_CODING_AGENT", "true",
-
-    "--chdir", worktree,
+    "--chdir", cwd,
     "--",
-    nodeBin, piScript
+    nodeBin, realScript, "--_launch", cwd, "--", ...piArgs
   );
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
   process.exit(result.status ?? 1);
 }
 
-function launchUnsandboxed(worktree: string): never {
-  process.chdir(worktree);
-  const result = spawnSync("pi", [], { stdio: "inherit", shell: false });
-  process.exit(result.status ?? 1);
-}
-
-// ── commands ──────────────────────────────────────────────────────────────────
-
-function cmdNew(flags: string[]): void {
-  let sandbox = false;
-  for (const flag of flags) {
-    if (flag === "--sandbox") sandbox = true;
-    else {
-      console.error(`pit: unknown option '${flag}'`);
-      process.exit(1);
+/**
+ * Launch pi — sandboxed via bwrap if available and requested, direct otherwise.
+ */
+async function launch(
+  cwd: string,
+  piArgs: string[],
+  sandbox: boolean
+): Promise<void> {
+  if (sandbox) {
+    const bwrap = findBwrap();
+    if (bwrap) {
+      bwrapLaunch(cwd, piArgs); // never returns
     }
+    console.warn("pit: bwrap not found — running without sandbox");
   }
-
-  requireGitRepo();
-
-  const id = genId();
-  const root = repoRoot();
-  const branch = `pi/${id}`;
-  const worktree = path.join(
-    path.dirname(root),
-    `${path.basename(root)}-wt-${id}`
-  );
-  const created = new Date().toISOString();
-
-  console.log("pit: creating worktree");
-  console.log(`  id:       ${id}`);
-  console.log(`  branch:   ${branch}`);
-  console.log(`  worktree: ${worktree}`);
-  if (sandbox) console.log("  sandbox:  bwrap");
-
-  execFileSync("git", ["worktree", "add", "-b", branch, worktree, "HEAD"], {
-    stdio: "inherit",
-  });
-  registryAdd({ id, repo: root, worktree, branch, created });
-
-  console.log("pit: launching pi");
-  if (sandbox) launchSandboxed(worktree);
-  else launchUnsandboxed(worktree);
-}
-
-function cmdList(args: string[]): void {
-  const showAll = args.includes("--all");
-  let currentRepo: string | null = null;
-  if (!showAll) {
-    try {
-      currentRepo = repoRoot();
-    } catch {}
-  }
-
-  const reg = registryLoad();
-  const entries = showAll
-    ? reg.worktrees
-    : reg.worktrees.filter((w) => !currentRepo || w.repo === currentRepo);
-
-  if (entries.length === 0) {
-    console.log("no pit worktrees");
-    return;
-  }
-
-  if (showAll) {
-    console.log(
-      "ID          REPO                  SESSION NAME                              STATUS"
-    );
-    console.log(
-      "----------  --------------------  ----------------------------------------  --------"
-    );
-  } else {
-    console.log(
-      "ID          BRANCH          SESSION NAME                              STATUS"
-    );
-    console.log(
-      "----------  --------------  ----------------------------------------  --------"
-    );
-  }
-
-  for (const entry of entries) {
-    const status = fs.existsSync(entry.worktree) ? "active" : "orphaned";
-    const name = sessionName(sessionFileFor(entry.worktree)).slice(0, 40);
-
-    if (showAll) {
-      const repo = path.basename(entry.repo).slice(0, 20);
-      console.log(
-        `${entry.id.padEnd(10)}  ${repo.padEnd(20)}  ${name.padEnd(40)}  ${status}`
-      );
-    } else {
-      console.log(
-        `${entry.id.padEnd(10)}  ${entry.branch.padEnd(14)}  ${name.padEnd(40)}  ${status}`
-      );
-    }
-  }
-}
-
-function cmdClean(args: string[]): void {
-  const id = args[0];
-  const reg = registryLoad();
-
-  if (id) {
-    const entry = reg.worktrees.find((w) => w.id === id);
-    if (!entry) {
-      console.error(`pit clean: no worktree with id '${id}'`);
-      process.exit(1);
-    }
-
-    if (fs.existsSync(entry.worktree)) {
-      console.log(`pit: removing worktree: ${entry.worktree}`);
-      execFileSync(
-        "git",
-        ["-C", entry.repo, "worktree", "remove", "--force", entry.worktree],
-        { stdio: "inherit" }
-      );
-    }
-
-    const shortBranch = entry.branch.replace(/^refs\/heads\//, "");
-    try {
-      execFileSync(
-        "git",
-        ["-C", entry.repo, "show-ref", "--verify", "--quiet", `refs/heads/${shortBranch}`],
-        { stdio: "ignore" }
-      );
-      console.log(`pit: deleting branch: ${shortBranch}`);
-      execFileSync("git", ["-C", entry.repo, "branch", "-D", shortBranch], {
-        stdio: "inherit",
-      });
-    } catch {}
-
-    registryRemove(id);
-    console.log("pit: done");
-  } else {
-    // remove orphaned entries
-    let removed = 0;
-    // reload each time since registryRemove re-reads
-    for (const entry of registryLoad().worktrees) {
-      if (!fs.existsSync(entry.worktree)) {
-        console.log(
-          `pit: removing orphaned entry: ${entry.id} (${entry.worktree})`
-        );
-        registryRemove(entry.id);
-        removed++;
-      }
-    }
-    if (removed === 0) console.log("pit: no orphaned entries");
-    else console.log(`pit: removed ${removed} orphaned entries`);
-  }
-}
-
-function cmdHelp(): void {
-  console.log(`pit — pi tree
-
-Usage:
-  pit                  Create a worktree and launch pi
-  pit --sandbox        Create a worktree and launch pi inside a bwrap sandbox
-  pit list             List pit worktrees for current repo
-  pit list --all       List all pit worktrees across all repos
-  pit clean            Remove orphaned registry entries
-  pit clean <id>       Remove a specific worktree by id`);
+  process.chdir(cwd);
+  await main(piArgs);
 }
 
 // ── dispatch ──────────────────────────────────────────────────────────────────
 
-const [, , cmd = "", ...rest] = process.argv;
+const argv = process.argv.slice(2);
 
-switch (cmd) {
-  case "list":
-    cmdList(rest);
-    break;
-  case "clean":
-    cmdClean(rest);
-    break;
-  case "-h":
-  case "--help":
-    cmdHelp();
-    break;
-  default:
-    // cmd is '' (no args) or a flag like '--sandbox'
-    cmdNew(cmd ? [cmd, ...rest] : rest);
-}
+void (async () => {
+  // ── --_launch: internal entry point used by bwrap subprocess ────────────
+  // Usage: --_launch <cwd> -- [piArgs...]
+  if (argv[0] === "--_launch") {
+    const [, cwd, ...rest] = argv;
+    const sep = rest.indexOf("--");
+    const piArgs = sep >= 0 ? rest.slice(sep + 1) : rest;
+    process.chdir(cwd);
+    await main(piArgs);
+    return;
+  }
+
+  // ── strip --no-sandbox (pit-only flag) ───────────────────────────────────
+  let sandbox = true;
+  const filteredArgv: string[] = [];
+  for (const arg of argv) {
+    if (arg === "--no-sandbox") sandbox = false;
+    else filteredArgv.push(arg);
+  }
+
+  // ── pi subcommands: forward directly ────────────────────────────────────
+  if (filteredArgv.length > 0 && PI_SUBCOMMANDS.has(filteredArgv[0])) {
+    const r = spawnSync("pi", filteredArgv, { stdio: "inherit", shell: false });
+    process.exit(r.status ?? 0);
+  }
+
+  // ── info-only flags: skip worktree, pass straight to pi ─────────────────
+  if (filteredArgv.some((f) => INFO_ONLY_FLAGS.has(f))) {
+    await main(filteredArgv);
+    return;
+  }
+
+  // ── pit -r [id]: worktree-aware resume picker ────────────────────────────
+  if (filteredArgv[0] === "-r" || filteredArgv[0] === "--resume") {
+    const rest = filteredArgv.slice(1);
+    let idArg: string | undefined;
+    let piArgs: string[];
+    // treat first arg as id only if it doesn't look like a flag
+    if (rest.length > 0 && !rest[0].startsWith("-")) {
+      [idArg, ...piArgs] = rest;
+    } else {
+      piArgs = rest;
+    }
+
+    const picked = await pickPitSession(idArg);
+    if (!picked) return;
+
+    const result = worktreeCheck(picked.meta);
+    await launch(result.cwd, ["--session", picked.sessionFile, ...piArgs], sandbox);
+    return;
+  }
+
+  // ── new session (or user-managed session) ────────────────────────────────
+  const userManagingSession = filteredArgv.some((f) => SESSION_FLAGS.has(f));
+  const result = worktreeCheck();
+
+  let piArgs: string[];
+  if (userManagingSession) {
+    // User controls session — just establish the worktree and pass through
+    piArgs = filteredArgv;
+  } else {
+    // pit seeds the session file with metadata and mode announcement
+    const sessionFile = setupNewSession(result);
+    piArgs = ["--session", sessionFile, ...filteredArgv];
+  }
+
+  await launch(result.cwd, piArgs, sandbox);
+})().catch((err: unknown) => {
+  console.error(`pit: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});

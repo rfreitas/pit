@@ -2,30 +2,76 @@
 
 ## Interface
 
+pit's CLI is a superset of pi's CLI. Every pi flag is a valid pit flag and passes
+through to the SDK unchanged. pit only intercepts what it needs.
+
 ```bash
-pit              # create a worktree and launch pi inside it
-pit list         # show all pit worktrees and their pi sessions
-pit clean        # remove orphaned worktrees from registry
-pit clean <id>   # remove a specific worktree by short id
+# same as pi
+pit
+pit "initial message"
+pit --model sonnet --thinking high
+pit -p "non-interactive prompt"
+pit -c
+pit --no-tools
+# ... all other pi flags work identically
+
+# pit intercepts -r/--resume and replaces pi's session picker with its own
+# (worktree-aware: scans for pit CustomEntries, shows worktree status, recreates if needed)
+pit -r [id]
+
+# pit-only flag: controls bwrap wrapping (sandbox is the default)
+pit --no-sandbox
+
+# subcommands with no session involvement → exec pi directly, pit is not in the loop
+pit install <source>
+pit remove <source>
+pit update
+pit list
+pit config
 ```
 
 No task name required. pit auto-generates an id for each worktree.
+
+Worktree and branch deletion is the user's responsibility, done outside pit via git.
+pit does not offer a `clean` command.
+
+> **Note:** pi already registers a `--no-sandbox` flag via an extension (disables bash
+> command sandboxing). pit consumes `--no-sandbox` for its own bwrap control and never
+> forwards it to the SDK, so the two don't collide — but the naming is ambiguous.
+> If this causes confusion in practice, pit can rename its flag to `--no-bwrap`.
+
+## Launch modes
+
+pit checks the environment at startup and picks a mode:
+
+| condition | mode | behaviour |
+|---|---|---|
+| inside a git repo | **worktree mode** | creates a branch + worktree dir, launches Pi inside it |
+| not a git repo | **no-tree mode** | launches Pi in the current directory, no worktree created |
+
+At session start pit injects a visible message (via `CustomMessageEntry` with `display: true`)
+telling the user which mode is active and why:
+
+```
+# pit — worktree mode
+branch: pi/a1b2c3d4   worktree: ../myrepo-wt-a1b2c3d4
+```
+
+```
+# pit — no-tree mode
+not inside a git repository — running in current directory without a worktree
+```
+
+This uses `appendCustomMessageEntry("pit", content, true)` so it appears in the TUI
+but is not a user message and doesn't affect the conversation flow.
 
 ---
 
 ## Design principle
 
-Follow Pi's own architecture:
-
-| Pi | pit |
-|----|-----|
-| `~/.pi/agent/sessions/` | `~/.pi/pit/registry.json` |
-| sessions bucketed by cwd | registry entries tagged by repo |
-| session picker shows current project by default | `pit list` shows current repo by default |
-| Tab in picker shows all sessions | `pit list --all` shows all repos |
-
-One central store. Local view by default. Global on demand.
-No per-worktree marker files — the registry is the single source of truth.
+pit owns the git layer (worktree creation, branch lifecycle).
+Pi owns the session layer (session file, history, naming, picking).
+No duplication between them.
 
 ---
 
@@ -39,101 +85,159 @@ branch:   pi/<id>
 worktree: <repo>-wt-<id>
 ```
 
-Pi creates its own session UUID when it first launches inside the worktree.
-pit does not touch Pi's session format.
-
-The Pi session is found from the worktree path via bucket dir derivation:
-
-```
-worktree path → encode → session bucket dir → read .jsonl files inside
-```
-
 ---
 
 ## How pit works
 
-1. Generate a short id
-2. Create git branch `pi/<id>` and worktree dir `<repo>-wt-<id>`
-3. Append entry to `~/.pi/pit/registry.json`
-4. Launch `pi` inside the worktree — Pi creates its own session naturally
+1. Parse args; strip pit-specific flags (`--no-sandbox`)
+2. For subcommands (`install`, `remove`, `update`, `list`, `config`) → exec `pi` directly
+3. For `-r` → run the resume picker, then hand off to `--_launch [sessionFile]`
+4. Otherwise → hand off to `--_launch` (no sessionFile; worktree check will create one)
 
 ---
 
-## Registry
+## SDK wrapping (replaces `spawnSync("pi")`)
 
-Location: `~/.pi/pit/registry.json`
+pit uses the Pi SDK directly instead of spawning `pi` as a blind subprocess.
+
+### Non-sandbox mode
+
+```ts
+const runtime = await createAgentSessionRuntime(createRuntime, {
+  cwd: worktree,
+  agentDir: getAgentDir(),
+  sessionManager: SessionManager.create(worktree),
+});
+const mode = new InteractiveMode(runtime, { ... });
+await mode.run(); // blocks until user exits; same TUI experience
+```
+
+### Sandbox mode (default)
+
+bwrap cannot wrap an in-process call, so sandbox mode spawns a subprocess.
+The subprocess is not the `pi` binary but a thin SDK launcher baked into pit itself:
+
+```
+pit (unsandboxed)
+  ├─ passes cwd + sessionFile (if resuming)
+  └─ bwrap ──── namespaced process
+                  └─ node pit.ts --_launch [sessionFile]
+                       └─ worktree check → createAgentSessionRuntime + InteractiveMode
+```
+
+`--_launch` is an internal sub-command (not user-facing). It runs the worktree check
+and then the SDK session. The sandbox boundary is exactly the Pi session.
+
+### Benefits over `spawnSync("pi")`
+
+- **Session file path is known**: `runtime.session.sessionFile` → written as a `CustomEntry` into the session itself via `appendCustomEntry("pit", { id, branch, repo, worktree, created })`.
+  No registry file, no bucket-path derivation.
+- **`SessionManager.listAll()`** can find all pit sessions by scanning for `customType: "pit"` entries.
+- **Post-session hooks**: `mode.run()` resolves when the user exits Pi. pit can run `git log`, print a summary, or do other post-session work.
+- **Worktree badge in Pi's session picker**: before launching, pit injects an AGENTS.md
+  entry via `agentsFilesOverride` marking the session as a pit worktree. Pi's `/rename`
+  and session picker see this context and can reflect it in the session name.
+
+---
+
+## Worktree badge in Pi's session picker
+
+pit uses the SDK's `agentsFilesOverride` to inject a small context block:
+
+```
+# Pit Worktree
+id: a1b2c3d4  branch: pi/a1b2c3d4  repo: myrepo
+```
+
+This is invisible to the user during the session but available to the model.
+The `/rename` command (or auto-naming) will naturally produce names that reflect
+worktree context. Sessions from pit worktrees are then distinguishable in Pi's
+picker without pit needing its own list command.
+
+Optionally, pit could also inject a custom `/merge` or `/done` prompt template
+that guides the user through merging the branch back and cleaning up.
+
+---
+
+## Registry → dropped
+
+Pi's session format has a `CustomEntry` type (`type: "custom"`) for extension state
+that lives in the session file but is never sent to the LLM:
 
 ```json
-{
-  "worktrees": [
-    {
-      "id": "a1b2c3d4",
-      "repo": "C:/Users/ricfr/Repos/myrepo",
-      "worktree": "C:/Users/ricfr/Repos/myrepo-wt-a1b2c3d4",
-      "branch": "pi/a1b2c3d4",
-      "created": "2026-05-10T15:30:00Z"
-    }
-  ]
-}
+{"type":"custom","customType":"pit","data":{"id":"a1b2c3d4","branch":"pi/a1b2c3d4","repo":"/Users/ricfr/Repos/myrepo","worktree":"/Users/ricfr/Repos/myrepo-wt-a1b2c3d4","created":"2026-05-10T15:30:00Z"}}
 ```
+
+pit writes this entry via `sessionManager.appendCustomEntry("pit", { ... })` right after
+the session starts. `SessionManager.listAll()` can then scan all sessions for entries
+with `customType: "pit"` to find pit-managed sessions without a separate registry.
+
+**`~/.pi/pit/registry.json` is dropped entirely.**
+The session file is the single source of truth. No sync issues, no orphaned registry entries.
+
+## Worktree check
+
+Runs inside `--_launch` every time, for both new sessions and resumes.
+
+```
+is git present?
+├─ no  → no-tree mode: launch Pi in current dir, no worktree
+└─ yes → does a worktree already exist for this session? (from CustomEntry)
+          ├─ yes, dir present  → reuse it, launch Pi inside
+          ├─ yes, dir missing, branch exists → git worktree prune + git worktree add, then launch
+          ├─ yes, dir missing, branch gone   → warn and exit
+          └─ no (new session)  → create branch + worktree dir, launch Pi inside
+```
+
+Same code path for every invocation. The only input that varies is whether a
+`customType: "pit"` `CustomEntry` already exists in the session file.
 
 ---
 
-## pit list
+## pit -r: resume flow
 
-Reads the registry. For each entry:
-- derives the Pi session bucket from the worktree path
-- reads the session file to get the display name (session_info name or first user message)
-- checks if the worktree dir still exists on disk (active vs orphaned)
+`pit -r` is pit's own session picker, scoped to pit sessions only:
 
-Default (current repo):
+1. `SessionManager.listAll()` scans all session files for a `customType: "pit"` `CustomEntry`
+2. pit builds a list of pit sessions with name, branch, and worktree status (present / missing)
+3. User picks one interactively, or passes `[id]` to skip the picker
+4. pit reads `{ worktree, branch, repo }` from the session's `CustomEntry`
+5. Worktree check runs (see **Worktree check** above)
+6. pit launches via `--_launch [sessionFile]`
 
-```
-ID        BRANCH      SESSION NAME            STATUS
-a1b2c3d4  pi/a1b2c3d4  refactor the auth flow  active
-deadbeef  pi/deadbeef  (no session yet)        active
-cafebabe  pi/cafebabe  add unit tests          orphaned
-```
-
-With `--all`:
-
-```
-REPO        ID        BRANCH       SESSION NAME            STATUS
-myrepo      a1b2c3d4  pi/a1b2c3d4  refactor the auth flow  active
-other-repo  f00dcafe  pi/f00dcafe  fix the login bug       active
-```
-
-Status:
-- **active** — worktree dir exists on disk
-- **orphaned** — registry entry exists but worktree dir is gone
+The worktree status can be shown in the picker at step 2 — the user sees it before
+they commit to a selection. The actual check runs in `--_launch` as normal (see above).
 
 ---
 
-## pit clean
+## Sandboxing
 
-```bash
-pit clean          # remove all orphaned registry entries
-pit clean <id>     # remove specific worktree, branch, and registry entry
-```
+Sandbox is the default. `--no-sandbox` opts out.
 
----
+bwrap creates the namespace at process-creation time — the parent cannot modify
+the child's namespace after the fact. The sandbox boundary is stable and correct.
 
-## Session name resolution
+For sandbox mode, the bwrap args mount:
+- the worktree (rw)
+- Pi's agent dir (ro, with sessions rw on top)
+- node + pi runtime (ro)
+- extension dirs and their node_modules (ro)
 
-To show the same name Pi shows:
-
-1. derive bucket dir from worktree path
-2. find the latest `.jsonl` in that bucket
-3. scan lines for the latest `session_info` entry → use `name`
-4. if none, find the first `message` with `role: "user"` → use text as preview
-5. if no session file yet → show `(no session yet)`
+The inner `--_launch` subprocess uses the same SDK path as non-sandbox mode,
+so both paths share the same session tracking and post-session hook logic.
 
 ---
 
 ## Implementation order
 
-1. `pit` — create worktree + launch pi (update existing script)
-2. Registry read/write in `pit` and `pit clean`
-3. `pit list` with session name resolution
-4. `pit list --all`
-5. `pit clean <id>` and `pit clean` (orphaned)
+1. Add `--_launch [sessionFile]` internal sub-command (runs the worktree check, then SDK session)
+2. Replace `launchUnsandboxed` with SDK + `InteractiveMode`
+3. Replace `launchSandboxed` with bwrap → `--_launch`
+4. Write pit metadata as `CustomEntry` via `appendCustomEntry("pit", {...})` after session starts
+5. Inject mode announcement via `appendCustomMessageEntry("pit", ..., true)` at session start
+6. Inject worktree badge via `agentsFilesOverride`
+7. Flip sandbox default: `--no-sandbox` opts out
+8. Pass all non-pit flags through to the SDK; exec `pi` for subcommands
+9. Add `pit -r [id]`: scan via `SessionManager.listAll()` + `customType: "pit"`, show picker,
+   check/recreate worktree, launch via `--_launch`
+10. Remove `pit list`, `pit list --all`, `pit clean`, and all registry read/write code
