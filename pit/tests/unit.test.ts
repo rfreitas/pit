@@ -18,10 +18,10 @@
  *                     writes instead. These tests verify the file is actually
  *                     written and has the structure pi expects.
  */
+import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { cwdToBucket, parseFlags, setupNewSession, type WorktreeResult } from "../utils.ts";
 
@@ -161,11 +161,18 @@ describe("setupNewSession", () => {
     tmpDirs.length = 0;
   });
 
-  function makeTmpAgentDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pit-test-agent-"));
-    tmpDirs.push(dir);
-    return dir;
-  }
+  const TEST_SANDBOX = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "test-sandbox"
+);
+
+function makeTmpAgentDir(): string {
+  fs.mkdirSync(TEST_SANDBOX, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(TEST_SANDBOX, "pit-test-agent-"));
+  tmpDirs.push(dir);
+  return dir;
+}
 
   function makeWorktreeResult(overrides: Partial<WorktreeResult> = {}): WorktreeResult {
     return {

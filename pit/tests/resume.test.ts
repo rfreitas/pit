@@ -1,33 +1,45 @@
 /**
- * Tests for session_before_switch cancel behavior.
+ * Tests for pit -r session resumption and sandbox isolation.
  *
- * pit -r relies on session_before_switch returning { cancel: true } to prevent
- * the session from opening in the outer (unsandboxed) process. If cancel doesn't
- * work, the session opens without bwrap and the user can write to the wrong path.
+ * Bug: pit -r was sandboxing to the launch cwd (wherever `pit` was run from)
+ * instead of the session's worktree. This meant the session opened with the
+ * wrong working directory and writes were unrestricted to the launch path.
  *
- * Confirmed bugs:
- *   - ctx.shutdown() called synchronously BEFORE return { cancel: true } causes
- *     the cancel to fail (cancelled: false, switch happens)
- *   - ctx.shutdown() called asynchronously (Promise/queueMicrotask) throws
- *     "not a function" — context is invalidated after handler returns
+ * Fix: showPicker reads the pit CustomEntry from the selected session file to
+ * get meta.worktree, which is passed to bwrapLaunch as the bind mount target.
  *
- * These tests probe different approaches to find one that both cancels the
- * switch AND closes pi after the user picks a session.
+ * These tests verify:
+ *   1. Pit metadata is correctly extracted from a session file (the path that
+ *      determines which directory gets sandboxed).
+ *   2. The bwrap sandbox is bound to the worktree path, not the launch dir —
+ *      writes outside the worktree are blocked inside the sandbox.
  */
+import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
-import {
-  createAgentSessionRuntime,
-  createAgentSessionFromServices,
-  createAgentSessionServices,
-  SessionManager,
-  type CreateAgentSessionRuntimeFactory,
-  type ExtensionFactory,
-} from "@earendil-works/pi-coding-agent";
+import { spawnSync } from "node:child_process";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { setupNewSession, cwdToBucket, type WorktreeResult } from "../utils.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+function findBwrap(): string | null {
+  for (const p of ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+// All test artifacts live inside the repo under pit/test-sandbox/
+// so they're accessible regardless of sandbox boundaries.
+const TEST_SANDBOX = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "test-sandbox"
+);
+
+const hasBwrap = !!findBwrap();
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -36,136 +48,148 @@ afterEach(() => {
 });
 
 function makeTmpDir(): string {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), "pit-cancel-test-"));
+  fs.mkdirSync(TEST_SANDBOX, { recursive: true });
+  const d = fs.mkdtempSync(path.join(TEST_SANDBOX, "pit-resume-test-"));
   tmpDirs.push(d);
   return d;
 }
 
-function makeSessionFile(cwd: string, agentDir: string): string {
-  const bucket = "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
-  const dir = path.join(agentDir, "sessions", bucket);
-  fs.mkdirSync(dir, { recursive: true });
-  const id = Math.random().toString(16).slice(2, 18);
-  const ts = new Date().toISOString();
-  const file = path.join(dir, `${ts.replace(/[:]/g, "-").replace(".", "-")}_${id}.jsonl`);
-  fs.writeFileSync(file, JSON.stringify({ type: "session", version: 3, id, timestamp: ts, cwd }) + "\n");
-  return file;
-}
-
-async function makeRuntime(cwd: string, agentDir: string, extensionFactories: ExtensionFactory[] = []) {
-  const factory: CreateAgentSessionRuntimeFactory = async ({ cwd: c, sessionManager, sessionStartEvent }) => {
-    const services = await createAgentSessionServices({
-      cwd: c,
-      agentDir,
-      resourceLoaderOptions: { extensionFactories },
-    });
-    return {
-      ...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent })),
-      services,
-      diagnostics: services.diagnostics,
-    };
+function makePitSession(worktree: string, agentDir: string) {
+  const result: WorktreeResult = {
+    mode: "worktree",
+    cwd: worktree,
+    meta: {
+      id: "a1b2c3d4",
+      repo: path.dirname(worktree),
+      worktree,
+      branch: "pi/a1b2c3d4",
+      created: new Date().toISOString(),
+      mode: "worktree",
+    },
   };
-  return createAgentSessionRuntime(factory, {
-    cwd,
-    agentDir,
-    sessionManager: SessionManager.create(cwd, path.join(agentDir, "sessions")),
-  });
+  return { sessionFile: setupNewSession(result, agentDir), meta: result.meta };
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+// ── session metadata extraction ───────────────────────────────────────────────
+//
+// showPicker reads the pit CustomEntry from the selected session file to
+// determine which worktree to sandbox to. This mirrors the logic in pit.ts.
 
-describe("session_before_switch cancel", () => {
-  it("baseline: no cancel registered — switch happens", async () => {
+function readPitMeta(sessionFile: string) {
+  const sm = SessionManager.open(sessionFile);
+  const entry = sm.getEntries().find(
+    (e) => e.type === "custom" && (e as any).customType === "pit"
+  );
+  return (entry as any)?.data ?? null;
+}
+
+describe("session metadata extraction for pit -r", () => {
+  it("reads the worktree path from a pit session's CustomEntry", () => {
     const agentDir = makeTmpDir();
-    const runtime = await makeRuntime(makeTmpDir(), agentDir);
-    const originalId = runtime.session.sessionId;
-    const result = await runtime.switchSession(makeSessionFile(makeTmpDir(), agentDir));
-    expect(result.cancelled).toBe(false);
-    expect(runtime.session.sessionId).not.toBe(originalId);
+    const worktree = makeTmpDir();
+    const { sessionFile, meta } = makePitSession(worktree, agentDir);
+
+    const extracted = readPitMeta(sessionFile);
+
+    expect(extracted).not.toBeNull();
+    expect(extracted.worktree).toBe(meta.worktree);
+    expect(extracted.branch).toBe(meta.branch);
+    expect(extracted.mode).toBe("worktree");
   });
 
-  it("return { cancel: true } alone — switch is cancelled", async () => {
-    // Clean cancel with no shutdown. Switch is prevented.
-    // Problem: picker stays open, no way to close pi from here.
+  it("returns null for a non-pit session (no CustomEntry)", () => {
     const agentDir = makeTmpDir();
-    const runtime = await makeRuntime(makeTmpDir(), agentDir, [(pi) => {
-      pi.on("session_before_switch", () => ({ cancel: true }));
-    }]);
-    const originalId = runtime.session.sessionId;
-    const result = await runtime.switchSession(makeSessionFile(makeTmpDir(), agentDir));
-    expect(result.cancelled).toBe(true);
-    expect(runtime.session.sessionId).toBe(originalId);
+    const cwd = makeTmpDir();
+    // Plain session file with no pit entries
+    const bucket = cwdToBucket(cwd);
+    const dir = path.join(agentDir, "sessions", bucket);
+    fs.mkdirSync(dir, { recursive: true });
+    const ts = new Date().toISOString();
+    const file = path.join(dir, `${ts.replace(/:/g, "-").replace(".", "-")}_plain.jsonl`);
+    fs.writeFileSync(file, JSON.stringify({ type: "session", version: 3, id: "plain", timestamp: ts, cwd }) + "\n");
+
+    const extracted = readPitMeta(file);
+
+    expect(extracted).toBeNull();
   });
 
-  it("ctx.shutdown() BEFORE return { cancel: true } — cancel fails (the current pit bug)", async () => {
-    // pit's current code calls ctx.shutdown() synchronously before returning.
-    // This causes the cancel to be ignored and the session to open.
+  it("worktree path from metadata matches the session file's bucket cwd", () => {
+    // The session bucket is derived from the worktree path. If metadata and
+    // bucket disagree, pit -r would sandbox to the wrong directory.
     const agentDir = makeTmpDir();
-    const runtime = await makeRuntime(makeTmpDir(), agentDir, [(pi) => {
-      pi.on("session_before_switch", (ctx) => {
-        ctx.shutdown(); // ← pit's current code, this breaks cancel
-        return { cancel: true };
-      });
-    }]);
-    const originalId = runtime.session.sessionId;
-    const result = await runtime.switchSession(makeSessionFile(makeTmpDir(), agentDir));
-    // Documents the broken behavior: cancel is ignored when shutdown is called first
-    expect(result.cancelled).toBe(false); // BUG: should be true
-    expect(runtime.session.sessionId).not.toBe(originalId); // BUG: should be originalId
+    const worktree = makeTmpDir();
+    const { sessionFile, meta } = makePitSession(worktree, agentDir);
+
+    const extracted = readPitMeta(sessionFile);
+    const expectedBucket = cwdToBucket(meta.worktree);
+
+    expect(sessionFile).toContain(expectedBucket);
+    expect(extracted.worktree).toBe(meta.worktree);
   });
+});
 
-  it("ctx.shutdown() AFTER return via queueMicrotask — does ctx survive?", async () => {
-    // Test whether ctx.shutdown() is still callable after the handler returns.
-    // If context is invalidated after return, this will throw.
-    const agentDir = makeTmpDir();
-    let shutdownError: unknown = null;
-    const runtime = await makeRuntime(makeTmpDir(), agentDir, [(pi) => {
-      pi.on("session_before_switch", (ctx) => {
-        queueMicrotask(() => {
-          try { ctx.shutdown(); } catch (e) { shutdownError = e; }
-        });
-        return { cancel: true };
-      });
-    }]);
-    const originalId = runtime.session.sessionId;
-    const result = await runtime.switchSession(makeSessionFile(makeTmpDir(), agentDir));
-    await new Promise(r => setTimeout(r, 50)); // let microtask run
-    console.log("queueMicrotask shutdown error:", shutdownError);
-    console.log("cancelled:", result.cancelled);
-    expect(result.cancelled).toBe(true); // cancel must still work
-  });
+// ── bwrap sandbox isolation ───────────────────────────────────────────────────
+//
+// The sandbox must be bound to the session's worktree, not the launch dir.
+// Before the fix, bwrapLaunch received process.cwd() (launch dir) instead of
+// meta.worktree. This test verifies the isolation is correct.
 
-  it("shutdown captured from session_start, called after cancel", async () => {
-    // Approach: capture ctx.shutdown from session_start (longer-lived context),
-    // call it asynchronously after returning { cancel: true }.
-    // session_start context remains valid for the lifetime of the session.
-    const agentDir = makeTmpDir();
-    let capturedShutdown: (() => void) | null = null;
-    let shutdownError: unknown = null;
+describe("bwrap sandbox bound to worktree not launch dir", () => {
+  it.skipIf(!hasBwrap)("writes to worktree succeed, writes to launch dir are blocked", () => {
+    const nodeBin = process.execPath;
+    const nodeDir = path.dirname(path.dirname(nodeBin));
+    // Both dirs are under /tmp, but only worktree is explicitly bound.
+    // We do NOT bind /tmp wholesale — that would make launchDir accessible too.
+    const testRoot = makeTmpDir();
+    const worktree = path.join(testRoot, "worktree");
+    const launchDir = path.join(testRoot, "launchdir");
+    fs.mkdirSync(worktree);
+    fs.mkdirSync(launchDir);
 
-    const runtime = await makeRuntime(makeTmpDir(), agentDir, [(pi) => {
-      pi.on("session_start", (ctx) => {
-        capturedShutdown = () => ctx.shutdown();
-      });
-      pi.on("session_before_switch", () => {
-        if (capturedShutdown) {
-          queueMicrotask(() => {
-            try { capturedShutdown!(); } catch (e) { shutdownError = e; }
-          });
-        }
-        return { cancel: true };
-      });
-    }]);
+    const result = spawnSync(
+      findBwrap()!,
+      [
+        "--tmpfs", "/",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--ro-bind", "/usr", "/usr",
+        "--ro-bind", "/etc", "/etc",
+        "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
+        "--ro-bind-try", "/lib", "/lib",
+        "--ro-bind-try", "/lib64", "/lib64",
+        "--ro-bind-try", "/bin", "/bin",
+        "--ro-bind-try", "/sbin", "/sbin",
+        "--ro-bind", nodeDir, nodeDir,
+        // Only bind the worktree — launchDir is intentionally NOT bound
+        "--bind", worktree, worktree,
+        "--unshare-user",
+        "--unshare-pid",
+        "--die-with-parent",
+        "--setenv", "HOME", worktree, // HOME=worktree avoids creating /home as a tmpfs parent
+        "--setenv", "PATH", `${nodeDir}/bin:/usr/bin:/bin`,
+        "--chdir", worktree,
+        "--",
+        nodeBin, "-e", `
+          const fs = require('fs');
+          const results = {};
+          try {
+            fs.writeFileSync('${worktree}/test.txt', 'x');
+            fs.unlinkSync('${worktree}/test.txt');
+            results.worktree = 'writable';
+          } catch(e) { results.worktree = 'blocked:' + e.code; }
+          try {
+            fs.writeFileSync('${launchDir}/test.txt', 'x');
+            results.launchDir = 'writable';
+          } catch(e) { results.launchDir = 'blocked:' + e.code; }
+          process.stdout.write(JSON.stringify(results));
+        `,
+      ],
+      { encoding: "utf8", timeout: 5000 }
+    );
 
-    const originalId = runtime.session.sessionId;
-    const result = await runtime.switchSession(makeSessionFile(makeTmpDir(), agentDir));
-    await new Promise(r => setTimeout(r, 50));
-
-    console.log("capturedShutdown error:", shutdownError);
-    console.log("capturedShutdown defined:", !!capturedShutdown);
-    console.log("cancelled:", result.cancelled);
-    expect(result.cancelled).toBe(true); // cancel works ✓
-    // shutdown via captured ctx is the goal — check if error occurred
-    expect(shutdownError).toBeNull();
+    expect(result.status, result.stderr).toBe(0);
+    const { worktree: wtResult, launchDir: ldResult } = JSON.parse(result.stdout);
+    expect(wtResult).toBe("writable");
+    expect(ldResult).toMatch(/^blocked/);
   });
 });

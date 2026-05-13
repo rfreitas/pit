@@ -4,3 +4,4 @@ pi_wsl/sessions
 pi_wsl/auth.json
 pi_wsl/skills/google-search-browser-use
 extensions/handoff.ts
+pit/test-sandbox/
