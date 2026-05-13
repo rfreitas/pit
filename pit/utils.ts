@@ -20,6 +20,8 @@ export interface PitMetadata {
   branch: string;
   created: string;
   mode: "worktree" | "no-tree";
+  /** why no-tree: absent git repo, or user explicitly passed -nt/--no-tree */
+  noTreeReason?: "no-repo" | "forced";
 }
 
 export interface WorktreeResult {
@@ -87,7 +89,9 @@ export function setupNewSession(result: WorktreeResult, agentDir: string): strin
   const announcement =
     meta.mode === "worktree"
       ? `**pit — worktree mode**\nbranch: \`${meta.branch}\`   worktree: \`${meta.worktree}\``
-      : `**pit — no-tree mode**\nnot inside a git repository — running in current directory`;
+      : meta.noTreeReason === "forced"
+        ? `**pit — no-tree mode**\nrunning in current directory (worktree creation skipped)`
+        : `**pit — no-tree mode**\nnot inside a git repository — running in current directory`;
 
   const lines = [
     { type: "session", version: CURRENT_SESSION_VERSION, id: sessionId, timestamp: isoTs, cwd: result.cwd },

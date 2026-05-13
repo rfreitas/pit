@@ -219,7 +219,7 @@ describe("setupNewSession", () => {
     expect(message.parentId).toBe(custom.id);
   });
 
-  it("no-tree mode announcement says no-tree", () => {
+  it("no-tree (no-repo) announcement mentions no git repository", () => {
     const agentDir = makeTmpAgentDir();
     const result: WorktreeResult = {
       mode: "no-tree",
@@ -231,12 +231,36 @@ describe("setupNewSession", () => {
         branch: "",
         created: "2026-01-01T00:00:00.000Z",
         mode: "no-tree",
+        noTreeReason: "no-repo",
       },
     };
     const sessionFile = setupNewSession(result, agentDir);
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
     const msg = JSON.parse(lines[2]);
     expect(msg.content).toContain("no-tree mode");
+    expect(msg.content).toContain("not inside a git repository");
+  });
+
+  it("no-tree (forced) announcement says worktree creation skipped", () => {
+    const agentDir = makeTmpAgentDir();
+    const result: WorktreeResult = {
+      mode: "no-tree",
+      cwd: "/tmp/my-repo",
+      meta: {
+        id: "c3d4e5f6",
+        repo: "/tmp/my-repo",
+        worktree: "/tmp/my-repo",
+        branch: "",
+        created: "2026-01-01T00:00:00.000Z",
+        mode: "no-tree",
+        noTreeReason: "forced",
+      },
+    };
+    const sessionFile = setupNewSession(result, agentDir);
+    const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
+    const msg = JSON.parse(lines[2]);
+    expect(msg.content).toContain("no-tree mode");
+    expect(msg.content).toContain("worktree creation skipped");
   });
 
   it("session can be opened by SessionManager without errors", () => {

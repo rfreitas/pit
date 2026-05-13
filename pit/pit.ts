@@ -164,6 +164,7 @@ function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): Worktre
       branch: "",
       created: new Date().toISOString(),
       mode: "no-tree",
+      noTreeReason: "no-repo",
     };
     return { mode: "no-tree", cwd, meta };
   }
@@ -179,6 +180,7 @@ function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): Worktre
       branch: "",
       created: new Date().toISOString(),
       mode: "no-tree",
+      noTreeReason: "forced",
     };
     return { mode: "no-tree", cwd, meta };
   }
