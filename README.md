@@ -74,6 +74,7 @@ Creates isolated git worktrees and launches Pi inside them. Useful for working o
 
 ```bash
 pit              # create a new worktree (branch: pi/<id>) and launch pi
+pit -nt          # skip worktree; run in current dir with sandboxing (--no-tree also works)
 pit list         # list pit worktrees for the current repo
 pit list --all   # list all pit worktrees across all repos
 pit clean        # remove orphaned registry entries

@@ -8,6 +8,7 @@
  * Usage:
  *   pit [pi-flags...] [messages...]   Create a worktree (if in git repo) and launch pi
  *   pit --no-sandbox [...]            Same, without bwrap sandboxing
+ *   pit -nt / --no-tree [...]         Skip worktree creation; run in current dir
  *   pit -r [id] [pi-flags...]         Pick or directly open an existing pit session
  *   pit install/remove/update/...     Forwarded directly to pi
  */
@@ -118,10 +119,11 @@ function branchExists(repo: string, branch: string): boolean {
  *
  * - Resume (existingMeta provided): verify/recreate the existing worktree.
  * - New session: check for git, create a worktree if possible, else no-tree.
+ *   Pass forceNoTree=true to skip worktree creation even inside a git repo.
  *
  * Always returns a fully populated WorktreeResult.
  */
-function worktreeCheck(existingMeta?: PitMetadata): WorktreeResult {
+function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): WorktreeResult {
   // ── resume path ────────────────────────────────────────────────────────────
   if (existingMeta) {
     if (existingMeta.mode === "no-tree") {
@@ -172,6 +174,21 @@ function worktreeCheck(existingMeta?: PitMetadata): WorktreeResult {
     const meta: PitMetadata = {
       id: genId(),
       repo: cwd,
+      worktree: cwd,
+      branch: "",
+      created: new Date().toISOString(),
+      mode: "no-tree",
+    };
+    return { mode: "no-tree", cwd, meta };
+  }
+
+  if (forceNoTree) {
+    // Inside a git repo but the user explicitly requested no worktree.
+    // Use cwd as-is (no branch, no worktree directory).
+    const cwd = process.cwd();
+    const meta: PitMetadata = {
+      id: genId(),
+      repo: repo,
       worktree: cwd,
       branch: "",
       created: new Date().toISOString(),
@@ -399,11 +416,13 @@ async function launch(
 const argv = process.argv.slice(2);
 
 void (async () => {
-  // ── strip --no-sandbox (pit-only flag) ───────────────────────────────────
+  // ── strip pit-only flags (--no-sandbox, -nt / --no-tree) ─────────────────
   let sandbox = true;
+  let noTree = false;
   const filteredArgv: string[] = [];
   for (const arg of argv) {
     if (arg === "--no-sandbox") sandbox = false;
+    else if (arg === "-nt" || arg === "--no-tree") noTree = true;
     else filteredArgv.push(arg);
   }
 
@@ -436,7 +455,7 @@ void (async () => {
 
   // ── new session (or user-managed session) ────────────────────────────────
   const userManagingSession = filteredArgv.some((f) => SESSION_FLAGS.has(f));
-  const result = worktreeCheck();
+  const result = worktreeCheck(undefined, noTree);
 
   let piArgs: string[];
   if (userManagingSession) {
