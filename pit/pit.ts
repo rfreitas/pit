@@ -21,6 +21,7 @@ import {
   main,
   SessionManager,
   SessionSelectorComponent,
+  initTheme,
   getAgentDir,
   type CustomEntry,
 } from "@earendil-works/pi-coding-agent";
@@ -232,6 +233,7 @@ async function showPicker(
   sandbox: boolean
 ): Promise<{ sessionFile: string; meta: PitMetadata } | null> {
   const { TUI, ProcessTerminal } = await import("@earendil-works/pi-tui");
+  initTheme();
 
   const selectedPath = await new Promise<string | null>((resolve) => {
     const terminal = new ProcessTerminal();
@@ -247,7 +249,7 @@ async function showPicker(
     );
 
     tui.start();
-    tui.showOverlay(selector, { width: "90%", minWidth: 60 });
+    tui.addChild(selector);
     tui.setFocus(selector);
   });
 
