@@ -331,9 +331,11 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     "--ro-bind-try", "/lib64", "/lib64",
     "--ro-bind-try", "/bin", "/bin",
     "--ro-bind-try", "/sbin", "/sbin",
-    // node runtime (includes pi + global node_modules)
-    "--ro-bind", nodeDir, nodeDir,
+    // home directory (read-only — covers mise installs, ~/.cache/ms-playwright, etc.)
+    // must come before AGENT_DIR so the rw bind below can override it
+    "--ro-bind", HOME, HOME,
     // pi config dir (read-write — auth token refresh and settings need write access)
+    // overrides the read-only home mount above for this subdirectory
     "--bind", AGENT_DIR, AGENT_DIR,
     // worktree (rw — the whole point)
     "--bind", cwd, cwd,
