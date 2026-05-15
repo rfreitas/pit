@@ -28,6 +28,7 @@ import {
 import {
   type PitMetadata,
   type WorktreeResult,
+  type SandboxMount,
   cwdToBucket as _cwdToBucket,
   parseFlags,
   setupNewSession as _setupNewSession,
@@ -213,8 +214,19 @@ function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): Worktre
 
 // ── session pre-seeding ───────────────────────────────────────────────────────
 
-function setupNewSession(result: WorktreeResult): string {
-  return _setupNewSession(result, AGENT_DIR);
+/**
+ * Resolve sandbox mounts for a new session announcement.
+ * Returns the mount list when bwrap is active, undefined otherwise.
+ * Passing undefined to setupNewSession suppresses the sandbox section entirely.
+ */
+function resolveSandboxMounts(cwd: string, useSandbox: boolean): SandboxMount[] | undefined {
+  if (!useSandbox) return undefined;
+  if (!findBwrap()) return undefined;
+  return buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts());
+}
+
+function setupNewSession(result: WorktreeResult, sandboxMounts: SandboxMount[] | undefined): string {
+  return _setupNewSession(result, AGENT_DIR, sandboxMounts);
 }
 
 // ── resume via session picker ───────────────────────────────────────────────────────
@@ -307,6 +319,43 @@ function getExtensionMounts(): string[] {
 }
 
 /**
+ * Build the canonical mount list for the bwrap sandbox.
+ *
+ * Pure function — all environmental reads (agentDirReal, extensionMounts) are
+ * resolved by the caller and injected. This is the single source of truth for
+ * both the bwrap argument list (bwrapLaunch) and the session announcement
+ * (formatSandboxNote). Add or remove entries here and both stay in sync.
+ *
+ * agentDirReal must be the symlink-resolved path: --ro-bind HOME HOME copies
+ * the symlink into the new root, so mounting the real target here is what makes
+ * the rw --bind override the ro home mount correctly.
+ */
+function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[]): SandboxMount[] {
+  return [
+    // ── read-write ────────────────────────────────────────────────────────────
+    // Order matters: home must come before agentDirReal so the rw bind overrides
+    // the ro home mount for that subdirectory.
+    { access: "rw", path: cwd },
+    { access: "rw", path: agentDirReal, label: "Pi config dir" },
+    // ── read-only ─────────────────────────────────────────────────────────────
+    // home (covers mise installs, ~/.cache/ms-playwright, etc.)
+    { access: "ro", path: HOME, label: "home directory" },
+    // system dirs
+    { access: "ro", path: "/usr",     label: "system dirs" },
+    { access: "ro", path: "/etc",     label: "system dirs" },
+    // /etc/resolv.conf → /mnt/wsl/resolv.conf on WSL; without this mount
+    // the symlink dangles inside the sandbox and DNS fails with EAI_AGAIN.
+    { access: "ro", path: "/mnt/wsl", label: "system dirs", optional: true },
+    { access: "ro", path: "/lib",     label: "system dirs", optional: true },
+    { access: "ro", path: "/lib64",   label: "system dirs", optional: true },
+    { access: "ro", path: "/bin",     label: "system dirs", optional: true },
+    { access: "ro", path: "/sbin",    label: "system dirs", optional: true },
+    // Pi extensions and their node_modules
+    ...extensionMounts.map((p) => ({ access: "ro" as const, path: p, label: "Pi extensions" })),
+  ];
+}
+
+/**
  * Spawn the sandboxed pi session via bwrap.
  * The outer process handles all worktree/session setup; bwrap only wraps
  * the actual pi session. Never returns — exits the process.
@@ -319,36 +368,17 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     execSync("which pi", { encoding: "utf8" }).trim()
   );
 
-  const args: string[] = [
-    "--tmpfs", "/",
-    "--dev", "/dev",
-    "--proc", "/proc",
-    "--ro-bind", "/usr", "/usr",
-    "--ro-bind", "/etc", "/etc",
-    // /etc/resolv.conf is a symlink to /mnt/wsl/resolv.conf on WSL
-    "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
-    "--ro-bind-try", "/lib", "/lib",
-    "--ro-bind-try", "/lib64", "/lib64",
-    "--ro-bind-try", "/bin", "/bin",
-    "--ro-bind-try", "/sbin", "/sbin",
-    // home directory (read-only — covers mise installs, ~/.cache/ms-playwright, etc.)
-    // must come before AGENT_DIR so the rw bind below can override it
-    "--ro-bind", HOME, HOME,
-    // pi config dir (read-write — auth token refresh and settings need write access)
-    // overrides the read-only home mount above for this subdirectory
-    // resolve symlinks: AGENT_DIR may be a symlink (e.g. ~/.pi/agent → /mnt/c/.../pi_wsl).
-    // --ro-bind HOME HOME copies that symlink into the new root; mounting the real
-    // target path here makes the symlink non-dangling inside the sandbox.
-    "--bind", fs.realpathSync(AGENT_DIR), fs.realpathSync(AGENT_DIR),
-    // worktree (rw — the whole point)
-    "--bind", cwd, cwd,
-  ];
-
-  for (const mount of getExtensionMounts()) {
-    args.push("--ro-bind", mount, mount);
+  const mountArgs: string[] = [];
+  for (const m of buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts())) {
+    const flag = m.access === "rw" ? "--bind" : m.optional ? "--ro-bind-try" : "--ro-bind";
+    mountArgs.push(flag, m.path, m.path);
   }
 
-  args.push(
+  const args: string[] = [
+    "--tmpfs", "/",
+    "--dev",   "/dev",
+    "--proc",  "/proc",
+    ...mountArgs,
     "--unshare-user",
     "--unshare-pid",
     "--die-with-parent",
@@ -357,8 +387,8 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     "--setenv", "PI_CODING_AGENT", "true",
     "--chdir", cwd,
     "--",
-    nodeBin, piScript, ...piArgs
-  );
+    nodeBin, piScript, ...piArgs,
+  ];
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
   process.exit(result.status ?? 1);
@@ -424,7 +454,8 @@ void (async () => {
     piArgs = filteredArgv;
   } else {
     // pit seeds the session file with metadata and mode announcement
-    const sessionFile = setupNewSession(result);
+    const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
+    const sessionFile = setupNewSession(result, sandboxMounts);
     piArgs = ["--session", sessionFile, ...filteredArgv];
   }
 

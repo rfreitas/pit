@@ -23,7 +23,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, type WorktreeResult } from "../utils.ts";
+import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, type WorktreeResult, type SandboxMount, type PitMetadata } from "../utils.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -137,6 +137,206 @@ describe("parseFlags", () => {
 
   it("empty argv returns all defaults", () => {
     expect(parseFlags([])).toEqual({ sandbox: true, noTree: false, filteredArgv: [] });
+  });
+});
+
+// ── formatSandboxNote ───────────────────────────────────────────────────────────
+//
+// Transforms a SandboxMount list into the sandbox section of the agent
+// announcement. The key behaviour is label-based deduplication: multiple mount
+// entries sharing a label (e.g. several extension paths all labelled
+// "Pi extensions") collapse to a single entry in the output.
+
+describe("formatSandboxNote", () => {
+  const rwMount  = (path: string, label?: string): SandboxMount => ({ access: "rw", path, label });
+  const roMount  = (path: string, label?: string): SandboxMount => ({ access: "ro", path, label });
+  const tryMount = (path: string, label?: string): SandboxMount => ({ access: "ro", path, label, optional: true });
+
+  it("includes the bwrap header line", () => {
+    const note = formatSandboxNote([rwMount("/work")]);
+    expect(note).toContain("**Sandbox (bwrap):**");
+  });
+
+  it("lists rw paths under Read-write", () => {
+    const note = formatSandboxNote([rwMount("/work"), rwMount("/cfg", "Pi config dir")]);
+    expect(note).toContain("`/work`");
+    expect(note).toContain("`Pi config dir`");
+    expect(note).toMatch(/Read-write:.*\/work/);
+  });
+
+  it("lists ro paths under Read-only", () => {
+    const note = formatSandboxNote([roMount("/usr", "system dirs"), roMount("/etc", "system dirs")]);
+    expect(note).toMatch(/Read-only:.*system dirs/);
+  });
+
+  it("uses the literal path as label when no label is provided", () => {
+    const note = formatSandboxNote([rwMount("/some/worktree")]);
+    expect(note).toContain("`/some/worktree`");
+  });
+
+  it("deduplicates entries with the same label", () => {
+    // Two extension paths with the same label → one entry in the output.
+    const mounts = [
+      roMount("/repos/agent/extensions/sudo.ts", "Pi extensions"),
+      roMount("/repos/agent/node_modules",       "Pi extensions"),
+    ];
+    const note = formatSandboxNote(mounts);
+    const matches = note.match(/`Pi extensions`/g);
+    expect(matches).toHaveLength(1);
+  });
+
+  it("preserves order of first occurrence across access levels", () => {
+    const mounts = [
+      rwMount("/work"),
+      rwMount("/cfg", "Pi config dir"),
+      roMount("/home", "home directory"),
+      roMount("/usr", "system dirs"),
+    ];
+    const note = formatSandboxNote(mounts);
+    const rwIdx  = note.indexOf("Read-write");
+    const roIdx  = note.indexOf("Read-only");
+    const cfgIdx = note.indexOf("Pi config dir");
+    const sysIdx = note.indexOf("system dirs");
+    expect(rwIdx).toBeLessThan(roIdx);
+    expect(cfgIdx).toBeGreaterThan(rwIdx);
+    expect(sysIdx).toBeGreaterThan(roIdx);
+  });
+
+  it("optional flag does not affect the label (it is a bwrap concern only)", () => {
+    const required = formatSandboxNote([roMount("/lib", "system dirs")]);
+    const optional = formatSandboxNote([tryMount("/lib", "system dirs")]);
+    expect(required).toBe(optional);
+  });
+
+  it("includes the no-access footer", () => {
+    const note = formatSandboxNote([rwMount("/work")]);
+    expect(note).toContain("No access:");
+  });
+});
+
+// ── buildAnnouncement ─────────────────────────────────────────────────────────
+//
+// Pure function that composes the full agent announcement from PitMetadata
+// and an optional mount list. Covers all three mode variants (worktree,
+// no-tree forced, no-tree no-repo) and both sandbox states.
+
+describe("buildAnnouncement", () => {
+  const worktreeMeta: PitMetadata = {
+    id: "a1b2c3d4",
+    repo: "/tmp/repo",
+    worktree: "/tmp/repo-wt-a1b2c3d4",
+    branch: "pi/a1b2c3d4",
+    created: "2026-01-01T00:00:00.000Z",
+    mode: "worktree",
+  };
+
+  const forcedMeta: PitMetadata = {
+    id: "b2c3d4e5",
+    repo: "/tmp/repo",
+    worktree: "/tmp/repo",
+    branch: "",
+    created: "2026-01-01T00:00:00.000Z",
+    mode: "no-tree",
+    noTreeReason: "forced",
+  };
+
+  const noRepoMeta: PitMetadata = {
+    id: "c3d4e5f6",
+    repo: "/tmp/somedir",
+    worktree: "/tmp/somedir",
+    branch: "",
+    created: "2026-01-01T00:00:00.000Z",
+    mode: "no-tree",
+    noTreeReason: "no-repo",
+  };
+
+  const mounts: SandboxMount[] = [
+    { access: "rw", path: "/tmp/repo-wt-a1b2c3d4" },
+    { access: "rw", path: "/home/user/.pi/agent", label: "Pi config dir" },
+    { access: "ro", path: "/home/user", label: "home directory" },
+  ];
+
+  // ── worktree mode ──────────────────────────────────────────────────────────
+
+  it("worktree mode: contains the pit worktree mode header", () => {
+    expect(buildAnnouncement(worktreeMeta)).toContain("**pit — worktree mode**");
+  });
+
+  it("worktree mode: contains the branch name", () => {
+    expect(buildAnnouncement(worktreeMeta)).toContain("`pi/a1b2c3d4`");
+  });
+
+  it("worktree mode: contains the worktree path", () => {
+    expect(buildAnnouncement(worktreeMeta)).toContain("`/tmp/repo-wt-a1b2c3d4`");
+  });
+
+  it("worktree mode: explains branch isolation to the agent", () => {
+    const text = buildAnnouncement(worktreeMeta);
+    expect(text).toContain("not on the main branch");
+    expect(text).toContain("The main working tree is untouched");
+  });
+
+  // ── no-tree forced ────────────────────────────────────────────────────────
+
+  it("no-tree forced: contains the no-tree skipped header", () => {
+    expect(buildAnnouncement(forcedMeta)).toContain("worktree creation skipped");
+  });
+
+  it("no-tree forced: explains -nt flag", () => {
+    expect(buildAnnouncement(forcedMeta)).toContain("-nt");
+  });
+
+  it("no-tree forced: warns about missing git isolation", () => {
+    expect(buildAnnouncement(forcedMeta)).toContain("No git isolation");
+  });
+
+  // ── no-tree no-repo ───────────────────────────────────────────────────────
+
+  it("no-tree no-repo: contains the no-tree header", () => {
+    expect(buildAnnouncement(noRepoMeta)).toContain("**pit — no-tree mode**");
+  });
+
+  it("no-tree no-repo: explains the absence of a git repository", () => {
+    expect(buildAnnouncement(noRepoMeta)).toContain("Not inside a git repository");
+  });
+
+  it("no-tree no-repo: warns about missing git isolation", () => {
+    expect(buildAnnouncement(noRepoMeta)).toContain("No git isolation");
+  });
+
+  // ── sandbox section ───────────────────────────────────────────────────────
+
+  it("no sandbox mounts: announcement contains no sandbox section", () => {
+    const text = buildAnnouncement(worktreeMeta);
+    expect(text).not.toContain("Sandbox (bwrap)");
+  });
+
+  it("with sandbox mounts: announcement contains the sandbox section", () => {
+    const text = buildAnnouncement(worktreeMeta, mounts);
+    expect(text).toContain("Sandbox (bwrap)");
+  });
+
+  it("sandbox section appears after the mode content", () => {
+    const text = buildAnnouncement(worktreeMeta, mounts);
+    expect(text.indexOf("Sandbox (bwrap)")).toBeGreaterThan(text.indexOf("worktree mode"));
+  });
+
+  it("sandbox section is identical to formatSandboxNote output", () => {
+    // buildAnnouncement must not transform the sandbox note — it just appends it.
+    const text = buildAnnouncement(worktreeMeta, mounts);
+    expect(text).toContain(formatSandboxNote(mounts));
+  });
+
+  it("all three modes include the sandbox section when mounts are provided", () => {
+    for (const meta of [worktreeMeta, forcedMeta, noRepoMeta]) {
+      expect(buildAnnouncement(meta, mounts)).toContain("Sandbox (bwrap)");
+    }
+  });
+
+  it("all three modes omit the sandbox section when mounts are absent", () => {
+    for (const meta of [worktreeMeta, forcedMeta, noRepoMeta]) {
+      expect(buildAnnouncement(meta)).not.toContain("Sandbox (bwrap)");
+    }
   });
 });
 

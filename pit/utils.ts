@@ -30,7 +30,74 @@ export interface WorktreeResult {
   meta: PitMetadata;
 }
 
-// ── bucket naming ─────────────────────────────────────────────────────────────
+// ── sandbox ──────────────────────────────────────────────────────────────────
+
+/**
+ * A single bwrap mount entry. Drives both the bwrap arg list in pit.ts
+ * and the sandbox section of the session announcement, so the two stay
+ * in sync automatically.
+ */
+export interface SandboxMount {
+  access: "rw" | "ro";
+  /** Absolute path to bind-mount (src === dst inside the namespace). */
+  path: string;
+  /**
+   * Human-readable label shown in the announcement.
+   * Multiple mounts sharing the same label are collapsed to one entry.
+   * Defaults to the literal path when omitted.
+   */
+  label?: string;
+  /** Use --ro-bind-try instead of --ro-bind (silently skipped if missing). */
+  optional?: boolean;
+}
+
+/**
+ * Build the sandbox section of the session announcement from the mount list.
+ * Entries are grouped by label (or path when no label), preserving order
+ * and deduplicating repeated labels (e.g. several extension paths → one entry).
+ */
+export function formatSandboxNote(mounts: SandboxMount[]): string {
+  const labels = (access: "rw" | "ro") => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of mounts) {
+      if (m.access !== access) continue;
+      const key = m.label ?? m.path;
+      if (!seen.has(key)) { seen.add(key); out.push(`\`${key}\``); }
+    }
+    return out.join(", ");
+  };
+  return `**Sandbox (bwrap):** This session runs inside an OS-level namespace (bubblewrap). Filesystem access is allowlist-based:
+- Read-write: ${labels("rw")}
+- Read-only: ${labels("ro")}
+- No access: anything outside the mounts listed above`;
+}
+
+/**
+ * Build the mode announcement shown to the agent at session start.
+ * Pure function — output depends only on the worktree result and sandbox mounts.
+ */
+export function buildAnnouncement(meta: PitMetadata, sandboxMounts?: SandboxMount[]): string {
+  const sandboxSection = sandboxMounts ? `\n\n${formatSandboxNote(sandboxMounts)}` : "";
+  if (meta.mode === "worktree") {
+    return `**pit — worktree mode**
+branch: \`${meta.branch}\`   worktree: \`${meta.worktree}\`
+
+**Worktree:** You are working in an isolated git worktree on branch \`${meta.branch}\`, not on the main branch. Your changes stay here until the user reviews and merges them. The main working tree is untouched.${sandboxSection}`;
+  }
+  if (meta.noTreeReason === "forced") {
+    return `**pit — no-tree mode** *(worktree creation skipped)*
+Running in current directory — git worktree creation was skipped (\`-nt\`/\`--no-tree\`).
+
+No git isolation. Changes affect the current directory directly.${sandboxSection}`;
+  }
+  return `**pit — no-tree mode**
+Not inside a git repository — running in current directory without a worktree.
+
+No git isolation. Changes affect the current directory directly.${sandboxSection}`;
+}
+
+
 
 /**
  * Derive the session bucket directory name for a cwd path.
@@ -70,9 +137,13 @@ export function parseFlags(argv: string[]): ParsedFlags {
  * Write a new session JSONL file pre-seeded with pit metadata and a visible
  * mode announcement. Returns the file path to pass as --session to pi.
  *
+ * Pass sandboxMounts (from pit.ts's buildSandboxMounts) to include a sandbox
+ * access section in the announcement. Omit entirely when sandbox is disabled
+ * or bwrap is unavailable — the agent doesn't need to know about full access.
+ *
  * Accepts agentDir as a parameter for testability (tests pass a temp dir).
  */
-export function setupNewSession(result: WorktreeResult, agentDir: string): string {
+export function setupNewSession(result: WorktreeResult, agentDir: string, sandboxMounts?: SandboxMount[]): string {
   const bucket = cwdToBucket(result.cwd);
   const sessionDir = path.join(agentDir, "sessions", bucket);
   fs.mkdirSync(sessionDir, { recursive: true });
@@ -86,12 +157,7 @@ export function setupNewSession(result: WorktreeResult, agentDir: string): strin
   const id2 = crypto.randomBytes(4).toString("hex");
   const { meta } = result;
 
-  const announcement =
-    meta.mode === "worktree"
-      ? `**pit — worktree mode**\nbranch: \`${meta.branch}\`   worktree: \`${meta.worktree}\``
-      : meta.noTreeReason === "forced"
-        ? `**pit — no-tree mode**\nrunning in current directory (worktree creation skipped)`
-        : `**pit — no-tree mode**\nnot inside a git repository — running in current directory`;
+  const announcement = buildAnnouncement(meta, sandboxMounts);
 
   const lines = [
     { type: "session", version: CURRENT_SESSION_VERSION, id: sessionId, timestamp: isoTs, cwd: result.cwd },
