@@ -10,7 +10,8 @@
     "npm:@spences10/pi-confirm-destructive",
     "npm:@jerryan/pi-sanity",
     "npm:pi-agent-browser-native",
-    "npm:agent-browser"
+    "npm:agent-browser",
+    "npm:pi-subagents"
   ],
   "defaultThinkingLevel": "medium"
 }
