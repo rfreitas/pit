@@ -37,39 +37,41 @@ export interface WorktreeResult {
  * and the sandbox section of the session announcement, so the two stay
  * in sync automatically.
  */
-export interface SandboxMount {
-  access: "rw" | "ro";
-  /** Absolute path to bind-mount (src === dst inside the namespace). */
+export interface RoMount {
   path: string;
-  /**
-   * Human-readable label shown in the announcement.
-   * Multiple mounts sharing the same label are collapsed to one entry.
-   * Defaults to the literal path when omitted.
-   */
   label?: string;
   /** Use --ro-bind-try instead of --ro-bind (silently skipped if missing). */
   optional?: boolean;
 }
 
+export interface RwMount {
+  path: string;
+  label?: string;
+}
+
+export interface SandboxMounts {
+  ro: RoMount[];
+  rw: RwMount[];
+}
+
 /**
- * Build the sandbox section of the session announcement from the mount list.
+ * Build the sandbox section of the session announcement from the mount lists.
  * Entries are grouped by label (or path when no label), preserving order
  * and deduplicating repeated labels (e.g. several extension paths → one entry).
  */
-export function formatSandboxNote(mounts: SandboxMount[]): string {
-  const labels = (access: "rw" | "ro") => {
+export function formatSandboxNote(mounts: SandboxMounts): string {
+  const dedup = (items: Array<{ path: string; label?: string }>) => {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const m of mounts) {
-      if (m.access !== access) continue;
+    for (const m of items) {
       const key = m.label ?? m.path;
       if (!seen.has(key)) { seen.add(key); out.push(`\`${key}\``); }
     }
     return out.join(", ");
   };
   return `**Sandbox (bwrap):** This session runs inside an OS-level namespace (bubblewrap). Filesystem access is allowlist-based:
-- Read-write: ${labels("rw")}
-- Read-only: ${labels("ro")}
+- Read-write: ${dedup(mounts.rw)}
+- Read-only: ${dedup(mounts.ro)}
 - No access: anything outside the mounts listed above`;
 }
 
@@ -77,7 +79,7 @@ export function formatSandboxNote(mounts: SandboxMount[]): string {
  * Build the mode announcement shown to the agent at session start.
  * Pure function — output depends only on the worktree result and sandbox mounts.
  */
-export function buildAnnouncement(meta: PitMetadata, sandboxMounts?: SandboxMount[]): string {
+export function buildAnnouncement(meta: PitMetadata, sandboxMounts?: SandboxMounts): string {
   const sandboxSection = sandboxMounts ? `\n\n${formatSandboxNote(sandboxMounts)}` : "";
   if (meta.mode === "worktree") {
     return `**pit — worktree mode**
@@ -137,13 +139,13 @@ export function parseFlags(argv: string[]): ParsedFlags {
  * Write a new session JSONL file pre-seeded with pit metadata and a visible
  * mode announcement. Returns the file path to pass as --session to pi.
  *
- * Pass sandboxMounts (from pit.ts's buildSandboxMounts) to include a sandbox
- * access section in the announcement. Omit entirely when sandbox is disabled
- * or bwrap is unavailable — the agent doesn't need to know about full access.
+ * The announcement is written once here (for the TUI banner on first open).
+ * On resume, context is delivered via --append-system-prompt instead, so
+ * this file is never modified after creation.
  *
  * Accepts agentDir as a parameter for testability (tests pass a temp dir).
  */
-export function setupNewSession(result: WorktreeResult, agentDir: string, sandboxMounts?: SandboxMount[]): string {
+export function setupNewSession(result: WorktreeResult, agentDir: string, sandboxMounts?: SandboxMounts): string {
   const bucket = cwdToBucket(result.cwd);
   const sessionDir = path.join(agentDir, "sessions", bucket);
   fs.mkdirSync(sessionDir, { recursive: true });
@@ -157,12 +159,10 @@ export function setupNewSession(result: WorktreeResult, agentDir: string, sandbo
   const id2 = crypto.randomBytes(4).toString("hex");
   const { meta } = result;
 
-  const announcement = buildAnnouncement(meta, sandboxMounts);
-
   const lines = [
     { type: "session", version: CURRENT_SESSION_VERSION, id: sessionId, timestamp: isoTs, cwd: result.cwd },
     { type: "custom", id: id1, parentId: null, timestamp: isoTs, customType: "pit", data: meta },
-    { type: "custom_message", id: id2, parentId: id1, timestamp: isoTs, customType: "pit", content: announcement, display: true },
+    { type: "custom_message", id: id2, parentId: id1, timestamp: isoTs, customType: "pit", content: buildAnnouncement(meta, sandboxMounts), display: true },
   ]
     .map((o) => JSON.stringify(o))
     .join("\n") + "\n";

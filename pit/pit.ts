@@ -28,9 +28,10 @@ import {
 import {
   type PitMetadata,
   type WorktreeResult,
-  type SandboxMount,
+  type SandboxMounts,
   cwdToBucket as _cwdToBucket,
   parseFlags,
+  buildAnnouncement,
   setupNewSession as _setupNewSession,
 } from "./utils.ts";
 
@@ -219,15 +220,24 @@ function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): Worktre
  * Returns the mount list when bwrap is active, undefined otherwise.
  * Passing undefined to setupNewSession suppresses the sandbox section entirely.
  */
-function resolveSandboxMounts(cwd: string, useSandbox: boolean): SandboxMount[] | undefined {
+function resolveSandboxMounts(cwd: string, useSandbox: boolean): SandboxMounts | undefined {
   if (!useSandbox) return undefined;
   if (!findBwrap()) return undefined;
   const nodeDir = path.dirname(path.dirname(process.execPath));
   return buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir);
 }
 
-function setupNewSession(result: WorktreeResult, sandboxMounts: SandboxMount[] | undefined): string {
+function setupNewSession(result: WorktreeResult, sandboxMounts: SandboxMounts | undefined): string {
   return _setupNewSession(result, AGENT_DIR, sandboxMounts);
+}
+
+/**
+ * Build the --append-system-prompt args to pass to pi on every launch.
+ * Gives the model current pit mode and sandbox state without touching the
+ * session file tree.
+ */
+function systemPromptArgs(meta: PitMetadata, sandboxMounts: SandboxMounts | undefined): string[] {
+  return ["--append-system-prompt", buildAnnouncement(meta, sandboxMounts)];
 }
 
 // ── resume via session picker ───────────────────────────────────────────────────────
@@ -331,34 +341,38 @@ function getExtensionMounts(): string[] {
  * the symlink into the new root, so mounting the real target here is what makes
  * the rw --bind override the ro home mount correctly.
  */
-function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[], nodeDir: string): SandboxMount[] {
-  return [
-    // ── read-write ────────────────────────────────────────────────────────────
-    // Order matters: home must come before agentDirReal so the rw bind overrides
-    // the ro home mount for that subdirectory.
-    { access: "rw", path: cwd },
-    { access: "rw", path: agentDirReal, label: "Pi config dir" },
-    // npm cache + global node_modules (needed for `pi install` inside a session)
-    { access: "rw", path: path.join(HOME, ".npm"),                       label: "npm cache" },
-    { access: "rw", path: path.join(HOME, ".local/share/mise/shims"),    label: "mise shims" },
-    { access: "rw", path: path.join(nodeDir, "lib/node_modules"),        label: "Node.js global modules" },
-    { access: "rw", path: path.join(nodeDir, "bin"),                     label: "Node.js bin" },
-    // ── read-only ─────────────────────────────────────────────────────────────
-    // home (covers mise installs, ~/.cache/ms-playwright, etc.)
-    { access: "ro", path: HOME, label: "home directory" },
-    // system dirs
-    { access: "ro", path: "/usr",     label: "system dirs" },
-    { access: "ro", path: "/etc",     label: "system dirs" },
-    // /etc/resolv.conf → /mnt/wsl/resolv.conf on WSL; without this mount
-    // the symlink dangles inside the sandbox and DNS fails with EAI_AGAIN.
-    { access: "ro", path: "/mnt/wsl", label: "system dirs", optional: true },
-    { access: "ro", path: "/lib",     label: "system dirs", optional: true },
-    { access: "ro", path: "/lib64",   label: "system dirs", optional: true },
-    { access: "ro", path: "/bin",     label: "system dirs", optional: true },
-    { access: "ro", path: "/sbin",    label: "system dirs", optional: true },
-    // Pi extensions and their node_modules
-    ...extensionMounts.map((p) => ({ access: "ro" as const, path: p, label: "Pi extensions" })),
-  ];
+function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[], nodeDir: string): SandboxMounts {
+  return {
+    // bwrapLaunch emits ro first, then rw — later mounts win for overlapping
+    // paths, so rw binds always override the ro home base mount.
+    ro: [
+      // home (ro base — covers mise installs, ~/.cache/ms-playwright, etc.)
+      { path: HOME, label: "home directory" },
+      // system dirs
+      { path: "/usr",     label: "system dirs" },
+      { path: "/etc",     label: "system dirs" },
+      // /etc/resolv.conf → /mnt/wsl/resolv.conf on WSL; without this mount
+      // the symlink dangles inside the sandbox and DNS fails with EAI_AGAIN.
+      { path: "/mnt/wsl", label: "system dirs", optional: true },
+      { path: "/lib",     label: "system dirs", optional: true },
+      { path: "/lib64",   label: "system dirs", optional: true },
+      { path: "/bin",     label: "system dirs", optional: true },
+      { path: "/sbin",    label: "system dirs", optional: true },
+      // Pi extensions and their node_modules
+      ...extensionMounts.map((p) => ({ path: p, label: "Pi extensions" })),
+    ],
+    rw: [
+      // rw subdirectory overrides — all applied after the ro home base,
+      // so they win for their specific paths.
+      { path: cwd },
+      { path: agentDirReal,                               label: "Pi config dir" },
+      // npm cache + global node_modules (needed for `pi install` inside a session)
+      { path: path.join(HOME, ".npm"),                    label: "npm cache" },
+      { path: path.join(HOME, ".local/share/mise/shims"), label: "mise shims" },
+      { path: path.join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },
+      { path: path.join(nodeDir, "bin"),                  label: "Node.js bin" },
+    ],
+  };
 }
 
 /**
@@ -374,10 +388,13 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     execSync("which pi", { encoding: "utf8" }).trim()
   );
 
+  const mounts = buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir);
   const mountArgs: string[] = [];
-  for (const m of buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir)) {
-    const flag = m.access === "rw" ? "--bind" : m.optional ? "--ro-bind-try" : "--ro-bind";
-    mountArgs.push(flag, m.path, m.path);
+  for (const m of mounts.ro) {
+    mountArgs.push(m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path);
+  }
+  for (const m of mounts.rw) {
+    mountArgs.push("--bind", m.path, m.path);
   }
 
   const args: string[] = [
@@ -446,7 +463,8 @@ void (async () => {
     if (!picked) return;
 
     const result = worktreeCheck(picked.meta);
-    await launch(result.cwd, ["--session", picked.sessionFile, ...piArgs], sandbox);
+    const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
+    await launch(result.cwd, ["--session", picked.sessionFile, ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs], sandbox);
     return;
   }
 
@@ -459,10 +477,11 @@ void (async () => {
     // User controls session — just establish the worktree and pass through
     piArgs = filteredArgv;
   } else {
-    // pit seeds the session file with metadata and mode announcement
+    // pit seeds the session file with the TUI banner (once, on creation).
+    // Context reaches the model via --append-system-prompt on every launch.
     const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
     const sessionFile = setupNewSession(result, sandboxMounts);
-    piArgs = ["--session", sessionFile, ...filteredArgv];
+    piArgs = ["--session", sessionFile, ...systemPromptArgs(result.meta, sandboxMounts), ...filteredArgv];
   }
 
   await launch(result.cwd, piArgs, sandbox);

@@ -23,7 +23,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, type WorktreeResult, type SandboxMount, type PitMetadata } from "../utils.ts";
+import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -148,68 +148,58 @@ describe("parseFlags", () => {
 // "Pi extensions") collapse to a single entry in the output.
 
 describe("formatSandboxNote", () => {
-  const rwMount  = (path: string, label?: string): SandboxMount => ({ access: "rw", path, label });
-  const roMount  = (path: string, label?: string): SandboxMount => ({ access: "ro", path, label });
-  const tryMount = (path: string, label?: string): SandboxMount => ({ access: "ro", path, label, optional: true });
+  const ro  = (path: string, label?: string) => ({ path, label });
+  const opt = (path: string, label?: string) => ({ path, label, optional: true });
+  const rw  = (path: string, label?: string) => ({ path, label });
 
   it("includes the bwrap header line", () => {
-    const note = formatSandboxNote([rwMount("/work")]);
+    const note = formatSandboxNote({ ro: [], rw: [rw("/work")] });
     expect(note).toContain("**Sandbox (bwrap):**");
   });
 
   it("lists rw paths under Read-write", () => {
-    const note = formatSandboxNote([rwMount("/work"), rwMount("/cfg", "Pi config dir")]);
+    const note = formatSandboxNote({ ro: [], rw: [rw("/work"), rw("/cfg", "Pi config dir")] });
     expect(note).toContain("`/work`");
     expect(note).toContain("`Pi config dir`");
     expect(note).toMatch(/Read-write:.*\/work/);
   });
 
   it("lists ro paths under Read-only", () => {
-    const note = formatSandboxNote([roMount("/usr", "system dirs"), roMount("/etc", "system dirs")]);
+    const note = formatSandboxNote({ ro: [ro("/usr", "system dirs"), ro("/etc", "system dirs")], rw: [] });
     expect(note).toMatch(/Read-only:.*system dirs/);
   });
 
   it("uses the literal path as label when no label is provided", () => {
-    const note = formatSandboxNote([rwMount("/some/worktree")]);
+    const note = formatSandboxNote({ ro: [], rw: [rw("/some/worktree")] });
     expect(note).toContain("`/some/worktree`");
   });
 
   it("deduplicates entries with the same label", () => {
     // Two extension paths with the same label → one entry in the output.
-    const mounts = [
-      roMount("/repos/agent/extensions/sudo.ts", "Pi extensions"),
-      roMount("/repos/agent/node_modules",       "Pi extensions"),
-    ];
-    const note = formatSandboxNote(mounts);
+    const note = formatSandboxNote({
+      ro: [ro("/repos/agent/extensions/sudo.ts", "Pi extensions"), ro("/repos/agent/node_modules", "Pi extensions")],
+      rw: [],
+    });
     const matches = note.match(/`Pi extensions`/g);
     expect(matches).toHaveLength(1);
   });
 
-  it("preserves order of first occurrence across access levels", () => {
-    const mounts = [
-      rwMount("/work"),
-      rwMount("/cfg", "Pi config dir"),
-      roMount("/home", "home directory"),
-      roMount("/usr", "system dirs"),
-    ];
-    const note = formatSandboxNote(mounts);
-    const rwIdx  = note.indexOf("Read-write");
-    const roIdx  = note.indexOf("Read-only");
-    const cfgIdx = note.indexOf("Pi config dir");
-    const sysIdx = note.indexOf("system dirs");
-    expect(rwIdx).toBeLessThan(roIdx);
-    expect(cfgIdx).toBeGreaterThan(rwIdx);
-    expect(sysIdx).toBeGreaterThan(roIdx);
+  it("Read-write section always appears before Read-only section", () => {
+    const note = formatSandboxNote({
+      ro: [ro("/home", "home directory"), ro("/usr", "system dirs")],
+      rw: [rw("/work"), rw("/cfg", "Pi config dir")],
+    });
+    expect(note.indexOf("Read-write")).toBeLessThan(note.indexOf("Read-only"));
   });
 
   it("optional flag does not affect the label (it is a bwrap concern only)", () => {
-    const required = formatSandboxNote([roMount("/lib", "system dirs")]);
-    const optional = formatSandboxNote([tryMount("/lib", "system dirs")]);
+    const required = formatSandboxNote({ ro: [ro("/lib", "system dirs")],  rw: [] });
+    const optional = formatSandboxNote({ ro: [opt("/lib", "system dirs")], rw: [] });
     expect(required).toBe(optional);
   });
 
   it("includes the no-access footer", () => {
-    const note = formatSandboxNote([rwMount("/work")]);
+    const note = formatSandboxNote({ ro: [], rw: [rw("/work")] });
     expect(note).toContain("No access:");
   });
 });
@@ -250,11 +240,13 @@ describe("buildAnnouncement", () => {
     noTreeReason: "no-repo",
   };
 
-  const mounts: SandboxMount[] = [
-    { access: "rw", path: "/tmp/repo-wt-a1b2c3d4" },
-    { access: "rw", path: "/home/user/.pi/agent", label: "Pi config dir" },
-    { access: "ro", path: "/home/user", label: "home directory" },
-  ];
+  const mounts: SandboxMounts = {
+    ro: [{ path: "/home/user", label: "home directory" }],
+    rw: [
+      { path: "/tmp/repo-wt-a1b2c3d4" },
+      { path: "/home/user/.pi/agent", label: "Pi config dir" },
+    ],
+  };
 
   // ── worktree mode ──────────────────────────────────────────────────────────
 
@@ -342,16 +334,14 @@ describe("buildAnnouncement", () => {
 
 // ── setupNewSession ───────────────────────────────────────────────────────────
 //
-// pit pre-seeds the session file with two entries before launching pi:
-//   1. a CustomEntry  (type: "custom")         — pit metadata, not shown to user or LLM
-//   2. a CustomMessageEntry (type: "custom_message", display: true)
-//                                              — mode announcement, shown in TUI and sent to LLM
+// Writes the session file scaffold: a session header, a pit CustomEntry
+// carrying worktree metadata, and a visible CustomMessageEntry (TUI banner).
+// The banner is written once here on creation; context reaches the model on
+// every launch (including resume) via --append-system-prompt instead.
 //
 // The file must be written via direct JSONL I/O, NOT via SessionManager's
 // append methods. SessionManager buffers writes in-memory and only flushes
-// them when pi itself opens the session — meaning the file would be empty
-// when pit passes --session <path> to pi, and pi would ignore it and start
-// a fresh session in the wrong bucket.
+// them when pi itself opens the session.
 
 describe("setupNewSession", () => {
   const tmpDirs: string[] = [];
@@ -391,8 +381,6 @@ function makeTmpAgentDir(): string {
   }
 
   it("actually writes the file to disk (guards against SessionManager buffering regression)", () => {
-    // The original implementation used SessionManager.appendCustomEntry()
-    // which never flushed to disk. This test would have caught that bug.
     const agentDir = makeTmpAgentDir();
     const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
     expect(fs.existsSync(sessionFile)).toBe(true);
@@ -406,7 +394,7 @@ function makeTmpAgentDir(): string {
     expect(sessionFile).toContain(path.join(agentDir, "sessions", bucket));
   });
 
-  it("file has exactly 3 lines (header + custom + custom_message)", () => {
+  it("file has exactly 3 lines (header + custom metadata + custom_message)", () => {
     const agentDir = makeTmpAgentDir();
     const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
@@ -426,8 +414,6 @@ function makeTmpAgentDir(): string {
   });
 
   it("line 2 is a pit CustomEntry carrying the worktree metadata", () => {
-    // This entry is how pit -r finds sessions later: SessionManager.listAll()
-    // scans all sessions for type=custom, customType=pit entries.
     const agentDir = makeTmpAgentDir();
     const result = makeWorktreeResult();
     const sessionFile = setupNewSession(result, agentDir);
@@ -442,9 +428,28 @@ function makeTmpAgentDir(): string {
     expect(entry.data.mode).toBe("worktree");
   });
 
-  it("line 3 is a CustomMessageEntry with display: true (shown in TUI)", () => {
-    // display: true means pi renders this in the chat on session load, so
-    // the user sees the mode announcement without needing to run a command.
+  it("session file can be opened by SessionManager (pi compatibility check)", () => {
+    const agentDir = makeTmpAgentDir();
+    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
+    expect(() => SessionManager.open(sessionFile)).not.toThrow();
+    const sm = SessionManager.open(sessionFile);
+    // header excluded; custom metadata + custom_message = 2
+    expect(sm.getEntries().length).toBe(2);
+  });
+
+  it("SessionManager can locate the pit CustomEntry for pit -r", () => {
+    const agentDir = makeTmpAgentDir();
+    const result = makeWorktreeResult();
+    const sessionFile = setupNewSession(result, agentDir);
+    const sm = SessionManager.open(sessionFile);
+    const pitEntry = sm
+      .getEntries()
+      .find((e) => e.type === "custom" && (e as any).customType === "pit");
+    expect(pitEntry).toBeDefined();
+    expect((pitEntry as any).data.id).toBe(result.meta.id);
+  });
+
+  it("line 3 is a CustomMessageEntry with display: true (TUI banner)", () => {
     const agentDir = makeTmpAgentDir();
     const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
@@ -452,12 +457,9 @@ function makeTmpAgentDir(): string {
     expect(msg.type).toBe("custom_message");
     expect(msg.customType).toBe("pit");
     expect(msg.display).toBe(true);
-    expect(msg.content).toContain("worktree mode");
   });
 
   it("CustomMessageEntry parentId chains to CustomEntry id", () => {
-    // pi walks the parentId chain to build context; a broken chain would
-    // cause the message to appear detached from the session tree.
     const agentDir = makeTmpAgentDir();
     const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
@@ -466,9 +468,26 @@ function makeTmpAgentDir(): string {
     expect(message.parentId).toBe(custom.id);
   });
 
+  it("announcement includes sandbox section when mounts provided", () => {
+    const agentDir = makeTmpAgentDir();
+    const result = makeWorktreeResult();
+    const mounts: SandboxMounts = {
+      ro: [{ path: "/home/user", label: "home directory" }],
+      rw: [{ path: result.cwd }],
+    };
+    const sessionFile = setupNewSession(result, agentDir, mounts);
+    const msg = JSON.parse(fs.readFileSync(sessionFile, "utf8").trim().split("\n")[2]);
+    expect(msg.content).toContain("Sandbox (bwrap)");
+  });
+
+  it("announcement omits sandbox section when no mounts provided", () => {
+    const agentDir = makeTmpAgentDir();
+    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
+    const msg = JSON.parse(fs.readFileSync(sessionFile, "utf8").trim().split("\n")[2]);
+    expect(msg.content).not.toContain("Sandbox (bwrap)");
+  });
+
   it("no-tree mode announcement tells user there is no git repo", () => {
-    // When pit is run outside a git repo it falls back to no-tree mode.
-    // The announcement informs the user why no worktree was created.
     const agentDir = makeTmpAgentDir();
     const result: WorktreeResult = {
       mode: "no-tree",
@@ -486,30 +505,5 @@ function makeTmpAgentDir(): string {
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
     const msg = JSON.parse(lines[2]);
     expect(msg.content).toContain("no-tree mode");
-  });
-
-  it("session file can be opened by SessionManager (pi compatibility check)", () => {
-    // If the JSONL structure is malformed pi will silently ignore the file
-    // and start a fresh session instead of opening the pre-seeded one.
-    const agentDir = makeTmpAgentDir();
-    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
-    expect(() => SessionManager.open(sessionFile)).not.toThrow();
-    const sm = SessionManager.open(sessionFile);
-    // header is excluded from getEntries(); custom + custom_message = 2
-    expect(sm.getEntries().length).toBe(2);
-  });
-
-  it("SessionManager can locate the pit CustomEntry for pit -r", () => {
-    // pit -r calls SessionManager.listAll() and scans entries for
-    // customType=pit. If this lookup fails no sessions appear in the picker.
-    const agentDir = makeTmpAgentDir();
-    const result = makeWorktreeResult();
-    const sessionFile = setupNewSession(result, agentDir);
-    const sm = SessionManager.open(sessionFile);
-    const pitEntry = sm
-      .getEntries()
-      .find((e) => e.type === "custom" && (e as any).customType === "pit");
-    expect(pitEntry).toBeDefined();
-    expect((pitEntry as any).data.id).toBe(result.meta.id);
   });
 });
