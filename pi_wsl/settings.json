@@ -8,7 +8,9 @@
   "packages": [
     "npm:@casualjim/pi-heimdall",
     "npm:@spences10/pi-confirm-destructive",
-    "npm:@jerryan/pi-sanity"
+    "npm:@jerryan/pi-sanity",
+    "npm:pi-agent-browser-native",
+    "npm:agent-browser"
   ],
   "defaultThinkingLevel": "medium"
 }
