@@ -338,6 +338,7 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     // overrides the read-only home mount above for these subdirectories
     "--bind", path.join(HOME, ".npm"), path.join(HOME, ".npm"),
     "--bind", `${nodeDir}/lib/node_modules`, `${nodeDir}/lib/node_modules`,
+    "--bind", `${nodeDir}/bin`, `${nodeDir}/bin`,
     // pi config dir (read-write — auth token refresh and settings need write access)
     // overrides the read-only home mount above for this subdirectory
     // resolve symlinks: AGENT_DIR may be a symlink (e.g. ~/.pi/agent → /mnt/c/.../pi_wsl).
