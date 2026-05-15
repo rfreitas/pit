@@ -337,6 +337,7 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     // npm cache + global node_modules (read-write — needed for `pi install` inside a session)
     // overrides the read-only home mount above for these subdirectories
     "--bind", path.join(HOME, ".npm"), path.join(HOME, ".npm"),
+    "--bind", path.join(HOME, ".local/share/mise/shims"), path.join(HOME, ".local/share/mise/shims"),
     "--bind", `${nodeDir}/lib/node_modules`, `${nodeDir}/lib/node_modules`,
     "--bind", `${nodeDir}/bin`, `${nodeDir}/bin`,
     // pi config dir (read-write — auth token refresh and settings need write access)
