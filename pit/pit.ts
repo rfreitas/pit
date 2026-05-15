@@ -336,7 +336,10 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     "--ro-bind", HOME, HOME,
     // pi config dir (read-write — auth token refresh and settings need write access)
     // overrides the read-only home mount above for this subdirectory
-    "--bind", AGENT_DIR, AGENT_DIR,
+    // resolve symlinks: AGENT_DIR may be a symlink (e.g. ~/.pi/agent → /mnt/c/.../pi_wsl).
+    // --ro-bind HOME HOME copies that symlink into the new root; mounting the real
+    // target path here makes the symlink non-dangling inside the sandbox.
+    "--bind", fs.realpathSync(AGENT_DIR), fs.realpathSync(AGENT_DIR),
     // worktree (rw — the whole point)
     "--bind", cwd, cwd,
   ];
