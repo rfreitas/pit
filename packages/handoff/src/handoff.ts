@@ -27,13 +27,14 @@ export function getDirectoryCompletions(prefix: string, cwd: string): Autocomple
 		let listDir: string;
 		let filterStr: string;
 
-		const endsWithSep = prefix === "" || prefix.endsWith("/") || prefix.endsWith("\\");
+		const expanded = prefix.replace(/^~(?=\/|$)/, process.env.HOME ?? "");
+		const endsWithSep = expanded === "" || expanded.endsWith("/") || expanded.endsWith("\\");
 
 		if (endsWithSep) {
-			listDir = path.resolve(cwd, prefix || ".");
+			listDir = path.resolve(cwd, expanded || ".");
 			filterStr = "";
 		} else {
-			const resolved = path.resolve(cwd, prefix);
+			const resolved = path.resolve(cwd, expanded);
 			listDir = path.dirname(resolved);
 			filterStr = path.basename(resolved).toLowerCase();
 		}
@@ -99,7 +100,8 @@ export default function (pi: ExtensionAPI) {
 
 			// Resolve target path relative to current working directory, then resolve symlinks
 			const targetPath = (() => {
-				const resolved = path.resolve(ctx.cwd, targetArg);
+				const expanded = targetArg.replace(/^~(?=\/|$)/, process.env.HOME ?? "");
+				const resolved = path.resolve(ctx.cwd, expanded);
 				try { return fs.realpathSync(resolved); } catch { return resolved; }
 			})();
 			if (!fs.existsSync(targetPath)) {

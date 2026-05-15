@@ -3,7 +3,7 @@
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-sonnet-4.6",
   "extensions": [
-    "/mnt/c/Users/ricfr/Repos/agent/extensions"
+    "/home/ricfr/repos/agent/extensions"
   ],
   "packages": [
     "npm:@casualjim/pi-heimdall",
