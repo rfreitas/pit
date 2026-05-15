@@ -334,6 +334,10 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     // home directory (read-only — covers mise installs, ~/.cache/ms-playwright, etc.)
     // must come before AGENT_DIR so the rw bind below can override it
     "--ro-bind", HOME, HOME,
+    // npm cache + global node_modules (read-write — needed for `pi install` inside a session)
+    // overrides the read-only home mount above for these subdirectories
+    "--bind", path.join(HOME, ".npm"), path.join(HOME, ".npm"),
+    "--bind", `${nodeDir}/lib/node_modules`, `${nodeDir}/lib/node_modules`,
     // pi config dir (read-write — auth token refresh and settings need write access)
     // overrides the read-only home mount above for this subdirectory
     // resolve symlinks: AGENT_DIR may be a symlink (e.g. ~/.pi/agent → /mnt/c/.../pi_wsl).
