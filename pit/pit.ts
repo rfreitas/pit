@@ -222,7 +222,8 @@ function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): Worktre
 function resolveSandboxMounts(cwd: string, useSandbox: boolean): SandboxMount[] | undefined {
   if (!useSandbox) return undefined;
   if (!findBwrap()) return undefined;
-  return buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts());
+  const nodeDir = path.dirname(path.dirname(process.execPath));
+  return buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir);
 }
 
 function setupNewSession(result: WorktreeResult, sandboxMounts: SandboxMount[] | undefined): string {
@@ -330,13 +331,18 @@ function getExtensionMounts(): string[] {
  * the symlink into the new root, so mounting the real target here is what makes
  * the rw --bind override the ro home mount correctly.
  */
-function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[]): SandboxMount[] {
+function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[], nodeDir: string): SandboxMount[] {
   return [
     // ── read-write ────────────────────────────────────────────────────────────
     // Order matters: home must come before agentDirReal so the rw bind overrides
     // the ro home mount for that subdirectory.
     { access: "rw", path: cwd },
     { access: "rw", path: agentDirReal, label: "Pi config dir" },
+    // npm cache + global node_modules (needed for `pi install` inside a session)
+    { access: "rw", path: path.join(HOME, ".npm"),                       label: "npm cache" },
+    { access: "rw", path: path.join(HOME, ".local/share/mise/shims"),    label: "mise shims" },
+    { access: "rw", path: path.join(nodeDir, "lib/node_modules"),        label: "Node.js global modules" },
+    { access: "rw", path: path.join(nodeDir, "bin"),                     label: "Node.js bin" },
     // ── read-only ─────────────────────────────────────────────────────────────
     // home (covers mise installs, ~/.cache/ms-playwright, etc.)
     { access: "ro", path: HOME, label: "home directory" },
@@ -369,7 +375,7 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
   );
 
   const mountArgs: string[] = [];
-  for (const m of buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts())) {
+  for (const m of buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir)) {
     const flag = m.access === "rw" ? "--bind" : m.optional ? "--ro-bind-try" : "--ro-bind";
     mountArgs.push(flag, m.path, m.path);
   }
