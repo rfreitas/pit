@@ -10,6 +10,6 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true
   },
-  "include": ["pit.ts"],
+  "include": ["pit.ts", "pit-escape.ts", "utils.ts", "bundled/*.ts"],
   "exclude": ["node_modules"]
 }

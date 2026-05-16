@@ -110,7 +110,65 @@ export function cwdToBucket(cwd: string): string {
   return "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
 }
 
-// ── flag parsing ──────────────────────────────────────────────────────────────
+// ── pit config ──────────────────────────────────────────────────────────────
+
+/**
+ * Pit-specific config, read from <pitDir>/config.json.
+ * Absent file = empty config (no filtering).
+ */
+export interface PitConfig {
+  /** Package sources to strip from settings.json when launching sandboxed. */
+  denyPackages?: string[];
+}
+
+/** Read pit config, returning an empty object if the file doesn't exist. */
+export function readPitConfig(pitDir: string): PitConfig {
+  const configPath = path.join(pitDir, "config.json");
+  if (!fs.existsSync(configPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(configPath, "utf8")) as PitConfig;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Filter a settings object by removing denied packages.
+ * Pure — returns a new object, never mutates the original.
+ */
+export function applyDenylist(
+  settings: Record<string, unknown>,
+  denyPackages: string[]
+): Record<string, unknown> {
+  if (denyPackages.length === 0) return settings;
+  const deny = new Set(denyPackages);
+  return {
+    ...settings,
+    packages: ((settings.packages as string[] | undefined) ?? []).filter(
+      (p) => !deny.has(p)
+    ),
+  };
+}
+
+/**
+ * Write filtered settings to the host-side path used as the shadow agent dir's
+ * settings.json. Creates parent directories as needed.
+ */
+export function writeFilteredSettings(
+  agentDir: string,
+  pitConfig: PitConfig,
+  hostSettingsPath: string
+): void {
+  const raw = fs.existsSync(path.join(agentDir, "settings.json"))
+    ? fs.readFileSync(path.join(agentDir, "settings.json"), "utf8")
+    : "{}";
+  const settings = JSON.parse(raw) as Record<string, unknown>;
+  const filtered = applyDenylist(settings, pitConfig.denyPackages ?? []);
+  fs.mkdirSync(path.dirname(hostSettingsPath), { recursive: true });
+  fs.writeFileSync(hostSettingsPath, JSON.stringify(filtered, null, 2) + "\n");
+}
+
+// ── flag parsing ───────────────────────────────────────────────────────────────
 
 export interface ParsedFlags {
   sandbox: boolean;
