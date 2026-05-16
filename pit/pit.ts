@@ -16,7 +16,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { execSync, execFileSync, spawnSync } from "node:child_process";
+import { execSync, execFileSync, spawnSync, spawn } from "node:child_process";
 import {
   main,
   SessionManager,
@@ -240,6 +240,63 @@ function systemPromptArgs(meta: PitMetadata, sandboxMounts: SandboxMounts | unde
   return ["--append-system-prompt", buildAnnouncement(meta, sandboxMounts)];
 }
 
+/**
+ * Build --extension args for pit's bundled extensions.
+ * Only loads from extensions/bundled/ to avoid conflicts with the user's
+ * globally-configured extensions (extensions/*.ts).
+ */
+function extensionArgs(): string[] {
+  const scriptDir = path.resolve(path.dirname(process.argv[1]));
+  const bundledDir = path.join(scriptDir, "bundled");
+  if (!fs.existsSync(bundledDir)) return [];
+  return fs.readdirSync(bundledDir)
+    .filter((f) => f.endsWith(".ts"))
+    .flatMap((f) => ["--extension", path.join(bundledDir, f)]);
+}
+
+/**
+ * Start the out-of-sandbox git helper for this worktree session.
+ * Spawns git-helper.ts, waits for its "ready" signal, then returns the socket
+ * path. Returns undefined if the helper fails to start or cwd is not a linked
+ * worktree (i.e. cwd/.git is a directory, not a gitdir pointer file).
+ */
+async function startGitHelper(worktreeCwd: string, sessionId: string): Promise<string | undefined> {
+  const gitFile = path.join(worktreeCwd, ".git");
+  try {
+    if (fs.statSync(gitFile).isDirectory()) return undefined; // main checkout, not a linked worktree
+  } catch {
+    return undefined; // not a git repo
+  }
+
+  const socketPath = path.join(AGENT_DIR, `pit-git-${sessionId}.sock`);
+  try { fs.unlinkSync(socketPath); } catch { /* stale socket from crashed session */ }
+
+  const scriptDir = path.resolve(path.dirname(process.argv[1]));
+  const helperScript = path.join(scriptDir, "git-helper.ts");
+
+  const child = spawn(
+    process.execPath,
+    ["--experimental-strip-types", helperScript, socketPath, worktreeCwd],
+    { stdio: ["ignore", "pipe", "inherit"] }
+  );
+
+  process.on("exit", () => {
+    try { child.kill("SIGTERM"); } catch { /* already gone */ }
+    try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
+  });
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn("pit: git helper timed out — git tool unavailable");
+      resolve(undefined);
+    }, 3000);
+
+    child.stdout!.once("data", () => { clearTimeout(timer); resolve(socketPath); });
+    child.once("error", (err) => { clearTimeout(timer); console.warn(`pit: git helper: ${err.message}`); resolve(undefined); });
+    child.once("exit", (code) => { if (code !== 0) { clearTimeout(timer); resolve(undefined); } });
+  });
+}
+
 // ── resume via session picker ───────────────────────────────────────────────────────
 
 /**
@@ -330,21 +387,52 @@ function getExtensionMounts(): string[] {
 }
 
 /**
- * Build the canonical mount list for the bwrap sandbox.
+ * Resolve rw git mounts for a linked worktree (where cwd/.git is a file,
+ * not a directory). Returns the three paths needed for full git commit access
+ * scoped to just this session's branch:
+ *   - the worktree metadata dir  (lock files, index, ORIG_HEAD, etc.)
+ *   - the shared objects store   (new blobs/trees/commits)
+ *   - this session's branch ref  (advance only this branch, not others)
  *
- * Pure function — all environmental reads (agentDirReal, extensionMounts) are
- * resolved by the caller and injected. This is the single source of truth for
- * both the bwrap argument list (bwrapLaunch) and the session announcement
- * (formatSandboxNote). Add or remove entries here and both stay in sync.
+ * Returns [] for main worktrees, non-git dirs, detached HEAD, or any error.
+ */
+function resolveWorktreeGitRwMounts(cwd: string): Array<{ path: string; label?: string }> {
+  try {
+    const gitPath = path.join(cwd, ".git");
+    if (fs.statSync(gitPath).isDirectory()) return []; // main worktree, not linked
+    const worktreeDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+    const mainGitDir = path.resolve(worktreeDir, "../..");
+    const head = fs.readFileSync(path.join(worktreeDir, "HEAD"), "utf8").trim();
+    const m = head.match(/^ref: refs\/heads\/(.+)$/);
+    if (!m) return []; // detached HEAD
+    const branch = m[1];
+    // Mount the ref's parent directory so git can create the adjacent .lock file.
+    // path.dirname("pi/f3094ac3") === "pi" → only the pit namespace is exposed,
+    // not master or any other user branch. Falls back to "refs/heads" for
+    // flat branch names (no subdirectory), which is an unlikely case for pit.
+    const refDir = path.join(mainGitDir, "refs", "heads", path.dirname(branch));
+    return [
+      { path: worktreeDir, label: "worktree git metadata" },
+      { path: path.join(mainGitDir, "objects"), label: "git objects" },
+      { path: refDir, label: "worktree branch ref" },
+    ];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Build the canonical mount list for the bwrap sandbox.
  *
  * agentDirReal must be the symlink-resolved path: --ro-bind HOME HOME copies
  * the symlink into the new root, so mounting the real target here is what makes
  * the rw --bind override the ro home mount correctly.
+ *
+ * bwrapLaunch emits ro first then rw — later mounts win, so rw overrides ro
+ * for any overlapping paths (e.g. the rw worktree subdir beats the ro home).
  */
 function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[], nodeDir: string): SandboxMounts {
   return {
-    // bwrapLaunch emits ro first, then rw — later mounts win for overlapping
-    // paths, so rw binds always override the ro home base mount.
     ro: [
       // home (ro base — covers mise installs, ~/.cache/ms-playwright, etc.)
       { path: HOME, label: "home directory" },
@@ -362,8 +450,9 @@ function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: 
       ...extensionMounts.map((p) => ({ path: p, label: "Pi extensions" })),
     ],
     rw: [
-      // rw subdirectory overrides — all applied after the ro home base,
-      // so they win for their specific paths.
+      // git access scoped to this worktree's branch (no-op for non-worktree sessions)
+      ...resolveWorktreeGitRwMounts(cwd),
+      // worktree directory and pi config
       { path: cwd },
       { path: agentDirReal,                               label: "Pi config dir" },
       // npm cache + global node_modules (needed for `pi install` inside a session)
@@ -464,7 +553,9 @@ void (async () => {
 
     const result = worktreeCheck(picked.meta);
     const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
-    await launch(result.cwd, ["--session", picked.sessionFile, ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs], sandbox);
+    const gitSocket = await startGitHelper(result.cwd, result.meta.id);
+    if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
+    await launch(result.cwd, ["--session", picked.sessionFile, ...extensionArgs(), ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs], sandbox);
     return;
   }
 
@@ -481,7 +572,9 @@ void (async () => {
     // Context reaches the model via --append-system-prompt on every launch.
     const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
     const sessionFile = setupNewSession(result, sandboxMounts);
-    piArgs = ["--session", sessionFile, ...systemPromptArgs(result.meta, sandboxMounts), ...filteredArgv];
+    const gitSocket = await startGitHelper(result.cwd, result.meta.id);
+    if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
+    piArgs = ["--session", sessionFile, ...extensionArgs(), ...systemPromptArgs(result.meta, sandboxMounts), ...filteredArgv];
   }
 
   await launch(result.cwd, piArgs, sandbox);
