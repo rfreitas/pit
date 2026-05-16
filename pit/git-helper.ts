@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 /**
- * pit git helper — runs OUTSIDE the bwrap sandbox.
+ * pit git helper - runs OUTSIDE the bwrap sandbox.
  *
  * Protocol (newline-delimited JSON, one request per connection):
  *
@@ -134,8 +134,20 @@ async function opMergeToParent(parentBranch: string): Promise<object> {
   const branch = getCurrentBranch();
   if (!branch) return { error: "Cannot determine current branch (detached HEAD?)" };
 
-  // Fast-forward parent branch without checking it out
-  return git(["fetch", ".", `${branch}:${parentBranch}`], mainRepo);
+  // Verify the parent branch is currently checked out in the main repo —
+  // git merge --ff-only runs against whatever HEAD points to there.
+  try {
+    const checkedOut = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: mainRepo, encoding: "utf8" }).trim();
+    if (checkedOut !== parentBranch) {
+      return { error: `Main repo has '${checkedOut}' checked out, not '${parentBranch}'. Check out '${parentBranch}' first.` };
+    }
+  } catch (e) {
+    return { error: `Cannot read main repo HEAD: ${(e as Error).message}` };
+  }
+
+  // Fast-forward merge — safe because we ensured the worktree merged the
+  // parent first, so this is guaranteed to be a fast-forward.
+  return git(["merge", "--ff-only", branch], mainRepo);
 }
 
 // ── server ────────────────────────────────────────────────────────────────────
