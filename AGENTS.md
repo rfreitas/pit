@@ -41,6 +41,8 @@ npm run typecheck   # must pass
 npm test            # must pass if tests exist for the changed code
 ```
 
+Prefer TDD: write tests before or alongside the implementation. Tests should cover the requested functionality and its edge cases — not just the happy path. If a behaviour is worth implementing, it is worth testing.
+
 If the change adds or modifies a feature, update `README.md` to reflect it:
 - New flags, commands, or extensions → add to the relevant section
 - Changed behaviour (mounts, config, protocols) → update the description
