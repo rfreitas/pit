@@ -130,6 +130,24 @@ export function isLinkedWorktree(cwd: string): boolean {
 }
 
 /**
+ * Resolve the main repo root from a linked worktree's .git pointer file.
+ * worktree/.git contains "gitdir: <mainRepo>/.git/worktrees/<id>"
+ * so mainRepo = gitdir/../../..
+ * Returns null if cwd is not a linked worktree or the path cannot be resolved.
+ */
+export function resolveMainRepo(cwd: string): string | null {
+  try {
+    const gitPath = path.join(cwd, ".git");
+    if (fs.statSync(gitPath).isDirectory()) return null;
+    const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+    if (!gitdir.includes("/.git/worktrees/")) return null;
+    return path.resolve(gitdir, "../../..");
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Read the current branch name for a linked worktree.
  * Returns null if the directory is not a linked worktree, is detached HEAD,
  * or no longer exists (e.g. the worktree was deleted after the session was created).

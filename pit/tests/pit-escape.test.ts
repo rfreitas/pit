@@ -93,7 +93,7 @@ async function spawnEscape(opts: {
 }
 
 /** Send one request to pit-escape and return the parsed response. */
-function send(socketPath: string, req: object): Promise<Record<string, unknown>> {
+function send(socketPath: string, req: object): Promise<Record<string, string | number | null | undefined>> {
   return new Promise((resolve) => {
     const sock = net.createConnection(socketPath);
     let buf = "";
@@ -343,7 +343,7 @@ describe("git log and diff ops for rename-branch context", () => {
     const resp = await send(socketPath, { op: "git", args: ["log", `${parentBranch}..HEAD`, "--oneline"] });
 
     expect(resp.code).toBe(0);
-    expect(resp.stdout?.trim()).toBe("");
+    expect((resp.stdout as string | undefined)?.trim()).toBe("");
   });
 
   it("log returns commit messages after commits are made on the branch", async () => {

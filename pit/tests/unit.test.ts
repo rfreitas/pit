@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
+import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, resolveMainRepo, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -392,6 +392,57 @@ describe("isLinkedWorktree", () => {
     // Renamed branch, no pi/ prefix — still a linked worktree
     fs.writeFileSync(path.join(d, ".git"), "gitdir: /repo/.git/worktrees/my-custom-name\n");
     expect(isLinkedWorktree(d)).toBe(true);
+  });
+});
+
+// ── resolveMainRepo ──────────────────────────────────────────────────────────
+//
+// Resolves the main repo path from a linked worktree's .git pointer.
+// Used by the session picker when pit -r is invoked from inside a worktree,
+// where gitRepoRoot() returns the worktree dir rather than the main repo.
+
+describe("resolveMainRepo", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  function makeDir(): string {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "pit-main-repo-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  it("resolves the main repo from a standard linked worktree .git file", () => {
+    const d = makeDir();
+    const mainRepo = "/home/user/repo";
+    fs.writeFileSync(path.join(d, ".git"), `gitdir: ${mainRepo}/.git/worktrees/wt-abc
+`);
+    expect(resolveMainRepo(d)).toBe(mainRepo);
+  });
+
+  it("returns null when .git is a directory (main checkout)", () => {
+    const d = makeDir();
+    fs.mkdirSync(path.join(d, ".git"));
+    expect(resolveMainRepo(d)).toBeNull();
+  });
+
+  it("returns null when .git file is a submodule", () => {
+    const d = makeDir();
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: ../.git/modules/sub\n");
+    expect(resolveMainRepo(d)).toBeNull();
+  });
+
+  it("returns null for a non-existent directory", () => {
+    expect(resolveMainRepo("/nonexistent/pit-test-should-not-exist")).toBeNull();
+  });
+
+  it("handles absolute gitdir paths without trailing newline", () => {
+    const d = makeDir();
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: /absolute/repo/.git/worktrees/wt-xyz");
+    expect(resolveMainRepo(d)).toBe("/absolute/repo");
   });
 });
 

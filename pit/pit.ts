@@ -34,6 +34,7 @@ import {
   buildAnnouncement,
   setupNewSession as _setupNewSession,
   isLinkedWorktree,
+  resolveMainRepo,
   findPitSession,
   listRepoWorktrees,
   readWorktreeBranch,
@@ -364,7 +365,16 @@ async function showPicker(
         // Collect sessions from the main repo and all linked worktrees.
         // Keep them separate so we know which sessions came from which worktree
         // without needing to inspect s.cwd after the fact.
-        const repo = gitRepoRoot();
+        //
+        // When pit -r is invoked from inside a linked worktree, gitRepoRoot()
+        // returns the worktree directory (git's --show-toplevel is worktree-scoped).
+        // We need the actual main repo so listRepoWorktrees includes the current
+        // worktree and it gets labelled correctly.
+        const cwd = process.cwd();
+        const rawRepo = gitRepoRoot();
+        const repo = (rawRepo && isLinkedWorktree(cwd))
+          ? (resolveMainRepo(cwd) ?? rawRepo)
+          : rawRepo;
         const worktrees = repo ? listRepoWorktrees(repo) : [];
 
         // Read each worktree's branch once upfront — one fs read per worktree.
@@ -373,8 +383,12 @@ async function showPicker(
           worktrees.map((wt) => [wt, readWorktreeBranch(wt) ?? "deleted"])
         );
 
-        const mainPaths = new Set<string>([process.cwd()]);
+        // When invoking from a linked worktree, cwd is itself a worktree and
+        // will be covered by the worktrees list — don't add it to mainPaths or
+        // it ends up in mainGroups without a label.
+        const mainPaths = new Set<string>();
         if (repo) mainPaths.add(repo);
+        if (!isLinkedWorktree(cwd)) mainPaths.add(cwd);
 
         const [mainGroups, wtGroups] = await Promise.all([
           Promise.all(
