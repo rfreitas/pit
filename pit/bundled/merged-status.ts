@@ -49,6 +49,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     const setStatus = (text: string | undefined) => ctx.ui.setStatus(STATUS_KEY, text);
     await updateStatus(setStatus);
+    // Re-check immediately when /merge completes (no need to wait for the poll).
+    process.on("pit:merge-complete", () => void updateStatus(setStatus));
     timer = setInterval(() => void updateStatus(setStatus), POLL_INTERVAL_MS);
   });
 
