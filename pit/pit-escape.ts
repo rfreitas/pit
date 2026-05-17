@@ -60,6 +60,9 @@ function git(
   });
 }
 
+// All agent-facing git operations run in the worktree — bound once here.
+const worktreeGit = (args: string[]) => git(args, worktreePath);
+
 /**
  * Resolve the main repo root from the worktree's .git pointer file.
  * worktree/.git → gitdir: <mainRepo>/.git/worktrees/<id>
@@ -124,13 +127,13 @@ async function opGetState(): Promise<object> {
 
   let conflicts: string[] = [];
   if (mergeInProgress) {
-    const r = await git(["diff", "--name-only", "--diff-filter=U"], worktreePath);
+    const r = await worktreeGit(["diff", "--name-only", "--diff-filter=U"]);
     conflicts = r.stdout.trim().split("\n").filter(Boolean);
   }
 
   let behindParent = false;
   if (parentBranch && mainRepo) {
-    const r = await git(["log", "--oneline", `HEAD..${parentBranch}`], worktreePath);
+    const r = await worktreeGit(["log", "--oneline", `HEAD..${parentBranch}`]);
     behindParent = r.stdout.trim().length > 0;
   }
 
@@ -253,12 +256,7 @@ const server = net.createServer((socket) => {
             };
             break;
           }
-          result = await new Promise((resolve) => {
-            execFile("git", [sub, ...rest], { cwd: worktreePath }, (err, stdout, stderr) => {
-              const code = err ? (Number((err as NodeJS.ErrnoException).code) || 1) : 0;
-              resolve({ stdout, stderr, code });
-            });
-          });
+          result = await worktreeGit([sub, ...rest]);
           break;
         }
 
@@ -284,7 +282,7 @@ const server = net.createServer((socket) => {
             result = { error: "rename-branch requires newBranch (string)" };
             break;
           }
-          result = await git(["branch", "-m", newBranch], worktreePath);
+          result = await worktreeGit(["branch", "-m", newBranch]);
           break;
         }
 
