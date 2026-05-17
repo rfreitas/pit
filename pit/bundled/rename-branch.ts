@@ -1,31 +1,43 @@
 /**
  * /rename-branch — rename the worktree branch based on the session topic.
  *
- * Only active in pit sessions (PIT_ESCAPE_SOCKET is set, confirming a
- * worktree session is running).
+ * Only active in pit sessions (PIT_ESCAPE_SOCKET is set).
  *
- * Does NOT need pit-escape for the actual rename. The bwrap sandbox already
- * mounts refs/heads/<prefix>/ as read-write, and git updates the worktree
- * HEAD file automatically when a branch is renamed. So `git branch -m` works
- * directly from inside the sandbox — no socket hop required.
- *
- * Limitation: if the branch has been packed into packed-refs (e.g. after
- * `git gc`), `git branch -m` would need to rewrite that file in the main git
- * dir root, which is not rw-mounted. Freshly created pit branches are always
- * loose refs, so this is not an issue in practice.
+ * Branch ref updates must go through pit-escape (outside the sandbox):
+ * refs/heads/ is shared state across all worktrees and is not rw-mounted in
+ * the sandbox. The extension reads the current branch (worktree gitdir is
+ * rw-mounted and readable), computes the new name, then delegates the actual
+ * git branch -m to pit-escape.
  *
  * Note on session metadata: PitMetadata.branch in the session file becomes
  * stale after rename. This only matters if the worktree directory is deleted
- * and pit tries to recreate it — the clear error message ("branch no longer
- * exists") covers that edge case. All runtime git operations read from the
- * actual .git file, not the metadata.
+ * and pit tries to recreate it — the resulting error ("branch no longer
+ * exists") is clear enough for that edge case.
  */
 
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFile } from "node:child_process";
+import * as net from "node:net";
+
+// ── socket helpers ─────────────────────────────────────────────────────────
+
+type SocketResponse = { stdout?: string; stderr?: string; code?: number; error?: string };
+
+function send(socketPath: string, req: object): Promise<SocketResponse> {
+  return new Promise((resolve) => {
+    const sock = net.createConnection(socketPath);
+    let buf = "";
+    sock.once("connect", () => { sock.write(JSON.stringify(req) + "\n"); });
+    sock.on("data", (chunk: Buffer) => { buf += chunk.toString("utf8"); });
+    sock.once("end", () => {
+      try { resolve(JSON.parse(buf.trim()) as SocketResponse); }
+      catch { resolve({ error: "Failed to parse pit-escape response" }); }
+    });
+    sock.once("error", (err: Error) => { resolve({ error: `pit-escape unavailable: ${err.message}` }); });
+  });
+}
 
 // ── conversation helpers ───────────────────────────────────────────────────
 
@@ -70,12 +82,12 @@ Respond ONLY with valid JSON matching this schema, no other text:
 ${conversation}
 </conversation>`;
 
-// ── git branch rename ──────────────────────────────────────────────────────
+// ── branch helpers ─────────────────────────────────────────────────────────
 
 function getCurrentBranch(cwd: string): string | null {
   try {
     const gitPath = path.join(cwd, ".git");
-    if (fs.statSync(gitPath).isDirectory()) return null; // main worktree, not linked
+    if (fs.statSync(gitPath).isDirectory()) return null;
     const worktreeGitDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
     const head = fs.readFileSync(path.join(worktreeGitDir, "HEAD"), "utf8").trim();
     const m = head.match(/^ref: refs\/heads\/(.+)$/);
@@ -85,19 +97,11 @@ function getCurrentBranch(cwd: string): string | null {
   }
 }
 
-function renameBranch(oldBranch: string, newBranch: string, cwd: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile("git", ["branch", "-m", oldBranch, newBranch], { cwd }, (err) => {
-      resolve(err ? err.message : null);
-    });
-  });
-}
-
 // ── extension ─────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-  // Only register in pit worktree sessions
-  if (!process.env.PIT_ESCAPE_SOCKET) return;
+  const socketPath = process.env.PIT_ESCAPE_SOCKET;
+  if (!socketPath) return;
 
   pi.registerCommand("rename-branch", {
     description: "Rename the worktree branch based on the session topic (preserves branch path prefix)",
@@ -122,11 +126,11 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // Read current branch before the AI call so we fail fast if not in a worktree
+      // Read current branch before the AI call so we fail fast on bad state
       const cwd = process.cwd();
       const currentBranch = getCurrentBranch(cwd);
       if (!currentBranch) {
-        ctx.ui.notify("Could not determine current branch — are you in a pit worktree?", "error");
+        ctx.ui.notify("Could not read current branch — are you in a pit worktree?", "error");
         return;
       }
 
@@ -189,9 +193,13 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const error = await renameBranch(currentBranch, newBranch, cwd);
-      if (error) {
-        ctx.ui.notify(`Branch rename failed: ${error}`, "error");
+      // Delegate the actual git branch -m to pit-escape (refs/heads/ is not
+      // rw-mounted in the sandbox — branch ref updates must go through the host)
+      const resp = await send(socketPath, { op: "rename-branch", oldBranch: currentBranch, newBranch });
+
+      if (resp.error || (resp.code !== undefined && resp.code !== 0)) {
+        const detail = resp.error ?? [resp.stderr, resp.stdout].filter(Boolean).join(" ").trim();
+        ctx.ui.notify(`Branch rename failed: ${detail}`, "error");
         return;
       }
 

@@ -480,13 +480,15 @@ function getExtensionMounts(): string[] {
 
 /**
  * Resolve rw git mounts for a linked worktree (where cwd/.git is a file,
- * not a directory). Returns the three paths needed for full git commit access
- * scoped to just this session's branch:
- *   - the worktree metadata dir  (lock files, index, ORIG_HEAD, etc.)
- *   - the shared objects store   (new blobs/trees/commits)
- *   - this session's branch ref  (advance only this branch, not others)
+ * not a directory). Returns the two paths needed for git operations:
+ *   - the worktree metadata dir  (index, HEAD, ORIG_HEAD, lock files, etc.)
+ *   - the shared objects store   (new blobs/trees/commits; content-addressed)
  *
- * Returns [] for main worktrees, non-git dirs, detached HEAD, or any error.
+ * Notably does NOT mount refs/heads/ — that is shared state across all
+ * worktrees. Branch ref updates (commits, renames) go through pit-escape,
+ * which runs outside the sandbox with full host access.
+ *
+ * Returns [] for main worktrees, non-git dirs, or any error.
  */
 function resolveWorktreeGitRwMounts(cwd: string): Array<{ path: string; label?: string }> {
   try {
@@ -494,19 +496,9 @@ function resolveWorktreeGitRwMounts(cwd: string): Array<{ path: string; label?: 
     if (fs.statSync(gitPath).isDirectory()) return []; // main worktree, not linked
     const worktreeDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
     const mainGitDir = path.resolve(worktreeDir, "../..");
-    const head = fs.readFileSync(path.join(worktreeDir, "HEAD"), "utf8").trim();
-    const m = head.match(/^ref: refs\/heads\/(.+)$/);
-    if (!m) return []; // detached HEAD
-    const branch = m[1];
-    // Mount the ref's parent directory so git can create the adjacent .lock file.
-    // path.dirname("pi/f3094ac3") === "pi" → only the pit namespace is exposed,
-    // not master or any other user branch. Falls back to "refs/heads" for
-    // flat branch names (no subdirectory), which is an unlikely case for pit.
-    const refDir = path.join(mainGitDir, "refs", "heads", path.dirname(branch));
     return [
       { path: worktreeDir, label: "worktree git metadata" },
       { path: path.join(mainGitDir, "objects"), label: "git objects" },
-      { path: refDir, label: "worktree branch ref" },
     ];
   } catch {
     return [];

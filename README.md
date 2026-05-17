@@ -41,7 +41,7 @@ pit's sandbox is **OS-level** and **allowlist-based**. Worktree creation and ses
 | Mount | Access | Why |
 |---|---|---|
 | Worktree directory | read-write | the agent's workspace |
-| Worktree git metadata, objects, branch ref | read-write | git commits scoped to this session's branch |
+| Worktree git metadata, objects | read-write | staging area and new git objects (commits via pit-escape) |
 | `/pit-agent` (shadow agent dir) | read-write | auth tokens, filtered settings — session-scoped, dies with bwrap |
 | Pi config dir (`~/.pi/agent`) | read-write | needed so `proper-lockfile` can create lock files next to `auth.json` |
 | npm cache, mise shims | read-write | `pi install` inside a session |
