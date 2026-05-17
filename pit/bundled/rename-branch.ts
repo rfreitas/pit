@@ -1,7 +1,11 @@
 /**
- * /rename-branch — rename the worktree branch based on the session topic.
+ * /rename-branch — rename the worktree branch based on what was actually built.
  *
  * Human-facing command, only active in pit sessions (PIT_ESCAPE_SOCKET is set).
+ *
+ * Uses git log + diff stat against the parent branch as the primary signal
+ * (what was actually committed is more precise than chat history). Falls back
+ * to conversation text when the branch has no commits yet.
  *
  * Branch ref updates must go through pit-escape (outside the sandbox):
  * refs/heads/ is shared state across all worktrees and is not rw-mounted in
@@ -21,7 +25,38 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { send, errMsg } from "../escape-client.ts";
 
-// ── conversation helpers ───────────────────────────────────────────────────
+// ── git context ────────────────────────────────────────────────────────────
+
+type StateResponse = { parentBranch: string | null };
+
+/**
+ * Build context from the git diff against the parent branch.
+ * Returns null if there is no parent branch or no commits yet.
+ */
+async function buildGitContext(socketPath: string): Promise<string | null> {
+  const stateResp = await send(socketPath, { op: "get-state" });
+  if ("error" in stateResp) return null;
+
+  const { parentBranch } = stateResp as unknown as StateResponse;
+  if (!parentBranch) return null;
+
+  const [logResp, diffResp] = await Promise.all([
+    send(socketPath, { op: "git", args: ["log", `${parentBranch}..HEAD`, "--oneline", "--max-count=20"] }),
+    send(socketPath, { op: "git", args: ["diff", "--stat", `${parentBranch}...HEAD`] }),
+  ]);
+
+  const log  = !("error" in logResp)  && logResp.code  === 0 ? logResp.stdout.trim()  : "";
+  const diff = !("error" in diffResp) && diffResp.code === 0 ? diffResp.stdout.trim() : "";
+
+  if (!log) return null; // no commits yet — caller falls back to conversation
+
+  const parts: string[] = [];
+  if (log)  parts.push(`Commits:\n${log}`);
+  if (diff) parts.push(`Files changed:\n${diff}`);
+  return parts.join("\n\n");
+}
+
+// ── conversation fallback ──────────────────────────────────────────────────
 
 type ContentBlock = { type?: string; text?: string };
 type SessionEntry = { type: string; message?: { role?: string; content?: unknown } };
@@ -47,10 +82,12 @@ function buildConversationText(entries: SessionEntry[]): string {
   return lines.join("\n\n");
 }
 
-const PROMPT = (conversation: string) => `\
+// ── prompt ─────────────────────────────────────────────────────────────────
+
+const PROMPT = (context: string) => `\
 You are a helpful assistant that names git branches.
 
-Analyze the conversation below and respond with a short branch slug that describes the topic.
+Analyze the following context and respond with a short branch slug describing what was done or the topic.
 Rules:
 - Lowercase only
 - Words separated by hyphens (no spaces, no underscores, no special characters)
@@ -60,9 +97,9 @@ Rules:
 Respond ONLY with valid JSON matching this schema, no other text:
 {"slug": string}
 
-<conversation>
-${conversation}
-</conversation>`;
+<context>
+${context}
+</context>`;
 
 // ── branch helpers ─────────────────────────────────────────────────────────
 
@@ -86,13 +123,13 @@ export default function (pi: ExtensionAPI) {
   if (!socketPath) return;
 
   pi.registerCommand("rename-branch", {
-    description: "Rename the worktree branch based on the session topic (preserves branch path prefix)",
+    description: "Rename the worktree branch based on what was built (git diff) or the session topic",
     handler: async (_args, ctx) => {
-      const entries = ctx.sessionManager.getBranch() as SessionEntry[];
-      const conversation = buildConversationText(entries);
-
-      if (!conversation.trim()) {
-        ctx.ui.notify("No conversation to analyze yet", "warning");
+      // Fail fast if we're not in a worktree
+      const cwd = process.cwd();
+      const currentBranch = getCurrentBranch(cwd);
+      if (!currentBranch) {
+        ctx.ui.notify("Could not read current branch — are you in a pit worktree?", "error");
         return;
       }
 
@@ -108,11 +145,18 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // Read current branch before the AI call so we fail fast on bad state
-      const cwd = process.cwd();
-      const currentBranch = getCurrentBranch(cwd);
-      if (!currentBranch) {
-        ctx.ui.notify("Could not read current branch — are you in a pit worktree?", "error");
+      // Primary: git diff against parent branch
+      ctx.ui.notify("Building context...", "info");
+      let context = await buildGitContext(socketPath);
+
+      // Fallback: conversation text (branch has no commits yet)
+      if (!context) {
+        const entries = ctx.sessionManager.getBranch() as SessionEntry[];
+        context = buildConversationText(entries);
+      }
+
+      if (!context.trim()) {
+        ctx.ui.notify("Nothing to analyze yet — make some commits or start a conversation", "warning");
         return;
       }
 
@@ -124,7 +168,7 @@ export default function (pi: ExtensionAPI) {
           messages: [
             {
               role: "user",
-              content: [{ type: "text", text: PROMPT(conversation) }],
+              content: [{ type: "text", text: PROMPT(context) }],
               timestamp: Date.now(),
             },
           ],

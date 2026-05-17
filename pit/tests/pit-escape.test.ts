@@ -320,3 +320,62 @@ describe("pit-escape rename-branch op", () => {
     expect(resp.code).not.toBe(0);
   });
 });
+
+// ── git context ops (log + diff used by rename-branch) ──────────────────────
+
+describe("git log and diff ops for rename-branch context", () => {
+  it("log returns empty output when branch has no commits ahead of parent", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir } = setupWorktree(base);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "git", args: ["log", "master..HEAD", "--oneline"] });
+
+    expect(resp.code).toBe(0);
+    expect(resp.stdout?.trim()).toBe("");
+  });
+
+  it("log returns commit messages after commits are made on the branch", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir } = setupWorktree(base);
+
+    // Make a commit on the worktree branch
+    const file = path.join(worktreeDir, "change.txt");
+    fs.writeFileSync(file, "hello");
+    execFileSync("git", ["-C", worktreeDir, "add", "change.txt"]);
+    execFileSync("git", ["-C", worktreeDir, "commit", "-m", "add change file"],
+      { env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" } });
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "git", args: ["log", "master..HEAD", "--oneline"] });
+
+    expect(resp.code).toBe(0);
+    expect(resp.stdout).toContain("add change file");
+  });
+
+  it("diff --stat returns file summary after commits are made on the branch", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir } = setupWorktree(base);
+
+    const file = path.join(worktreeDir, "feature.ts");
+    fs.writeFileSync(file, "export const x = 1;");
+    execFileSync("git", ["-C", worktreeDir, "add", "feature.ts"]);
+    execFileSync("git", ["-C", worktreeDir, "commit", "-m", "add feature"],
+      { env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" } });
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "git", args: ["diff", "--stat", "master...HEAD"] });
+
+    expect(resp.code).toBe(0);
+    expect(resp.stdout).toContain("feature.ts");
+  });
+});
