@@ -221,7 +221,7 @@ const server = net.createServer((socket) => {
     const line = buf.slice(0, nl);
     buf = "";
 
-    let req: { op?: string; args?: unknown; parentBranch?: string; oldBranch?: string; newBranch?: string };
+    let req: { op?: string; args?: unknown; parentBranch?: string; newBranch?: string };
     try {
       req = JSON.parse(line);
     } catch {
@@ -279,17 +279,12 @@ const server = net.createServer((socket) => {
           break;
 
         case "rename-branch": {
-          const { oldBranch, newBranch } = req;
-          if (!oldBranch || !newBranch) {
-            result = { error: "rename-branch requires oldBranch and newBranch" };
+          const { newBranch } = req;
+          if (!newBranch) {
+            result = { error: "rename-branch requires newBranch" };
             break;
           }
-          const current = getCurrentBranch();
-          if (current !== oldBranch) {
-            result = { error: `Current branch is '${current ?? "unknown"}', not '${oldBranch}'` };
-            break;
-          }
-          result = await git(["branch", "-m", oldBranch, newBranch], worktreePath);
+          result = await git(["branch", "-m", newBranch], worktreePath);
           break;
         }
 

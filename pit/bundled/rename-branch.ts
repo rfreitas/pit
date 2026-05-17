@@ -195,7 +195,7 @@ export default function (pi: ExtensionAPI) {
 
       // Delegate the actual git branch -m to pit-escape (refs/heads/ is not
       // rw-mounted in the sandbox — branch ref updates must go through the host)
-      const resp = await send(socketPath, { op: "rename-branch", oldBranch: currentBranch, newBranch });
+      const resp = await send(socketPath, { op: "rename-branch", newBranch });
 
       if (resp.error || (resp.code !== undefined && resp.code !== 0)) {
         const detail = resp.error ?? [resp.stderr, resp.stdout].filter(Boolean).join(" ").trim();
