@@ -169,8 +169,11 @@ async function opMergeToParent(parentBranch: string): Promise<object> {
  */
 function opRefreshSettings(): object {
   try {
-    // Read current host settings
-    const rawSettings = fs.readFileSync(path.join(agentDir, "settings.json"), "utf8");
+    // Read current host settings (absent file = empty object, not a crash)
+    const settingsFile = path.join(agentDir, "settings.json");
+    const rawSettings = fs.existsSync(settingsFile)
+      ? fs.readFileSync(settingsFile, "utf8")
+      : "{}";
     const settings = JSON.parse(rawSettings) as { packages?: string[] };
 
     // Read pit config denylist (absent = no filtering)
