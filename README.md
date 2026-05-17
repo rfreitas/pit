@@ -20,6 +20,7 @@ The result: you can hand a task to an agent and let it run freely, knowing it ca
 pit                          # create worktree (branch: pi/<id>), launch Pi sandboxed
 pit -nt / --no-tree          # inside a git repo, skip worktree; run in current dir instead
 pit --no-sandbox             # disable bwrap sandboxing (combinable with any other flag)
+pit -r                       # resume a session (see below)
 ```
 
 All standard Pi flags pass through unchanged.
@@ -71,6 +72,19 @@ pit's bwrap boundary applies to the entire Pi process — every tool, every exte
 
 ---
 
+## Session resume (`pit -r`)
+
+`pit -r` opens a session picker. The current tab shows sessions from the
+current repo **and all its worktrees** together, so you can resume any pit
+session regardless of which directory you invoke it from. Worktree sessions
+are labelled `[worktree branch:pi/<id>]` at the start of their display name
+so you can tell them apart at a glance.
+
+Picking a worktree session resumes it with the correct working directory and
+sandbox bound to that worktree — not to wherever `pit -r` was invoked.
+
+---
+
 ## Git worktree isolation
 
 Each `pit` session creates:
@@ -81,6 +95,8 @@ Each `pit` session creates:
 The agent works entirely in that directory. Your main working tree is untouched. When the work is done you review and merge (or discard) like any branch.
 
 Session metadata (id, branch, worktree path) is embedded directly in Pi's session file, so pit sessions appear normally in Pi's session picker and resume correctly.
+
+**Running `pit` inside an existing worktree** does the right thing automatically: instead of nesting a second worktree, pit detects it is already in a linked worktree and resumes the existing pit session for that directory. If no session exists yet (e.g. you created the worktree manually), it starts a new no-tree session in place.
 
 ---
 
