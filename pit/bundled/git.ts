@@ -10,6 +10,7 @@
  *               3. Fast-forward parent branch to worktree branch
  */
 
+import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import * as net from "node:net";
@@ -19,6 +20,50 @@ const ALLOWED = ["add", "commit", "diff", "log", "merge", "rebase", "reset", "sh
 type GitResponse    = { stdout: string; stderr: string; code: number };
 type ErrorResponse  = { error: string };
 type HelperResponse = GitResponse | ErrorResponse;
+
+type RenameResponse = { stdout: string; stderr: string; code: number; newBranch: string };
+
+type ContentBlock = { type?: string; text?: string };
+type SessionEntry = { type: string; message?: { role?: string; content?: unknown } };
+
+const extractText = (content: unknown): string => {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return (content as ContentBlock[])
+    .filter((b) => b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text as string)
+    .join("\n");
+};
+
+const buildConversationText = (entries: SessionEntry[]): string => {
+  const lines: string[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "message" || !entry.message?.role) continue;
+    const { role, content } = entry.message;
+    if (role !== "user" && role !== "assistant") continue;
+    const text = extractText(content).trim();
+    if (text) lines.push(`${role === "user" ? "User" : "Assistant"}: ${text}`);
+  }
+  return lines.join("\n\n");
+};
+
+const RENAME_BRANCH_PROMPT = (conversation: string) => `\
+You are a helpful assistant that names coding sessions and git branches.
+
+Analyze the conversation below and respond with a short, descriptive session name and a matching git branch slug.
+Rules for name:
+- 2 to 5 words, Title Case, no punctuation
+Rules for slug:
+- Lowercase, hyphens only (no spaces, no underscores, no special chars)
+- Match the name but slugified, max 40 chars
+- Must be a valid git branch name component
+
+Respond ONLY with valid JSON matching this schema, no other text:
+{"name": string, "slug": string}
+
+<conversation>
+${conversation}
+</conversation>`;
 
 type StateResponse = {
   branch: string | null;
@@ -143,6 +188,87 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       ctx.ui.notify(`Merged into ${parentBranch} ✓`, "info");
+    },
+  });
+
+  // ── /rename-branch command ─────────────────────────────────────────────────
+
+  pi.registerCommand("rename-branch", {
+    description: "Rename the worktree branch based on the session topic (preserves branch path prefix)",
+    handler: async (_args, ctx) => {
+      const branch = ctx.sessionManager.getBranch() as SessionEntry[];
+      const conversation = buildConversationText(branch);
+
+      if (!conversation.trim()) {
+        ctx.ui.notify("No conversation to analyze yet", "warning");
+        return;
+      }
+
+      const model = ctx.model;
+      if (!model) {
+        ctx.ui.notify("No active model", "warning");
+        return;
+      }
+
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      if (!auth.ok) {
+        ctx.ui.notify(auth.error, "warning");
+        return;
+      }
+
+      ctx.ui.notify("Asking the model for a branch name…", "info");
+
+      const response = await complete(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: RENAME_BRANCH_PROMPT(conversation) }],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { apiKey: auth.apiKey ?? "", headers: auth.headers },
+      );
+
+      const raw = response.content
+        .filter((c): c is { type: "text"; text: string } => c.type === "text")
+        .map((c) => c.text)
+        .join("");
+
+      const match = raw.match(/\{[^}]*\}/s);
+      if (!match) {
+        ctx.ui.notify("Could not parse structured output from model", "error");
+        return;
+      }
+
+      let parsed: { name?: string; slug?: string };
+      try {
+        parsed = JSON.parse(match[0]);
+      } catch {
+        ctx.ui.notify("Invalid JSON in model response", "error");
+        return;
+      }
+
+      const name = parsed.name?.trim();
+      const slug = parsed.slug?.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+
+      if (!name || !slug) {
+        ctx.ui.notify("Model returned an empty name or slug", "error");
+        return;
+      }
+
+      const renameResp = await send(socketPath!, { op: "rename-branch", newSlug: slug });
+
+      if ("error" in renameResp) {
+        ctx.ui.notify(`Branch rename failed: ${renameResp.error}`, "error");
+        return;
+      }
+
+      const { newBranch } = renameResp as unknown as RenameResponse;
+      pi.setSessionName(name);
+      ctx.ui.notify(`Branch renamed to: ${newBranch} · Session: "${name}"`, "info");
     },
   });
 }

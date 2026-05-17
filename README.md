@@ -177,3 +177,17 @@ These load only inside pit sessions (never in plain `pi`):
 |---|---|
 | `git` | git tool + `/merge` command via pit-escape |
 | `reload` | hooks `/reload` to refresh filtered settings before Pi reloads packages |
+
+### Bundled command: `/rename-branch`
+
+Renames the current worktree branch based on the session topic while preserving the branch path prefix.
+
+```
+/rename-branch
+```
+
+- Only available in pit sessions (requires `PIT_ESCAPE_SOCKET`).
+- Analyzes the conversation, asks the model for a human-readable name and a branch slug.
+- Renames `pi/<id>` → `pi/<topic-slug>` (prefix is always preserved).
+- Also renames the Pi session to the human-readable name (same as `/rename`).
+- The slug is sanitised to be a valid git branch name component (lowercase, hyphens only, max 40 chars).
