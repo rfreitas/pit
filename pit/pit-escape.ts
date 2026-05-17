@@ -8,6 +8,9 @@
  *
  * Protocol (newline-delimited JSON, one request per connection):
  *
+ * All ops use request/response except `subscribe`, which keeps the connection
+ * open and pushes events until the client disconnects.
+ *
  *   Git command in worktree:
  *     Request:  { "op": "git", "args": ["commit", "-m", "message"] }
  *     Response: { "stdout": "...", "stderr": "...", "code": 0 }
@@ -20,6 +23,12 @@
  *   Merge worktree branch to parent:
  *     Request:  { "op": "merge-to-parent", "parentBranch": "master" }
  *     Response: { "stdout": "...", "stderr": "...", "code": 0 }
+ *
+ *   Subscribe to parent branch ref changes (persistent connection):
+ *     Request:  { "op": "subscribe" }
+ *     Response: { "ok": true, "watching": "master" }   (ack, connection stays open)
+ *     Push:     { "event": "ref-change" }              (on every parent branch update)
+ *     Error:    { "error": "..." }                     (closes connection)
  *
  *   Check if worktree branch is merged to parent:
  *     Request:  { "op": "is-merged" }
@@ -241,7 +250,8 @@ const server = net.createServer((socket) => {
     }
 
     (async () => {
-      let result: object;
+      let result: object | undefined;
+      let keepOpen = false;
 
       switch (req.op) {
         case "git": {
@@ -278,6 +288,66 @@ const server = net.createServer((socket) => {
           }
           break;
 
+        case "subscribe": {
+          keepOpen = true;
+          const mainRepo = resolveMainRepo();
+          if (!mainRepo) {
+            socket.end(JSON.stringify({ error: "cannot resolve main repo from worktree" }) + "\n");
+            break;
+          }
+          const parentBranch = detectParentBranch(mainRepo);
+          if (!parentBranch) {
+            socket.end(JSON.stringify({ error: "no master/main branch found" }) + "\n");
+            break;
+          }
+
+          // Acknowledge: subscription active
+          socket.write(JSON.stringify({ ok: true, watching: parentBranch }) + "\n");
+
+          const mainGitDir = path.join(mainRepo, ".git");
+          const refsHeadsDir = path.join(mainGitDir, "refs", "heads");
+          const reftableDir = path.join(mainGitDir, "reftable");
+          const watchers: import("node:fs").FSWatcher[] = [];
+          let debounce: ReturnType<typeof setTimeout> | null = null;
+
+          const notify = () => {
+            if (debounce) return;
+            debounce = setTimeout(() => {
+              debounce = null;
+              if (!socket.destroyed) socket.write(JSON.stringify({ event: "ref-change" }) + "\n");
+            }, 100);
+          };
+
+          const tryWatch = (
+            target: string,
+            filter?: (f: string | null) => boolean
+          ) => {
+            try {
+              watchers.push(fs.watch(target, (_type, filename) => {
+                if (!filter || filter(filename)) notify();
+              }));
+            } catch { /* target absent or unwatchable */ }
+          };
+
+          // Loose ref: refs/heads/<parentBranch> updated on fast-forward
+          tryWatch(refsHeadsDir, (f) => f === parentBranch);
+          // Packed refs: watch .git dir for atomic rename of packed-refs
+          tryWatch(mainGitDir, (f) => f === "packed-refs");
+          // Reftable format: branch updates land in reftable/
+          if (fs.existsSync(reftableDir)) tryWatch(reftableDir);
+
+          const cleanup = () => {
+            for (const w of watchers) { try { w.close(); } catch { /* */ } }
+            watchers.length = 0;
+            if (debounce) { clearTimeout(debounce); debounce = null; }
+          };
+
+          socket.once("close", cleanup);
+          socket.once("error", cleanup);
+          // Don't end the socket — keep it open for push events
+          break;
+        }
+
         case "is-merged": {
           const branch = getCurrentBranch();
           const mainRepo = resolveMainRepo();
@@ -304,7 +374,7 @@ const server = net.createServer((socket) => {
           result = { error: `Unknown op: ${req.op}` };
       }
 
-      socket.end(JSON.stringify(result) + "\n");
+      if (!keepOpen) socket.end(JSON.stringify(result!) + "\n");
     })();
   });
 
