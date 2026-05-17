@@ -323,6 +323,13 @@ describe("pit-escape rename-branch op", () => {
 
 // ── git context ops (log + diff used by rename-branch) ──────────────────────
 
+async function getParentBranch(socketPath: string): Promise<string> {
+  const resp = await send(socketPath, { op: "get-state" });
+  const parent = (resp as Record<string, unknown>).parentBranch as string | null;
+  if (!parent) throw new Error("get-state returned no parentBranch");
+  return parent;
+}
+
 describe("git log and diff ops for rename-branch context", () => {
   it("log returns empty output when branch has no commits ahead of parent", async () => {
     const base = makeDir();
@@ -332,7 +339,8 @@ describe("git log and diff ops for rename-branch context", () => {
     const { worktreeDir } = setupWorktree(base);
 
     const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
-    const resp = await send(socketPath, { op: "git", args: ["log", "master..HEAD", "--oneline"] });
+    const parentBranch = await getParentBranch(socketPath);
+    const resp = await send(socketPath, { op: "git", args: ["log", `${parentBranch}..HEAD`, "--oneline"] });
 
     expect(resp.code).toBe(0);
     expect(resp.stdout?.trim()).toBe("");
@@ -345,7 +353,6 @@ describe("git log and diff ops for rename-branch context", () => {
     const hostSettingsPath = path.join(agentDir, "settings.json");
     const { worktreeDir } = setupWorktree(base);
 
-    // Make a commit on the worktree branch
     const file = path.join(worktreeDir, "change.txt");
     fs.writeFileSync(file, "hello");
     execFileSync("git", ["-C", worktreeDir, "add", "change.txt"]);
@@ -353,7 +360,8 @@ describe("git log and diff ops for rename-branch context", () => {
       { env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" } });
 
     const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
-    const resp = await send(socketPath, { op: "git", args: ["log", "master..HEAD", "--oneline"] });
+    const parentBranch = await getParentBranch(socketPath);
+    const resp = await send(socketPath, { op: "git", args: ["log", `${parentBranch}..HEAD`, "--oneline"] });
 
     expect(resp.code).toBe(0);
     expect(resp.stdout).toContain("add change file");
@@ -373,7 +381,8 @@ describe("git log and diff ops for rename-branch context", () => {
       { env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" } });
 
     const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
-    const resp = await send(socketPath, { op: "git", args: ["diff", "--stat", "master...HEAD"] });
+    const parentBranch = await getParentBranch(socketPath);
+    const resp = await send(socketPath, { op: "git", args: ["diff", "--stat", `${parentBranch}...HEAD`] });
 
     expect(resp.code).toBe(0);
     expect(resp.stdout).toContain("feature.ts");
