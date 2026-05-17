@@ -20,7 +20,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -54,14 +54,17 @@ function makeDir(): string {
 
 /**
  * Spawn pit-escape and wait for it to signal readiness.
- * Uses a dummy worktree path — the refresh-settings op doesn't need a real worktree.
+ * worktreePath defaults to agentDir (fine for refresh-settings which ignores it;
+ * pass a real linked worktree for is-merged tests).
  */
 async function spawnEscape(opts: {
   agentDir: string;
   pitDir: string;
   hostSettingsPath: string;
+  worktreePath?: string;
 }): Promise<{ socketPath: string }> {
   const socketPath = path.join(opts.agentDir, "test.sock");
+  const worktreePath = opts.worktreePath ?? opts.agentDir;
   const child = spawn(
     process.execPath,
     [
@@ -69,7 +72,7 @@ async function spawnEscape(opts: {
       "--no-warnings",
       PIT_ESCAPE,
       socketPath,
-      opts.agentDir, // worktree — unused by refresh-settings
+      worktreePath,
       opts.agentDir,
       opts.pitDir,
       opts.hostSettingsPath,
@@ -237,5 +240,139 @@ describe("pit-escape refresh-settings op", () => {
     expect(resp.ok).toBe(true);
     const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
     expect(written.packages ?? []).toEqual([]);
+  });
+});
+
+// ── is-merged op ──────────────────────────────────────────────────────────────
+
+describe("pit-escape is-merged op", () => {
+  /** Create a git repo with an initial commit on `branch` (default: master). */
+  function initGitRepo(dir: string, branch = "master"): void {
+    execFileSync("git", ["init", "-b", branch], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@pit.test"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "pit test"], { cwd: dir });
+    fs.writeFileSync(path.join(dir, "README.md"), "init\n");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+  }
+
+  /** Add a file commit in `dir` (may be worktree or main repo). */
+  function addCommit(dir: string, filename = "work.txt"): void {
+    fs.writeFileSync(path.join(dir, filename), String(Date.now()));
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-m", `add ${filename}`], { cwd: dir });
+  }
+
+  /** Create a linked worktree from the main repo's HEAD. */
+  function createWorktree(mainRepo: string, worktreeDir: string, branch: string): void {
+    execFileSync("git", ["-C", mainRepo, "worktree", "add", "-b", branch, worktreeDir, "HEAD"]);
+  }
+
+  it("returns merged:false for an unmerged branch with unique commits", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir); // diverges from master
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.branch).toBe("pi/test");
+    expect(resp.parentBranch).toBe("master");
+  });
+
+  it("returns merged:true after the branch is fast-forward merged into master", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    // Fast-forward master to include the worktree branch's commit
+    execFileSync("git", ["-C", mainRepo, "merge", "--ff-only", "pi/test"]);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(true);
+    expect(resp.branch).toBe("pi/test");
+    expect(resp.parentBranch).toBe("master");
+  });
+
+  it("returns merged:true when branch has no unique commits (newly forked, is-ancestor of master)", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    // No extra commits — branch tip equals master tip; branch IS an ancestor of master
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(true);
+    expect(resp.parentBranch).toBe("master");
+  });
+
+  it("detects 'main' as the parent branch when master does not exist", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo, "main");
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.parentBranch).toBe("main");
+  });
+
+  it("returns merged:false with null parentBranch when neither master nor main exists", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo, "trunk"); // neither master nor main
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.parentBranch).toBeNull();
+  });
+
+  it("returns merged:false with null branch when worktreePath is not a linked worktree", async () => {
+    const agentDir = makeDir(); // plain temp dir — no .git file
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: agentDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.branch).toBeNull();
+    expect(resp.parentBranch).toBeNull();
   });
 });
