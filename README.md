@@ -41,14 +41,19 @@ pit's sandbox is **OS-level** and **allowlist-based**. Worktree creation and ses
 | Mount | Access | Why |
 |---|---|---|
 | Worktree directory | read-write | the agent's workspace |
+| Worktree git metadata, objects, branch ref | read-write | git commits scoped to this session's branch |
 | `/pit-agent` (shadow agent dir) | read-write | auth tokens, filtered settings — session-scoped, dies with bwrap |
-| Node runtime + pi binary | read-only | needed to run |
-| Extension dirs + `node_modules` | read-only | Pi extensions |
-| `/usr`, `/etc`, `/lib`, `/proc`, `/dev` | read-only | system baseline |
+| Pi config dir (`~/.pi/agent`) | read-write | needed so `proper-lockfile` can create lock files next to `auth.json` |
+| npm cache, mise shims | read-write | `pi install` inside a session |
+| Node.js global modules + bin | read-write | `pi install` inside a session |
+| Home directory (`~`) | read-only | Node runtime, mise installs, other shared tooling |
+| Pi extensions + `node_modules` | read-only | Pi extensions |
+| `/usr`, `/etc`, system dirs | read-only | system baseline |
+| `/proc`, `/dev` | special | process/device fs |
 | Unversioned dirs from parent repo | **ephemeral overlay** | agent reads parent's `node_modules` etc; writes vanish on exit |
 | Everything else | **not mounted** | inaccessible |
 
-The agent cannot read your home directory, other projects, SSH keys, or anything outside the worktree unless it was explicitly mounted.
+The agent can read (but not write) your home directory, which includes `~/.ssh` and other sensitive files. If this matters for your workload, consider using Heimdall's bash sandbox on top of pit for finer-grained file-access control within the home directory.
 
 ### How this differs from Heimdall
 

@@ -38,17 +38,30 @@ function getAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME!, ".pi", "agent");
 }
 
+interface BwrapRunOptions {
+  /**
+   * Override the agent dir mounted rw in the sandbox.
+   * Defaults to the real getAgentDir(), symlink-resolved (matching bwrapLaunch).
+   * Use a temp dir in tests that shouldn't touch real system files.
+   */
+  agentDir?: string;
+}
+
 /**
  * Run a Node.js ESM script inside bwrap using pit's exact mount set.
  * stdout/stderr are captured; status code is returned.
+ *
+ * PI_CODING_AGENT_DIR is set inside the sandbox so scripts can locate the
+ * agent dir without reconstructing it from HOME.
  */
-function runInBwrap(script: string): { stdout: string; stderr: string; status: number } {
+function runInBwrap(script: string, opts: BwrapRunOptions = {}): { stdout: string; stderr: string; status: number } {
   const bwrap = findBwrap();
   if (!bwrap) throw new Error("bwrap not found");
 
   const nodeBin = process.execPath;
   const nodeDir = path.dirname(path.dirname(nodeBin));
-  const agentDir = getAgentDir();
+  // Resolve symlinks — matches fs.realpathSync(AGENT_DIR) in bwrapLaunch.
+  const agentDir = fs.realpathSync(opts.agentDir ?? getAgentDir());
 
   const scriptFile = path.join("/tmp", `pit-test-${Date.now()}.mjs`);
   fs.writeFileSync(scriptFile, script);
@@ -78,6 +91,7 @@ function runInBwrap(script: string): { stdout: string; stderr: string; status: n
         "--die-with-parent",
         "--setenv", "HOME", process.env.HOME!,
         "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
+        "--setenv", "PI_CODING_AGENT_DIR", agentDir,
         "--chdir", "/tmp",
         "--",
         nodeBin, scriptFile,
@@ -95,6 +109,11 @@ function runInBwrap(script: string): { stdout: string; stderr: string; status: n
 const hasBwrap = !!findBwrap();
 
 describe("pit bwrap sandbox", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
   it.skipIf(!hasBwrap)("resolves DNS inside bwrap", () => {
     // Bug: /etc/resolv.conf is a symlink to /mnt/wsl/resolv.conf on WSL.
     // Without --ro-bind-try /mnt/wsl /mnt/wsl the symlink is dangling and
@@ -147,20 +166,32 @@ describe("pit bwrap sandbox", () => {
     expect(result.stdout).toBe("ok");
   });
 
-  it.skipIf(!hasBwrap)("auth.json is readable and writable inside bwrap", () => {
+  it.skipIf(!hasBwrap)("agent dir is readable and writable inside bwrap", () => {
     // Bug: when the agent dir was --ro-bind'd, proper-lockfile could not create
     // auth.json.lock (EROFS). AuthStorage caught the error silently and left
     // this.data={}, so getApiKey() returned null for every provider.
     // Fix: use --bind (rw) for the agent dir instead of --ro-bind.
+    //
+    // Uses a temp dir with a fake auth.json — no real system files needed.
+    // The script references PI_CODING_AGENT_DIR (set by runInBwrap) rather than
+    // reconstructing the path from HOME, matching how pit sets it in the real sandbox.
+    const fakeAgentDir = fs.mkdtempSync(path.join("/tmp", "pit-agent-test-"));
+    tmpDirs.push(fakeAgentDir);
+    fs.writeFileSync(
+      path.join(fakeAgentDir, "auth.json"),
+      JSON.stringify({ copilot: {}, anthropic: {} })
+    );
+
     const result = runInBwrap(`
       import { readFileSync, writeFileSync } from "node:fs";
-      const authFile = process.env.HOME + "/.pi/agent/auth.json";
+      const authFile = process.env.PI_CODING_AGENT_DIR + "/auth.json";
       const content = readFileSync(authFile, "utf8");
       const data = JSON.parse(content);
-      // write back the same content to confirm write access
+      // write back the same content to confirm write access (the rw-vs-ro regression)
       writeFileSync(authFile, content, "utf8");
       process.stdout.write(JSON.stringify({ providers: Object.keys(data) }));
-    `);
+    `, { agentDir: fakeAgentDir });
+
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
     const { providers } = JSON.parse(result.stdout);
     expect(providers.length).toBeGreaterThan(0);

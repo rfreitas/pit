@@ -37,11 +37,12 @@ import {
   buildAnnouncement,
   setupNewSession as _setupNewSession,
   isLinkedWorktree,
-  findPitSession,
   listRepoWorktrees,
   readWorktreeBranch,
   readPitConfig,
   writeFilteredSettings,
+  genId,
+  prepareLinkedWorktreeSession,
 } from "./utils.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -79,10 +80,6 @@ const SESSION_FLAGS = new Set([
 ]);
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function genId(): string {
-  return crypto.randomBytes(4).toString("hex");
-}
 
 // ── git ───────────────────────────────────────────────────────────────────────
 
@@ -265,8 +262,8 @@ function extensionArgs(): string[] {
 
 // ── pit dir ───────────────────────────────────────────────────────────────────
 
-/** ~/.pi/pit — sits alongside ~/.pi/agent */
-const PIT_DIR = path.join(path.dirname(AGENT_DIR), "pit");
+/** ~/.pi/agent/pit — inside the repo-tracked agent config dir */
+const PIT_DIR = path.join(AGENT_DIR, "pit");
 
 /** Path to the per-session filtered settings file on the host filesystem. */
 function hostSettingsPath(id: string): string {
@@ -733,45 +730,35 @@ void (async () => {
   // This catches any linked worktree, not just pit ones — nesting is never useful.
   if (!noTree && isLinkedWorktree(process.cwd())) {
     const cwd = process.cwd();
-    if (!userManagingSession) {
-      const existing = await findPitSession(cwd, AGENT_DIR);
-      if (existing) {
-        // Resume the existing pit session for this worktree
-        const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
-        const escapeSocket3 = await startPitEscape(cwd, existing.meta.id, hostSettingsPath(existing.meta.id));
-        if (escapeSocket3) process.env.PIT_ESCAPE_SOCKET = escapeSocket3;
-        await launch(
-          cwd,
-          ["--session", existing.sessionFile, ...extensionArgs(), ...systemPromptArgs(existing.meta, sandboxMounts), ...filteredArgv],
-          sandbox
-        );
-        return;
-      }
+    if (userManagingSession) {
+      // User controls session directly — launch in place, no pit session management.
+      await launch(cwd, filteredArgv, sandbox);
+      return;
+    }
+    const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
+    const session = await prepareLinkedWorktreeSession({
+      cwd,
+      agentDir: AGENT_DIR,
+      pitDir: PIT_DIR,
+      useSandbox: sandbox,
+      hasBwrap: !!findBwrap(),
+      sandboxMounts,
+    });
+    if (session.kind === "new") {
       console.log("pit: already in a git worktree — no pit session found, running no-tree");
     }
-    // No pit session found, or user is managing their own session.
-    // Start a new no-tree session in place (don't nest worktrees).
-    const meta: PitMetadata = {
-      id: genId(),
-      repo: cwd,
-      worktree: cwd,
-      branch: "",
-      created: new Date().toISOString(),
-      mode: "no-tree",
-      noTreeReason: "linked-worktree",
-    };
-    const result: WorktreeResult = { mode: "no-tree", cwd, meta };
-    let piArgs: string[];
-    if (userManagingSession) {
-      piArgs = filteredArgv;
-    } else {
-      const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
-      const sessionFile = setupNewSession(result, sandboxMounts);
-      const escapeSocket2 = await startPitEscape(cwd, meta.id, hostSettingsPath(meta.id));
-      if (escapeSocket2) process.env.PIT_ESCAPE_SOCKET = escapeSocket2;
-      piArgs = ["--session", sessionFile, ...extensionArgs(), ...systemPromptArgs(meta, sandboxMounts), ...filteredArgv];
-    }
-    await launch(cwd, piArgs, sandbox);
+    const escapeSocket = await startPitEscape(
+      cwd,
+      session.meta.id,
+      session.settingsPath ?? hostSettingsPath(session.meta.id),
+    );
+    if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
+    await launch(
+      cwd,
+      ["--session", session.sessionFile, ...extensionArgs(), ...systemPromptArgs(session.meta, sandboxMounts), ...filteredArgv],
+      sandbox,
+      session.settingsPath,
+    );
     return;
   }
 

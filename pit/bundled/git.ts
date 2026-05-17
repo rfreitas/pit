@@ -1,7 +1,7 @@
 /**
  * Git tool + /merge command — wraps the pit git helper socket.
  *
- * Only active when PIT_GIT_SOCKET is set (running under pit with a worktree session).
+ * Only active when PIT_ESCAPE_SOCKET is set (running under pit with a worktree session).
  *
  * git tool  — lets the agent run permitted git commands mid-task.
  * /merge    — human-initiated command that orchestrates the full merge workflow:
@@ -116,7 +116,7 @@ export default function (pi: ExtensionAPI) {
       // ── Phase 2: worktree behind parent → merge parent in ───────────────
       if (state.behindParent) {
         ctx.ui.notify(`Merging ${parentBranch} into branch...`, "info");
-        const fwd = await send(socketPath!, { args: ["merge", parentBranch] });
+        const fwd = await send(socketPath!, { op: "git", args: ["merge", parentBranch] });
 
         if (!isOk(fwd)) {
           // Check for conflicts after failed merge
