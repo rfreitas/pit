@@ -527,6 +527,32 @@ describe("pit-escape subscribe op", () => {
     expect(resp.ok).toBeUndefined();
   });
 
+  it("pushes ref-change when merge-to-parent op is used (the /merge command path)", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const sub = openSubscription(socketPath);
+    await sub.waitForMessage(); // ack
+
+    // Trigger via the escape op exactly as /merge does
+    const mergeResp = await send(socketPath, { op: "merge-to-parent", parentBranch: "master" });
+    expect(mergeResp.code).toBe(0);
+
+    // Subscription must receive the push without any polling
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
+
   it("server continues to handle other requests after a subscription is closed", async () => {
     const mainRepo = makeDir();
     const worktreeDir = makeDir();

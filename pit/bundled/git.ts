@@ -143,9 +143,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       ctx.ui.notify(`Merged into ${parentBranch} ✓`, "info");
-      // Signal merged-status to update the footer immediately instead of waiting
-      // for the next 60-second poll.
-      process.emit("pit:merge-complete");
     },
   });
 }

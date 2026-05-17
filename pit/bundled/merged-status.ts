@@ -85,10 +85,6 @@ export default function (pi: ExtensionAPI) {
     await updateStatus(setStatus);
     openSubscription(setStatus);
 
-    // Re-check immediately when /merge completes (covers the case where the
-    // subscription fires slightly before the merge-base check would agree).
-    process.on("pit:merge-complete", () => void updateStatus(setStatus));
-
     // Safety-net poll in case the subscription socket ever drops
     fallbackTimer = setInterval(() => void updateStatus(setStatus), FALLBACK_POLL_MS);
   });
