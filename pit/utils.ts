@@ -335,3 +335,78 @@ export function setupNewSession(result: WorktreeResult, agentDir: string, sandbo
   fs.writeFileSync(sessionFile, lines, "utf8");
   return sessionFile;
 }
+
+// ── id generation ────────────────────────────────────────────────────────────────────────────────
+
+/** Generate an 8-hex-character random id for worktrees and sessions. */
+export function genId(): string {
+  return crypto.randomBytes(4).toString("hex");
+}
+
+// ── linked-worktree session setup ──────────────────────────────────────────────────
+
+export interface LinkedWorktreeSession {
+  /** "resume" = found an existing pit session; "new" = created a fresh no-tree session. */
+  kind: "resume" | "new";
+  sessionFile: string;
+  meta: PitMetadata;
+  /**
+   * Host-side path to the filtered settings file for bwrap's shadow agent dir.
+   * Defined iff useSandbox && hasBwrap — pass to launch() so bwrap can
+   * bind-mount it as /pit-agent/settings.json.
+   * Undefined when not sandboxed; the caller should skip the shadow mount.
+   */
+  settingsPath: string | undefined;
+}
+
+/**
+ * Prepare a session for launching pit inside an already-linked git worktree.
+ *
+ * Single entry point for the linked-worktree dispatch path in pit.ts.
+ * Bundles the three steps that must always happen together:
+ *   1. Find or create the session (resume existing vs. fresh no-tree)
+ *   2. Compute settingsPath when sandboxed
+ *   3. Write the filtered settings so bwrap's shadow dir picks them up
+ *
+ * The caller handles: starting pit-escape, building piArgs, calling launch().
+ * Those involve process spawning and are intentionally kept out of this function.
+ */
+export async function prepareLinkedWorktreeSession(opts: {
+  cwd: string;
+  agentDir: string;
+  pitDir: string;
+  useSandbox: boolean;
+  hasBwrap: boolean;
+  sandboxMounts?: SandboxMounts;
+}): Promise<LinkedWorktreeSession> {
+  const { cwd, agentDir, pitDir, useSandbox, hasBwrap, sandboxMounts } = opts;
+
+  const existing = await findPitSession(cwd, agentDir);
+
+  /** Compute the settings path iff sandbox + bwrap are both active. */
+  const settingsPathFor = (id: string): string | undefined =>
+    useSandbox && hasBwrap ? path.join(pitDir, "sessions", `${id}.json`) : undefined;
+
+  if (existing) {
+    const settingsPath = settingsPathFor(existing.meta.id);
+    if (settingsPath) writeFilteredSettings(agentDir, readPitConfig(pitDir), settingsPath);
+    return { kind: "resume", sessionFile: existing.sessionFile, meta: existing.meta, settingsPath };
+  }
+
+  // No existing session — create a fresh no-tree session in place.
+  const id = genId();
+  const meta: PitMetadata = {
+    id,
+    repo: cwd,
+    worktree: cwd,
+    branch: "",
+    created: new Date().toISOString(),
+    mode: "no-tree",
+    noTreeReason: "linked-worktree",
+  };
+  const sessionFile = setupNewSession({ mode: "no-tree", cwd, meta }, agentDir, sandboxMounts);
+  const settingsPath = settingsPathFor(id);
+  if (settingsPath) writeFilteredSettings(agentDir, readPitConfig(pitDir), settingsPath);
+
+  return { kind: "new", sessionFile, meta, settingsPath };
+}
