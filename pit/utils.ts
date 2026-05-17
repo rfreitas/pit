@@ -157,6 +157,9 @@ export function resolveUnversionedDirs(parentRepo: string): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const raw of [...run([]), ...run(["--ignored"])]) {
+    // git uses a trailing slash to mark directories when --directory is set;
+    // entries without a trailing slash are individual unversioned files — skip them.
+    if (!raw.endsWith("/")) continue;
     const rel = raw.replace(/\/$/, "");
     if (rel && !seen.has(rel)) {
       seen.add(rel);
@@ -164,6 +167,31 @@ export function resolveUnversionedDirs(parentRepo: string): string[] {
     }
   }
   return result;
+}
+
+/**
+ * Return the parent repo root for a linked worktree, or null if cwd is a main
+ * checkout, a submodule, or not a git directory.
+ *
+ * A linked worktree's .git file contains "gitdir: <mainGitDir>/worktrees/<name>".
+ * The parent repo root is path.dirname(mainGitDir).
+ *
+ * Returns null for:
+ *   - non-git directories (no .git)
+ *   - main worktrees (.git is a directory)
+ *   - submodules (.git file whose gitdir contains /modules/ not /worktrees/)
+ */
+export function resolveParentRepo(cwd: string): string | null {
+  try {
+    const gitPath = path.join(cwd, ".git");
+    if (fs.statSync(gitPath).isDirectory()) return null; // main worktree
+    const worktreeDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+    if (!worktreeDir.includes("/.git/worktrees/")) return null; // submodule
+    const mainGitDir = path.resolve(worktreeDir, "../..");
+    return path.dirname(mainGitDir);
+  } catch {
+    return null;
+  }
 }
 
 // ── worktree detection ───────────────────────────────────────────────────────

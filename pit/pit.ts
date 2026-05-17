@@ -31,6 +31,7 @@ import {
   type SandboxMounts,
   type OverlayMount,
   resolveUnversionedDirs,
+  resolveParentRepo,
   cwdToBucket as _cwdToBucket,
   parseFlags,
   buildAnnouncement,
@@ -478,23 +479,6 @@ function getExtensionMounts(): string[] {
     }
   }
   return [...mounts].sort();
-}
-
-/**
- * Return the parent repo root for a linked worktree, or null if cwd is a main
- * checkout, a submodule, or not a git directory at all.
- */
-function resolveParentRepo(cwd: string): string | null {
-  try {
-    const gitPath = path.join(cwd, ".git");
-    if (fs.statSync(gitPath).isDirectory()) return null; // main worktree
-    const worktreeDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
-    if (!worktreeDir.includes("/.git/worktrees/")) return null; // submodule
-    const mainGitDir = path.resolve(worktreeDir, "../..");
-    return path.dirname(mainGitDir);
-  } catch {
-    return null;
-  }
 }
 
 /**

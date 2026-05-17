@@ -498,5 +498,38 @@ describe("tmp-overlay sandbox mounts", () => {
 
     expect(fs.readFileSync(path.join(src, "original.txt"), "utf8")).toBe("original-content");
   });
+
+  it.skipIf(!hasBwrap)("nested subdirectory inside src is accessible at dest", () => {
+    // Verifies the overlay covers the whole subtree, not just the top level.
+    const src  = makeTmpDir();
+    const dest = makeTmpDir();
+    fs.mkdirSync(path.join(src, "sub", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(src, "sub", "deep", "nested.txt"), "nested-content");
+
+    const result = runWithOverlay(src, dest, `
+      import { readFileSync } from "node:fs";
+      const content = readFileSync("${dest}/sub/deep/nested.txt", "utf8");
+      process.stdout.write(content);
+    `);
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.stdout).toBe("nested-content");
+  });
+
+  it.skipIf(!hasBwrap)("write then read within the same session sees the written content", () => {
+    // The tmpfs upper layer must be coherent within a session: a file written
+    // to the overlay must be immediately readable back with the new content.
+    const src  = makeTmpDir();
+    const dest = makeTmpDir();
+    fs.writeFileSync(path.join(src, "base.txt"), "original");
+
+    const result = runWithOverlay(src, dest, `
+      import { readFileSync, writeFileSync } from "node:fs";
+      writeFileSync("${dest}/base.txt", "modified");
+      const content = readFileSync("${dest}/base.txt", "utf8");
+      process.stdout.write(content);
+    `);
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.stdout).toBe("modified");
+  });
 });
 

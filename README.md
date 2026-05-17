@@ -45,6 +45,7 @@ pit's sandbox is **OS-level** and **allowlist-based**. Worktree creation and ses
 | Node runtime + pi binary | read-only | needed to run |
 | Extension dirs + `node_modules` | read-only | Pi extensions |
 | `/usr`, `/etc`, `/lib`, `/proc`, `/dev` | read-only | system baseline |
+| Unversioned dirs from parent repo | **ephemeral overlay** | agent reads parent's `node_modules` etc; writes vanish on exit |
 | Everything else | **not mounted** | inaccessible |
 
 The agent cannot read your home directory, other projects, SSH keys, or anything outside the worktree unless it was explicitly mounted.
@@ -104,6 +105,18 @@ Package sources must match the entries in your Pi `settings.json` exactly. Any p
 **How it works:** at session start, pit generates a filtered copy of your Pi settings and mounts it into the sandbox at `/pit-agent/settings.json` (via `PI_CODING_AGENT_DIR`). The real `~/.pi/agent/settings.json` is never modified. `/reload` inside a session re-applies the denylist against the current host settings, so globally-installed packages are picked up correctly.
 
 **`--no-sandbox`** falls back to your full Pi settings unchanged — no filtering, no shadow dir.
+
+### Ephemeral overlay mounts
+
+For sandboxed sessions inside a linked worktree, pit automatically overlays all unversioned directories from the parent repo into the worktree using `bwrap --overlay-src / --tmp-overlay`:
+
+- **Reads** come from the parent's content — `node_modules`, `dist`, build caches, etc.
+- **Writes** succeed without error, landing in a per-session tmpfs upper layer
+- **No persistence** — the overlay disappears when the session ends; the parent repo and real worktree are untouched
+
+This means agent worktrees start with full access to installed packages and build artefacts without copying them on disk, and without risking pollution between sessions.
+
+Detection uses `git ls-files --directory`, which recurses into tracked directories to find nested unversioned ones (e.g. `packages/foo/node_modules`) while reporting each as a unit — so a single mount covers the whole subtree.
 
 ---
 

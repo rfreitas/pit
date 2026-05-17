@@ -25,7 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, resolveUnversionedDirs, type WorktreeResult, type SandboxMounts, type OverlayMount, type PitMetadata } from "../utils.ts";
+import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, resolveUnversionedDirs, resolveParentRepo, type WorktreeResult, type SandboxMounts, type OverlayMount, type PitMetadata } from "../utils.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -248,17 +248,86 @@ describe("formatSandboxNote", () => {
     expect(note).toContain("`dist`");
   });
 
-  it("overlay section appears between Read-only and No access", () => {
+  it("deduplicates overlay entries that share a label", () => {
+    // Two nested node_modules dirs with the same label should collapse to one entry,
+    // matching the dedup behaviour of ro/rw entries.
     const note = formatSandboxNote({
-      ro: [ro("/home", "home directory")],
-      rw: [rw("/work")],
-      overlay: [ov("/parent/node_modules", "/work/node_modules", "node_modules")],
+      ro: [], rw: [],
+      overlay: [
+        ov("/parent/a/node_modules", "/wt/a/node_modules", "node_modules"),
+        ov("/parent/b/node_modules", "/wt/b/node_modules", "node_modules"),
+      ],
     });
-    const roIdx      = note.indexOf("Read-only");
-    const overlayIdx = note.indexOf("Ephemeral overlay");
-    const noAccessIdx = note.indexOf("No access");
-    expect(overlayIdx).toBeGreaterThan(roIdx);
-    expect(overlayIdx).toBeLessThan(noAccessIdx);
+    const matches = note.match(/`node_modules`/g);
+    expect(matches).toHaveLength(1);
+  });
+});
+
+// ── resolveParentRepo ────────────────────────────────────────────────────────
+//
+// Resolves the parent repo path from a linked worktree's .git file.
+// This gates whether overlay mounts are set up at all: null → no overlays.
+
+describe("resolveParentRepo", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  function makeTmpDir(): string {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "pit-parent-repo-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  it("returns null for a non-existent directory", () => {
+    expect(resolveParentRepo("/nonexistent/path/pit-test-should-not-exist")).toBeNull();
+  });
+
+  it("returns null when there is no .git entry (non-git dir)", () => {
+    const d = makeTmpDir();
+    expect(resolveParentRepo(d)).toBeNull();
+  });
+
+  it("returns null when .git is a directory (main checkout)", () => {
+    const d = makeTmpDir();
+    fs.mkdirSync(path.join(d, ".git"));
+    expect(resolveParentRepo(d)).toBeNull();
+  });
+
+  it("returns null for a submodule (.git file with /modules/ not /worktrees/)", () => {
+    const d = makeTmpDir();
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: ../.git/modules/sub\n");
+    expect(resolveParentRepo(d)).toBeNull();
+  });
+
+  it("returns the parent repo root for a linked worktree", () => {
+    const parentRepo = makeTmpDir();
+    const worktreeDir = path.join(parentRepo, ".git", "worktrees", "wt-abc");
+    fs.mkdirSync(worktreeDir, { recursive: true });
+    const wt = makeTmpDir();
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${worktreeDir}\n`);
+    expect(resolveParentRepo(wt)).toBe(parentRepo);
+  });
+
+  it("works regardless of the worktree name in the gitdir path", () => {
+    const parentRepo = makeTmpDir();
+    const worktreeDir = path.join(parentRepo, ".git", "worktrees", "feature-my-branch");
+    fs.mkdirSync(worktreeDir, { recursive: true });
+    const wt = makeTmpDir();
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${worktreeDir}\n`);
+    expect(resolveParentRepo(wt)).toBe(parentRepo);
+  });
+
+  it("handles gitdir without trailing newline", () => {
+    const parentRepo = makeTmpDir();
+    const worktreeDir = path.join(parentRepo, ".git", "worktrees", "wt-x");
+    fs.mkdirSync(worktreeDir, { recursive: true });
+    const wt = makeTmpDir();
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${worktreeDir}`);
+    expect(resolveParentRepo(wt)).toBe(parentRepo);
   });
 });
 
@@ -737,9 +806,35 @@ describe("resolveUnversionedDirs", () => {
     expect(resolveUnversionedDirs(dir)).toEqual([]);
   });
 
+  it("returns empty array for a non-existent path", () => {
+    expect(resolveUnversionedDirs("/nonexistent/path/pit-test-unversioned")).toEqual([]);
+  });
+
   it("returns empty array when no untracked or ignored dirs exist", () => {
     const repo = makeGitRepo();
     expect(resolveUnversionedDirs(repo)).toEqual([]);
+  });
+
+  it("does not return untracked files — only directories", () => {
+    // git ls-files marks dirs with a trailing slash; files have none.
+    // resolveUnversionedDirs must filter to dirs only so callers don't
+    // accidentally try to --tmp-overlay a regular file.
+    const repo = makeGitRepo();
+    fs.writeFileSync(path.join(repo, "untracked-file.txt"), "hello");
+    fs.mkdirSync(path.join(repo, "untracked-dir"));
+    const result = resolveUnversionedDirs(repo);
+    expect(result).toContain("untracked-dir");
+    expect(result).not.toContain("untracked-file.txt");
+  });
+
+  it("does not return ignored files listed in .gitignore — only ignored dirs", () => {
+    const repo = makeGitRepo();
+    fs.writeFileSync(path.join(repo, ".gitignore"), "*.log\nnode_modules/\n");
+    fs.writeFileSync(path.join(repo, "debug.log"), "log content"); // ignored file
+    fs.mkdirSync(path.join(repo, "node_modules"));
+    const result = resolveUnversionedDirs(repo);
+    expect(result).toContain("node_modules");
+    expect(result).not.toContain("debug.log");
   });
 
   it("returns an untracked directory (no .gitignore needed)", () => {
