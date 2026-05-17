@@ -280,8 +280,19 @@ const server = net.createServer((socket) => {
 
         case "rename-branch": {
           const { newBranch } = req;
-          if (!newBranch) {
-            result = { error: "rename-branch requires newBranch" };
+          if (!newBranch || typeof newBranch !== "string") {
+            result = { error: "rename-branch requires newBranch (string)" };
+            break;
+          }
+          const current = getCurrentBranch();
+          if (!current) {
+            result = { error: "Cannot determine current branch (detached HEAD?)" };
+            break;
+          }
+          const lastSlash = current.lastIndexOf("/");
+          const prefix = lastSlash !== -1 ? current.slice(0, lastSlash + 1) : "";
+          if (prefix && !newBranch.startsWith(prefix)) {
+            result = { error: `New branch '${newBranch}' must keep prefix '${prefix}'` };
             break;
           }
           result = await git(["branch", "-m", newBranch], worktreePath);
