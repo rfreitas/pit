@@ -244,14 +244,14 @@ describe("shadow agent dir bwrap wiring", () => {
           "--bind",        "/tmp",     "/tmp",
           // Shadow agent dir: rw bind so proper-lockfile can create lock files
           // (auth.json.lock etc.) next to auth.json. Later bind overrides settings.json.
-          "--bind", agentDir,             "/tmp/pit-agent",
-          "--bind", filteredSettingsPath, "/tmp/pit-agent/settings.json",
+          "--bind", agentDir,             "/pit-agent",
+          "--bind", filteredSettingsPath, "/pit-agent/settings.json",
           "--unshare-user",
           "--unshare-pid",
           "--die-with-parent",
           "--setenv", "HOME",                process.env.HOME!,
           "--setenv", "PATH",                `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
-          "--setenv", "PI_CODING_AGENT_DIR", "/tmp/pit-agent",
+          "--setenv", "PI_CODING_AGENT_DIR", "/pit-agent",
           "--chdir",  "/tmp",
           "--",
           nodeBin, scriptFile,
@@ -272,7 +272,7 @@ describe("shadow agent dir bwrap wiring", () => {
   }
 
   it.skipIf(!hasBwrap)(
-    "PI_CODING_AGENT_DIR is set to /tmp/pit-agent inside the sandbox",
+    "PI_CODING_AGENT_DIR is set to /pit-agent inside the sandbox",
     () => {
       const agentDir = makeAgentDir();
       fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
@@ -284,7 +284,7 @@ describe("shadow agent dir bwrap wiring", () => {
         `process.stdout.write(process.env.PI_CODING_AGENT_DIR ?? "unset");`
       );
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("/tmp/pit-agent");
+      expect(result.stdout).toBe("/pit-agent");
     }
   );
 

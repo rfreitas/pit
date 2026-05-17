@@ -511,10 +511,10 @@ function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: 
 function shadowAgentMountArgs(agentDirReal: string, settingsPath: string): string[] {
   return [
     // rw bind: lock files (auth.json.lock etc.) need a writable directory.
-    "--bind", agentDirReal, "/tmp/pit-agent",
+    "--bind", agentDirReal, "/pit-agent",
     // Override settings.json with the filtered version.
     // Later mount wins — writes go to filteredSettingsPath, not the real settings.
-    "--bind", settingsPath, "/tmp/pit-agent/settings.json",
+    "--bind", settingsPath, "/pit-agent/settings.json",
   ];
 }
 
@@ -544,7 +544,7 @@ function bwrapLaunch(cwd: string, piArgs: string[], settingsPath?: string): neve
   // Shadow agent dir: settingsPath provided → filtered settings active
   const shadowArgs = settingsPath ? shadowAgentMountArgs(agentDirReal, settingsPath) : [];
   const agentDirEnv = settingsPath ? [
-    "--setenv", "PI_CODING_AGENT_DIR", "/tmp/pit-agent",
+    "--setenv", "PI_CODING_AGENT_DIR", "/pit-agent",
   ] : [];
 
   const args: string[] = [
