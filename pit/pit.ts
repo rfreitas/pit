@@ -709,12 +709,22 @@ void (async () => {
       if (existing) {
         // Resume the existing pit session for this worktree
         const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
-        const gitSocket = await startGitHelper(cwd, existing.meta.id);
-        if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
+        let settingsPath: string | undefined;
+        if (sandbox && findBwrap()) {
+          settingsPath = hostSettingsPath(existing.meta.id);
+          writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), settingsPath);
+        }
+        const escapeSocket = await startPitEscape(
+          cwd,
+          existing.meta.id,
+          settingsPath ?? hostSettingsPath(existing.meta.id),
+        );
+        if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
         await launch(
           cwd,
           ["--session", existing.sessionFile, ...extensionArgs(), ...systemPromptArgs(existing.meta, sandboxMounts), ...filteredArgv],
-          sandbox
+          sandbox,
+          settingsPath,
         );
         return;
       }
@@ -738,11 +748,21 @@ void (async () => {
     } else {
       const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
       const sessionFile = setupNewSession(result, sandboxMounts);
-      const gitSocket = await startGitHelper(cwd, meta.id);
-      if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
+      let settingsPath: string | undefined;
+      if (sandbox && findBwrap()) {
+        settingsPath = hostSettingsPath(meta.id);
+        writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), settingsPath);
+      }
+      const escapeSocket = await startPitEscape(
+        cwd,
+        meta.id,
+        settingsPath ?? hostSettingsPath(meta.id),
+      );
+      if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
       piArgs = ["--session", sessionFile, ...extensionArgs(), ...systemPromptArgs(meta, sandboxMounts), ...filteredArgv];
+      await launch(cwd, piArgs, sandbox, settingsPath);
+      return;
     }
-    await launch(cwd, piArgs, sandbox);
     return;
   }
 
