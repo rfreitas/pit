@@ -259,8 +259,8 @@ function extensionArgs(): string[] {
 
 // ── pit dir ───────────────────────────────────────────────────────────────────
 
-/** ~/.pi/pit — sits alongside ~/.pi/agent */
-const PIT_DIR = path.join(path.dirname(AGENT_DIR), "pit");
+/** ~/.pi/agent/pit — inside the repo-tracked agent config dir */
+const PIT_DIR = path.join(AGENT_DIR, "pit");
 
 /** Path to the per-session filtered settings file on the host filesystem. */
 function hostSettingsPath(id: string): string {
