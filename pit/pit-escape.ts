@@ -221,7 +221,7 @@ const server = net.createServer((socket) => {
     const line = buf.slice(0, nl);
     buf = "";
 
-    let req: { op?: string; args?: unknown; parentBranch?: string; newSlug?: string };
+    let req: { op?: string; args?: unknown; parentBranch?: string };
     try {
       req = JSON.parse(line);
     } catch {
@@ -277,27 +277,6 @@ const server = net.createServer((socket) => {
         case "refresh-settings":
           result = opRefreshSettings();
           break;
-
-        case "rename-branch": {
-          const newSlug = req.newSlug;
-          if (!newSlug || typeof newSlug !== "string") {
-            result = { error: "rename-branch requires newSlug (string)" };
-            break;
-          }
-          const branch = getCurrentBranch();
-          if (!branch) {
-            result = { error: "Cannot determine current branch (detached HEAD?)" };
-            break;
-          }
-          const lastSlash = branch.lastIndexOf("/");
-          const prefix = lastSlash !== -1 ? branch.slice(0, lastSlash + 1) : "";
-          const newBranch = prefix + newSlug;
-          const renameResult = await git(["branch", "-m", branch, newBranch], worktreePath);
-          result = renameResult.code === 0
-            ? { ...renameResult, newBranch }
-            : renameResult;
-          break;
-        }
 
         default:
           result = { error: `Unknown op: ${req.op}` };

@@ -186,8 +186,7 @@ Renames the current worktree branch based on the session topic while preserving 
 /rename-branch
 ```
 
-- Only available in pit sessions (requires `PIT_ESCAPE_SOCKET`).
-- Analyzes the conversation, asks the model for a human-readable name and a branch slug.
-- Renames `pi/<id>` → `pi/<topic-slug>` (prefix is always preserved).
-- Also renames the Pi session to the human-readable name (same as `/rename`).
-- The slug is sanitised to be a valid git branch name component (lowercase, hyphens only, max 40 chars).
+- Only available in pit sessions (guards on `PIT_ESCAPE_SOCKET`).
+- Analyzes the conversation, asks the model for a branch slug.
+- Renames `pi/<id>` to `pi/<topic-slug>` — the prefix is always preserved.
+- Runs `git branch -m` directly inside the sandbox (no pit-escape needed: the bwrap mounts already include `refs/heads/pi/` as read-write).
