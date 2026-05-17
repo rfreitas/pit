@@ -29,6 +29,8 @@ import {
   type PitMetadata,
   type WorktreeResult,
   type SandboxMounts,
+  type OverlayMount,
+  resolveUnversionedDirs,
   cwdToBucket as _cwdToBucket,
   parseFlags,
   buildAnnouncement,
@@ -479,6 +481,23 @@ function getExtensionMounts(): string[] {
 }
 
 /**
+ * Return the parent repo root for a linked worktree, or null if cwd is a main
+ * checkout, a submodule, or not a git directory at all.
+ */
+function resolveParentRepo(cwd: string): string | null {
+  try {
+    const gitPath = path.join(cwd, ".git");
+    if (fs.statSync(gitPath).isDirectory()) return null; // main worktree
+    const worktreeDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+    if (!worktreeDir.includes("/.git/worktrees/")) return null; // submodule
+    const mainGitDir = path.resolve(worktreeDir, "../..");
+    return path.dirname(mainGitDir);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Resolve rw git mounts for a linked worktree (where cwd/.git is a file,
  * not a directory). Returns the three paths needed for full git commit access
  * scoped to just this session's branch:
@@ -524,6 +543,22 @@ function resolveWorktreeGitRwMounts(cwd: string): Array<{ path: string; label?: 
  * for any overlapping paths (e.g. the rw worktree subdir beats the ro home).
  */
 function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[], nodeDir: string): SandboxMounts {
+  // Overlay mounts: unversioned dirs from the parent repo overlaid onto the
+  // worktree with a tmpfs upper layer. Only applies to linked worktrees.
+  const overlay: OverlayMount[] = [];
+  const parentRepo = resolveParentRepo(cwd);
+  if (parentRepo) {
+    for (const rel of resolveUnversionedDirs(parentRepo)) {
+      const src = path.join(parentRepo, rel);
+      const dest = path.join(cwd, rel);
+      try {
+        if (fs.statSync(src).isDirectory()) {
+          overlay.push({ src, dest, label: rel });
+        }
+      } catch { /* src disappeared between git scan and stat — skip */ }
+    }
+  }
+
   return {
     ro: [
       // home (ro base — covers mise installs, ~/.cache/ms-playwright, etc.)
@@ -553,6 +588,7 @@ function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: 
       { path: path.join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },
       { path: path.join(nodeDir, "bin"),                  label: "Node.js bin" },
     ],
+    overlay,
   };
 }
 
@@ -595,6 +631,15 @@ function bwrapLaunch(cwd: string, piArgs: string[], settingsPath?: string): neve
   }
   for (const m of mounts.rw) {
     mountArgs.push("--bind", m.path, m.path);
+  }
+  // Overlay mounts come after the rw worktree bind so the overlay takes
+  // precedence over the (empty) subdirectory that the rw bind exposed.
+  // Syntax: --overlay-src <lower> --tmp-overlay <dest>
+  for (const m of mounts.overlay ?? []) {
+    // bwrap requires the dest to exist as a directory at mount time.
+    // Create it on the real filesystem; it becomes the mount point.
+    fs.mkdirSync(m.dest, { recursive: true });
+    mountArgs.push("--overlay-src", m.src, "--tmp-overlay", m.dest);
   }
 
   // Shadow agent dir: settingsPath provided → filtered settings active
@@ -709,8 +754,8 @@ void (async () => {
       if (existing) {
         // Resume the existing pit session for this worktree
         const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
-        const gitSocket = await startGitHelper(cwd, existing.meta.id);
-        if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
+        const escapeSocket3 = await startPitEscape(cwd, existing.meta.id, hostSettingsPath(existing.meta.id));
+        if (escapeSocket3) process.env.PIT_ESCAPE_SOCKET = escapeSocket3;
         await launch(
           cwd,
           ["--session", existing.sessionFile, ...extensionArgs(), ...systemPromptArgs(existing.meta, sandboxMounts), ...filteredArgv],
@@ -738,8 +783,8 @@ void (async () => {
     } else {
       const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
       const sessionFile = setupNewSession(result, sandboxMounts);
-      const gitSocket = await startGitHelper(cwd, meta.id);
-      if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
+      const escapeSocket2 = await startPitEscape(cwd, meta.id, hostSettingsPath(meta.id));
+      if (escapeSocket2) process.env.PIT_ESCAPE_SOCKET = escapeSocket2;
       piArgs = ["--session", sessionFile, ...extensionArgs(), ...systemPromptArgs(meta, sandboxMounts), ...filteredArgv];
     }
     await launch(cwd, piArgs, sandbox);

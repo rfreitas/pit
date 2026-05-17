@@ -372,3 +372,131 @@ describe("shadow agent dir bwrap wiring", () => {
     }
   );
 });
+
+// ── tmp-overlay mounts ────────────────────────────────────────────────────────
+//
+// Verifies that --tmp-overlay gives the sandbox a writable view of an
+// unversioned parent directory:
+//   • files from the lower (parent) dir are readable at the dest path
+//   • writes inside the sandbox succeed (no EROFS)
+//   • those writes do NOT persist to the real source or dest on the host
+
+describe("tmp-overlay sandbox mounts", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  function makeTmpDir(): string {
+    const d = fs.mkdtempSync(path.join("/tmp", "pit-overlay-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  /**
+   * Run a Node.js script inside bwrap with one --tmp-overlay mount:
+   *   src  → lower (read-only) layer (the parent repo dir)
+   *   dest → where it appears in the sandbox (must already exist as a dir)
+   */
+  function runWithOverlay(
+    src: string,
+    dest: string,
+    script: string,
+  ): { stdout: string; stderr: string; status: number } {
+    const bwrap = findBwrap()!;
+    const nodeBin = process.execPath;
+    const nodeDir = path.dirname(path.dirname(nodeBin));
+    const scriptFile = path.join("/tmp", `pit-overlay-script-${Date.now()}.mjs`);
+    fs.writeFileSync(scriptFile, script);
+    try {
+      const result = spawnSync(
+        bwrap,
+        [
+          "--tmpfs",       "/",
+          "--dev",         "/dev",
+          "--proc",        "/proc",
+          "--ro-bind",     "/usr",    "/usr",
+          "--ro-bind",     "/etc",    "/etc",
+          "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
+          "--ro-bind-try", "/lib",    "/lib",
+          "--ro-bind-try", "/lib64",  "/lib64",
+          "--ro-bind-try", "/bin",    "/bin",
+          "--ro-bind-try", "/sbin",   "/sbin",
+          "--ro-bind",     nodeDir,   nodeDir,
+          "--bind",        "/tmp",    "/tmp",
+          // dest is inside /tmp (already rw-bound above).
+          // Syntax: --overlay-src <lower> --tmp-overlay <dest>
+          "--overlay-src", src, "--tmp-overlay", dest,
+          "--unshare-user",
+          "--unshare-pid",
+          "--die-with-parent",
+          "--setenv", "HOME", process.env.HOME!,
+          "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
+          "--chdir", "/tmp",
+          "--",
+          nodeBin, scriptFile,
+        ],
+        { encoding: "utf8", timeout: 10000 },
+      );
+      return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", status: result.status ?? 1 };
+    } finally {
+      fs.rmSync(scriptFile, { force: true });
+    }
+  }
+
+  it.skipIf(!hasBwrap)("file from src is readable at dest inside the sandbox", () => {
+    const src  = makeTmpDir(); // lower layer (parent repo dir)
+    const dest = makeTmpDir(); // mount point (worktree dir, must pre-exist)
+    fs.writeFileSync(path.join(src, "sentinel.txt"), "hello-from-parent");
+
+    const result = runWithOverlay(src, dest, `
+      import { readFileSync } from "node:fs";
+      const content = readFileSync("${dest}/sentinel.txt", "utf8");
+      process.stdout.write(content);
+    `);
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.stdout).toBe("hello-from-parent");
+  });
+
+  it.skipIf(!hasBwrap)("writes inside the sandbox succeed (no EROFS)", () => {
+    const src  = makeTmpDir();
+    const dest = makeTmpDir();
+
+    const result = runWithOverlay(src, dest, `
+      import { writeFileSync } from "node:fs";
+      writeFileSync("${dest}/written.txt", "sandbox-write");
+      process.stdout.write("ok");
+    `);
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.stdout).toBe("ok");
+  });
+
+  it.skipIf(!hasBwrap)("writes inside the sandbox do NOT persist to the host src", () => {
+    const src  = makeTmpDir();
+    const dest = makeTmpDir();
+
+    runWithOverlay(src, dest, `
+      import { writeFileSync } from "node:fs";
+      writeFileSync("${dest}/ephemeral.txt", "should-not-persist");
+    `);
+
+    // Must not appear in the real src (lower layer) or the real dest (mount point)
+    expect(fs.existsSync(path.join(src,  "ephemeral.txt"))).toBe(false);
+    expect(fs.existsSync(path.join(dest, "ephemeral.txt"))).toBe(false);
+  });
+
+  it.skipIf(!hasBwrap)("host src file is unchanged after overwrite inside the sandbox", () => {
+    const src  = makeTmpDir();
+    const dest = makeTmpDir();
+    fs.writeFileSync(path.join(src, "original.txt"), "original-content");
+
+    runWithOverlay(src, dest, `
+      import { writeFileSync } from "node:fs";
+      writeFileSync("${dest}/original.txt", "overwritten-inside-sandbox");
+    `);
+
+    expect(fs.readFileSync(path.join(src, "original.txt"), "utf8")).toBe("original-content");
+  });
+});
+

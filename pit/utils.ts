@@ -50,9 +50,24 @@ export interface RwMount {
   label?: string;
 }
 
+export interface OverlayMount {
+  /** Lower (read-only) directory — the parent repo's unversioned dir. */
+  src: string;
+  /** Mount point inside the sandbox — the worktree's corresponding path. */
+  dest: string;
+  /** Display label shown in the sandbox announcement (e.g. the relative path). */
+  label?: string;
+}
+
 export interface SandboxMounts {
   ro: RoMount[];
   rw: RwMount[];
+  /**
+   * Ephemeral overlay mounts: the parent repo's unversioned dirs are overlaid
+   * onto the worktree using a tmpfs upper layer. Reads come from the parent;
+   * writes succeed but vanish when the session ends.
+   */
+  overlay?: OverlayMount[];
 }
 
 /**
@@ -70,9 +85,13 @@ export function formatSandboxNote(mounts: SandboxMounts): string {
     }
     return out.join(", ");
   };
+  const overlays = mounts.overlay ?? [];
+  const overlayLine = overlays.length > 0
+    ? `\n- Ephemeral overlay (reads from parent, writes vanish on exit): ${dedup(overlays.map((m) => ({ path: m.dest, label: m.label })))}`
+    : "";
   return `**Sandbox (bwrap):** This session runs inside an OS-level namespace (bubblewrap). Filesystem access is allowlist-based:
 - Read-write: ${dedup(mounts.rw)}
-- Read-only: ${dedup(mounts.ro)}
+- Read-only: ${dedup(mounts.ro)}${overlayLine}
 - No access: anything outside the mounts listed above`;
 }
 
@@ -107,6 +126,45 @@ No git isolation. Changes affect the current directory directly.${sandboxSection
 }
 
 
+
+/**
+ * Return the relative paths of all unversioned directories in a git repo root.
+ *
+ * Runs two git commands:
+ *   1. `git ls-files --others --directory --exclude-standard`          → untracked dirs
+ *   2. `git ls-files --others --ignored --directory --exclude-standard` → ignored dirs
+ *
+ * The `--directory` flag makes git report an unversioned directory as a unit
+ * (e.g. `node_modules/`) instead of recursing into it, and it automatically
+ * recurses into *tracked* directories to find nested unversioned ones
+ * (e.g. `packages/foo/node_modules/`). Results have trailing slashes stripped.
+ *
+ * Returns [] if git is unavailable or the path is not a git repo.
+ */
+export function resolveUnversionedDirs(parentRepo: string): string[] {
+  const run = (extra: string[]) => {
+    try {
+      return execFileSync(
+        "git",
+        ["-C", parentRepo, "ls-files", "--others", "--directory", "--exclude-standard", ...extra],
+        { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+      ).trim().split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of [...run([]), ...run(["--ignored"])]) {
+    const rel = raw.replace(/\/$/, "");
+    if (rel && !seen.has(rel)) {
+      seen.add(rel);
+      result.push(rel);
+    }
+  }
+  return result;
+}
 
 // ── worktree detection ───────────────────────────────────────────────────────
 

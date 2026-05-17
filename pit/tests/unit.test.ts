@@ -23,8 +23,9 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
+import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, resolveUnversionedDirs, type WorktreeResult, type SandboxMounts, type OverlayMount, type PitMetadata } from "../utils.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -202,6 +203,62 @@ describe("formatSandboxNote", () => {
   it("includes the no-access footer", () => {
     const note = formatSandboxNote({ ro: [], rw: [rw("/work")] });
     expect(note).toContain("No access:");
+  });
+
+  // ── overlay section ────────────────────────────────────────────────────────
+
+  const ov = (src: string, dest: string, label?: string): OverlayMount => ({ src, dest, label });
+
+  it("no overlay section when overlay is absent", () => {
+    const note = formatSandboxNote({ ro: [], rw: [rw("/work")] });
+    expect(note).not.toContain("Ephemeral overlay");
+  });
+
+  it("no overlay section when overlay is empty array", () => {
+    const note = formatSandboxNote({ ro: [], rw: [rw("/work")], overlay: [] });
+    expect(note).not.toContain("Ephemeral overlay");
+  });
+
+  it("includes ephemeral overlay section when overlay mounts present", () => {
+    const note = formatSandboxNote({
+      ro: [], rw: [rw("/work")],
+      overlay: [ov("/parent/node_modules", "/work/node_modules", "node_modules")],
+    });
+    expect(note).toContain("Ephemeral overlay");
+    expect(note).toContain("`node_modules`");
+  });
+
+  it("overlay section falls back to dest path when no label", () => {
+    const note = formatSandboxNote({
+      ro: [], rw: [rw("/work")],
+      overlay: [ov("/parent/node_modules", "/work/node_modules")],
+    });
+    expect(note).toContain("`/work/node_modules`");
+  });
+
+  it("overlay section lists multiple dirs", () => {
+    const note = formatSandboxNote({
+      ro: [], rw: [rw("/work")],
+      overlay: [
+        ov("/parent/node_modules", "/work/node_modules", "node_modules"),
+        ov("/parent/dist",         "/work/dist",         "dist"),
+      ],
+    });
+    expect(note).toContain("`node_modules`");
+    expect(note).toContain("`dist`");
+  });
+
+  it("overlay section appears between Read-only and No access", () => {
+    const note = formatSandboxNote({
+      ro: [ro("/home", "home directory")],
+      rw: [rw("/work")],
+      overlay: [ov("/parent/node_modules", "/work/node_modules", "node_modules")],
+    });
+    const roIdx      = note.indexOf("Read-only");
+    const overlayIdx = note.indexOf("Ephemeral overlay");
+    const noAccessIdx = note.indexOf("No access");
+    expect(overlayIdx).toBeGreaterThan(roIdx);
+    expect(overlayIdx).toBeLessThan(noAccessIdx);
   });
 });
 
@@ -638,6 +695,129 @@ describe("setupNewSession", () => {
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
     const msg = JSON.parse(lines[2]);
     expect(msg.content).toContain("no-tree mode");
+  });
+});
+
+// ── resolveUnversionedDirs ────────────────────────────────────────────────────────
+//
+// Discovers all unversioned directories in a git repo: both untracked (new,
+// not yet committed) and ignored (node_modules, dist, etc.). Uses `git ls-files
+// --directory` so git recurses into tracked dirs to find nested unversioned
+// ones (e.g. packages/foo/node_modules) while reporting each unversioned dir
+// as a unit without descending into it.
+
+describe("resolveUnversionedDirs", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  function makeTmpDir(): string {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "pit-unversioned-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  /** Create a minimal git repo with one committed file, return its path. */
+  function makeGitRepo(): string {
+    const repo = makeTmpDir();
+    execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["-C", repo, "config", "user.email", "test@pit.test"], { stdio: "ignore" });
+    execFileSync("git", ["-C", repo, "config", "user.name", "pit test"], { stdio: "ignore" });
+    fs.writeFileSync(path.join(repo, ".gitkeep"), "");
+    execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
+    execFileSync("git", ["-C", repo, "commit", "-m", "init"], { stdio: "ignore" });
+    return repo;
+  }
+
+  it("returns empty array for a non-git directory", () => {
+    const dir = makeTmpDir();
+    expect(resolveUnversionedDirs(dir)).toEqual([]);
+  });
+
+  it("returns empty array when no untracked or ignored dirs exist", () => {
+    const repo = makeGitRepo();
+    expect(resolveUnversionedDirs(repo)).toEqual([]);
+  });
+
+  it("returns an untracked directory (no .gitignore needed)", () => {
+    const repo = makeGitRepo();
+    fs.mkdirSync(path.join(repo, "new-dir"));
+    const result = resolveUnversionedDirs(repo);
+    expect(result).toContain("new-dir");
+  });
+
+  it("returns an ignored directory listed in .gitignore", () => {
+    const repo = makeGitRepo();
+    fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\n");
+    fs.mkdirSync(path.join(repo, "node_modules"));
+    const result = resolveUnversionedDirs(repo);
+    expect(result).toContain("node_modules");
+  });
+
+  it("does not return tracked directories", () => {
+    const repo = makeGitRepo();
+    // Create a tracked subdir
+    fs.mkdirSync(path.join(repo, "src"));
+    fs.writeFileSync(path.join(repo, "src", "index.ts"), "");
+    execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
+    execFileSync("git", ["-C", repo, "commit", "-m", "add src"], { stdio: "ignore" });
+    const result = resolveUnversionedDirs(repo);
+    expect(result).not.toContain("src");
+  });
+
+  it("strips trailing slashes from git output", () => {
+    const repo = makeGitRepo();
+    fs.mkdirSync(path.join(repo, "some-dir"));
+    const result = resolveUnversionedDirs(repo);
+    expect(result.every((r) => !r.endsWith("/"))).toBe(true);
+  });
+
+  it("deduplicates when git would otherwise double-report", () => {
+    // Both commands run against the same repo; an untracked (non-ignored) dir
+    // should appear exactly once even if somehow reported by both.
+    const repo = makeGitRepo();
+    fs.mkdirSync(path.join(repo, "build"));
+    const result = resolveUnversionedDirs(repo);
+    const count = result.filter((r) => r === "build").length;
+    expect(count).toBe(1);
+  });
+
+  it("finds nested unversioned dirs inside tracked directories", () => {
+    // packages/ is tracked; packages/foo/node_modules is ignored.
+    // git recurses into packages/ and reports packages/foo/node_modules as a unit.
+    const repo = makeGitRepo();
+    fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\n");
+    fs.mkdirSync(path.join(repo, "packages", "foo"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "packages", "foo", "package.json"), "{}");
+    execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
+    execFileSync("git", ["-C", repo, "commit", "-m", "add packages"], { stdio: "ignore" });
+    // Now create the ignored nested dir
+    fs.mkdirSync(path.join(repo, "packages", "foo", "node_modules"));
+    const result = resolveUnversionedDirs(repo);
+    expect(result).toContain("packages/foo/node_modules");
+    // The tracked packages/ dir itself must NOT appear
+    expect(result).not.toContain("packages");
+  });
+
+  it("reports multiple unversioned dirs at different depths", () => {
+    const repo = makeGitRepo();
+    fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\ndist/\n");
+    // Root-level ignored
+    fs.mkdirSync(path.join(repo, "node_modules"));
+    fs.mkdirSync(path.join(repo, "dist"));
+    // Nested inside tracked dir
+    fs.mkdirSync(path.join(repo, "packages", "bar"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "packages", "bar", "index.ts"), "");
+    execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
+    execFileSync("git", ["-C", repo, "commit", "-m", "add packages"], { stdio: "ignore" });
+    fs.mkdirSync(path.join(repo, "packages", "bar", "node_modules"));
+    const result = resolveUnversionedDirs(repo);
+    expect(result).toContain("node_modules");
+    expect(result).toContain("dist");
+    expect(result).toContain("packages/bar/node_modules");
   });
 });
 
