@@ -504,30 +504,18 @@ function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: 
  * Build bwrap args for the shadow agent dir — a view of ~/.pi/agent inside the
  * sandbox where only settings.json is replaced with the pit-filtered version.
  *
- * Mount strategy (later mounts win in bwrap):
- *   1. ro-bind the real agent dir → /tmp/pit-agent  (read-only base)
- *   2. rw bind-over auth.json, sessions/, bin/       (writes flow to host)
- *   3. rw bind the host settings file               (filtered, writable by pit-escape)
+ * The agent dir is bound rw (not ro) so proper-lockfile can create lock files
+ * next to auth.json. Writing to settings.json goes to the filtered host-side
+ * file (the later bind wins), not to the real ~/.pi/agent/settings.json.
  */
 function shadowAgentMountArgs(agentDirReal: string, settingsPath: string): string[] {
-  const args: string[] = [
-    "--ro-bind", agentDirReal, "/tmp/pit-agent",
-    "--bind",    path.join(agentDirReal, "auth.json"),  "/tmp/pit-agent/auth.json",
-    "--bind",    path.join(agentDirReal, "sessions"),   "/tmp/pit-agent/sessions",
+  return [
+    // rw bind: lock files (auth.json.lock etc.) need a writable directory.
+    "--bind", agentDirReal, "/tmp/pit-agent",
+    // Override settings.json with the filtered version.
+    // Later mount wins — writes go to filteredSettingsPath, not the real settings.
+    "--bind", settingsPath, "/tmp/pit-agent/settings.json",
   ];
-  // bin/ may not exist yet (created lazily by pi on first use)
-  if (fs.existsSync(path.join(agentDirReal, "bin"))) {
-    args.push("--bind", path.join(agentDirReal, "bin"), "/tmp/pit-agent/bin");
-  }
-  // Package installation dirs — needed rw so `pi install` inside a session works
-  for (const sub of ["git", "npm"]) {
-    if (fs.existsSync(path.join(agentDirReal, sub))) {
-      args.push("--bind", path.join(agentDirReal, sub), `/tmp/pit-agent/${sub}`);
-    }
-  }
-  // Filtered settings (rw so pit-escape can refresh it on /reload)
-  args.push("--bind", settingsPath, "/tmp/pit-agent/settings.json");
-  return args;
 }
 
 /**

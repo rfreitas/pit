@@ -212,8 +212,8 @@ describe("shadow agent dir bwrap wiring", () => {
 
   /**
    * Run a Node.js ESM script inside bwrap with the shadow agent dir mounted.
-   * agentDir             — fake ~/.pi/agent (ro-bind base + selective rw overrides)
-   * filteredSettingsPath — pre-written filtered settings.json (rw bind)
+   * agentDir             — fake ~/.pi/agent (rw bind base)
+   * filteredSettingsPath — pre-written filtered settings.json (rw bind, overrides base)
    */
   function runWithShadowAgent(
     agentDir: string,
@@ -242,13 +242,10 @@ describe("shadow agent dir bwrap wiring", () => {
           "--ro-bind-try", "/sbin",    "/sbin",
           "--ro-bind",     nodeDir,    nodeDir,
           "--bind",        "/tmp",     "/tmp",
-          // Shadow agent dir: ro base, then selective rw overrides.
-          // Later mounts win in bwrap — rw binds for auth and sessions
-          // shadow the ro base for those specific paths.
-          "--ro-bind", agentDir,                                  "/tmp/pit-agent",
-          "--bind",    path.join(agentDir, "auth.json"),          "/tmp/pit-agent/auth.json",
-          "--bind",    path.join(agentDir, "sessions"),           "/tmp/pit-agent/sessions",
-          "--bind",    filteredSettingsPath,                      "/tmp/pit-agent/settings.json",
+          // Shadow agent dir: rw bind so proper-lockfile can create lock files
+          // (auth.json.lock etc.) next to auth.json. Later bind overrides settings.json.
+          "--bind", agentDir,             "/tmp/pit-agent",
+          "--bind", filteredSettingsPath, "/tmp/pit-agent/settings.json",
           "--unshare-user",
           "--unshare-pid",
           "--die-with-parent",
@@ -352,27 +349,26 @@ describe("shadow agent dir bwrap wiring", () => {
   );
 
   it.skipIf(!hasBwrap)(
-    "files not explicitly rw-overridden are read-only (ro base protects the rest of the agent dir)",
+    "writes to PI_CODING_AGENT_DIR/settings.json go to the filtered file, not the real settings",
     () => {
-      // models.json has no rw override — writing to it inside the sandbox must
-      // fail. This guards against accidentally making the whole agent dir rw.
+      // The later bind on settings.json must win over the base rw bind, so
+      // writing to settings.json inside the sandbox updates the filtered host
+      // file (pit-escape's refresh target) and leaves ~/.pi/agent/settings.json
+      // untouched. This is what makes /reload safe.
       const agentDir = makeAgentDir();
-      fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
-      fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({}));
+      fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: ["real"] }));
       const filteredPath = path.join(makeTmpDir(), "settings.json");
       writeFilteredSettings(agentDir, {}, filteredPath);
 
-      const result = runWithShadowAgent(agentDir, filteredPath, `
+      runWithShadowAgent(agentDir, filteredPath, `
         import { writeFileSync } from "node:fs";
-        try {
-          writeFileSync(process.env.PI_CODING_AGENT_DIR + "/models.json", "hacked");
-          process.stdout.write("wrote");
-        } catch {
-          process.stdout.write("blocked");
-        }
+        writeFileSync(process.env.PI_CODING_AGENT_DIR + "/settings.json", JSON.stringify({ packages: ["written"] }));
       `);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("blocked");
+
+      // Filtered file updated
+      expect(JSON.parse(fs.readFileSync(filteredPath, "utf8")).packages).toEqual(["written"]);
+      // Real settings untouched
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8")).packages).toEqual(["real"]);
     }
   );
 });
