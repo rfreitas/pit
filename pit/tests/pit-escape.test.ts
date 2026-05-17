@@ -20,7 +20,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,8 +60,10 @@ async function spawnEscape(opts: {
   agentDir: string;
   pitDir: string;
   hostSettingsPath: string;
+  worktreePath?: string;
 }): Promise<{ socketPath: string }> {
   const socketPath = path.join(opts.agentDir, "test.sock");
+  const worktreePath = opts.worktreePath ?? opts.agentDir;
   const child = spawn(
     process.execPath,
     [
@@ -69,7 +71,7 @@ async function spawnEscape(opts: {
       "--no-warnings",
       PIT_ESCAPE,
       socketPath,
-      opts.agentDir, // worktree — unused by refresh-settings
+      worktreePath,
       opts.agentDir,
       opts.pitDir,
       opts.hostSettingsPath,
@@ -237,5 +239,84 @@ describe("pit-escape refresh-settings op", () => {
     expect(resp.ok).toBe(true);
     const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
     expect(written.packages ?? []).toEqual([]);
+  });
+});
+
+// ── rename-branch op ──────────────────────────────────────────────────────────
+
+/**
+ * Create a minimal git repo with one empty commit, then add a linked worktree
+ * on a branch named `pi/test-branch`. Returns the paths needed to spawn
+ * pit-escape against that worktree.
+ */
+function setupWorktree(baseDir: string): { worktreeDir: string; branchName: string } {
+  const repoDir = path.join(baseDir, "repo");
+  const worktreeDir = path.join(baseDir, "worktree");
+  const branchName = "pi/test-branch";
+
+  fs.mkdirSync(repoDir, { recursive: true });
+  const git = (args: string[]) => execFileSync("git", args, { cwd: repoDir, stdio: "pipe" });
+  git(["init"]);
+  git(["config", "user.email", "test@pit.local"]);
+  git(["config", "user.name", "pit test"]);
+  git(["commit", "--allow-empty", "-m", "initial"]);
+  git(["worktree", "add", "-b", branchName, worktreeDir]);
+
+  return { worktreeDir, branchName };
+}
+
+function readCurrentBranch(worktreeDir: string): string | null {
+  try {
+    const gitFile = fs.readFileSync(path.join(worktreeDir, ".git"), "utf8")
+      .trim().replace(/^gitdir:\s*/, "");
+    const head = fs.readFileSync(path.join(gitFile, "HEAD"), "utf8").trim();
+    const m = head.match(/^ref: refs\/heads\/(.+)$/);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+
+describe("pit-escape rename-branch op", () => {
+  it("renames the current branch and updates the worktree HEAD", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir, branchName } = setupWorktree(base);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "rename-branch", newBranch: "pi/new-name" });
+
+    expect(resp.code).toBe(0);
+    expect(resp.error).toBeUndefined();
+    expect(readCurrentBranch(worktreeDir)).toBe("pi/new-name");
+    expect(branchName).toBe("pi/test-branch"); // confirm it changed
+  });
+
+  it("returns an error when newBranch is missing", async () => {
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    const resp = await send(socketPath, { op: "rename-branch" });
+
+    expect(resp.error).toMatch(/newBranch/);
+  });
+
+  it("returns a git error when the target branch name already exists", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir } = setupWorktree(base);
+
+    // create a second branch in the repo so the name is taken
+    const repoDir = path.join(base, "repo");
+    execFileSync("git", ["-C", repoDir, "branch", "pi/already-exists"]);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "rename-branch", newBranch: "pi/already-exists" });
+
+    expect(resp.code).not.toBe(0);
   });
 });

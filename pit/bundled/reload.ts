@@ -12,28 +12,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as net from "node:net";
-
-type EscapeResponse = { ok: true } | { error: string };
-
-function send(socketPath: string, req: object): Promise<EscapeResponse> {
-  return new Promise((resolve) => {
-    const sock = net.createConnection(socketPath);
-    let buf = "";
-    sock.once("connect", () => { sock.write(JSON.stringify(req) + "\n"); });
-    sock.on("data", (chunk: Buffer) => { buf += chunk.toString("utf8"); });
-    sock.once("end", () => {
-      try {
-        resolve(JSON.parse(buf.trim()) as EscapeResponse);
-      } catch {
-        resolve({ error: "Failed to parse pit-escape response" });
-      }
-    });
-    sock.once("error", (err: Error) => {
-      resolve({ error: `pit-escape unavailable: ${err.message}` });
-    });
-  });
-}
+import { send } from "../escape-client.ts";
 
 export default function (pi: ExtensionAPI) {
   const socketPath = process.env.PIT_ESCAPE_SOCKET;

@@ -1,7 +1,7 @@
 /**
  * /rename-branch — rename the worktree branch based on the session topic.
  *
- * Only active in pit sessions (PIT_ESCAPE_SOCKET is set).
+ * Human-facing command, only active in pit sessions (PIT_ESCAPE_SOCKET is set).
  *
  * Branch ref updates must go through pit-escape (outside the sandbox):
  * refs/heads/ is shared state across all worktrees and is not rw-mounted in
@@ -19,25 +19,7 @@ import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as net from "node:net";
-
-// ── socket helpers ─────────────────────────────────────────────────────────
-
-type SocketResponse = { stdout?: string; stderr?: string; code?: number; error?: string };
-
-function send(socketPath: string, req: object): Promise<SocketResponse> {
-  return new Promise((resolve) => {
-    const sock = net.createConnection(socketPath);
-    let buf = "";
-    sock.once("connect", () => { sock.write(JSON.stringify(req) + "\n"); });
-    sock.on("data", (chunk: Buffer) => { buf += chunk.toString("utf8"); });
-    sock.once("end", () => {
-      try { resolve(JSON.parse(buf.trim()) as SocketResponse); }
-      catch { resolve({ error: "Failed to parse pit-escape response" }); }
-    });
-    sock.once("error", (err: Error) => { resolve({ error: `pit-escape unavailable: ${err.message}` }); });
-  });
-}
+import { send, errMsg } from "../escape-client.ts";
 
 // ── conversation helpers ───────────────────────────────────────────────────
 
@@ -197,9 +179,8 @@ export default function (pi: ExtensionAPI) {
       // rw-mounted in the sandbox — branch ref updates must go through the host)
       const resp = await send(socketPath, { op: "rename-branch", newBranch });
 
-      if (resp.error || (resp.code !== undefined && resp.code !== 0)) {
-        const detail = resp.error ?? [resp.stderr, resp.stdout].filter(Boolean).join(" ").trim();
-        ctx.ui.notify(`Branch rename failed: ${detail}`, "error");
+      if ("error" in resp || resp.code !== 0) {
+        ctx.ui.notify(`Branch rename failed: ${errMsg(resp)}`, "error");
         return;
       }
 

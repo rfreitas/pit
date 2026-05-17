@@ -173,10 +173,16 @@ plans/        Design docs and notes
 
 These load only inside pit sessions (never in plain `pi`):
 
-| Extension | Purpose |
-|---|---|
-| `git` | git tool + `/merge` command via pit-escape |
-| `reload` | hooks `/reload` to refresh filtered settings before Pi reloads packages |
+| File | Kind | Purpose |
+|---|---|---|
+| `git.ts` | agent tool | `git` tool — permitted subcommands routed through pit-escape |
+| `merge.ts` | user command | `/merge` — merge worktree branch back to parent |
+| `rename-branch.ts` | user command | `/rename-branch` — rename branch from session topic |
+| `reload.ts` | hook | hooks `/reload` to refresh filtered settings before Pi reloads packages |
+
+Agent tools and user commands are kept in separate files: tools run autonomously and are tightly constrained; commands are human-initiated and trusted.
+
+`pit/escape-client.ts` is a shared socket client imported by all bundled files that communicate with pit-escape. It lives outside `bundled/` so it is not loaded as an extension itself.
 
 ### Bundled command: `/rename-branch`
 
