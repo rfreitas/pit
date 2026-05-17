@@ -36,6 +36,7 @@ import {
   isLinkedWorktree,
   findPitSession,
   listRepoWorktrees,
+  readWorktreeBranch,
 } from "./utils.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -324,26 +325,57 @@ async function showPicker(
 
     const selector = new SessionSelectorComponent(
       async (progress) => {
-        // Merge sessions from the main repo root and all its linked worktrees so
-        // that all pit sessions for a repo appear in the picker's current tab,
-        // regardless of which directory the user invoked pit -r from.
+        // Collect sessions from the main repo and all linked worktrees.
+        // Keep them separate so we know which sessions came from which worktree
+        // without needing to inspect s.cwd after the fact.
         const repo = gitRepoRoot();
-        const cwdPaths = new Set<string>([process.cwd()]);
-        if (repo) {
-          cwdPaths.add(repo);
-          for (const wt of listRepoWorktrees(repo)) cwdPaths.add(wt);
-        }
-        const results = await Promise.all(
-          [...cwdPaths].map((p) =>
-            SessionManager.list(p, undefined, progress).catch(() => [] as Awaited<ReturnType<typeof SessionManager.list>>)
-          )
+        const worktrees = repo ? listRepoWorktrees(repo) : [];
+
+        // Read each worktree's branch once upfront — one fs read per worktree.
+        // Falls back to "deleted" when the directory no longer exists.
+        const worktreeBranch = new Map(
+          worktrees.map((wt) => [wt, readWorktreeBranch(wt) ?? "deleted"])
         );
+
+        const mainPaths = new Set<string>([process.cwd()]);
+        if (repo) mainPaths.add(repo);
+
+        const [mainGroups, wtGroups] = await Promise.all([
+          Promise.all(
+            [...mainPaths].map((p) =>
+              SessionManager.list(p, undefined, progress).catch(() => [] as Awaited<ReturnType<typeof SessionManager.list>>)
+            )
+          ),
+          Promise.all(
+            worktrees.map((wt) =>
+              SessionManager.list(wt, undefined, progress).catch(() => [] as Awaited<ReturnType<typeof SessionManager.list>>)
+            )
+          ),
+        ]);
+
+        // Mark each worktree session: prefix label into name (if set) or
+        // firstMessage (if not), so the label is always visible and the
+        // named filter is unaffected.
+        const label = (branch: string) => `[worktree branch:${branch}]`;
+        const marked = worktrees.flatMap((wt, i) =>
+          wtGroups[i].map((s) => {
+            const l = label(worktreeBranch.get(wt)!);
+            return s.name
+              ? { ...s, name: `${l} ${s.name}` }
+              : { ...s, firstMessage: `${l} ${s.firstMessage}` };
+          })
+        );
+
+        // Merge, deduplicate, and sort by most-recently-modified so Recent
+        // mode shows a correctly interleaved timeline across all paths.
         const seen = new Set<string>();
-        return results.flat().filter((s) => {
-          if (seen.has(s.path)) return false;
-          seen.add(s.path);
-          return true;
-        });
+        return [...mainGroups.flat(), ...marked]
+          .filter((s) => {
+            if (seen.has(s.path)) return false;
+            seen.add(s.path);
+            return true;
+          })
+          .sort((a, b) => b.modified.getTime() - a.modified.getTime());
       },
       (progress) => SessionManager.listAll(progress),
       (sessionPath) => { tui.stop(); resolve(sessionPath); }, // onSelect

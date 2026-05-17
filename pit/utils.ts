@@ -130,6 +130,25 @@ export function isLinkedWorktree(cwd: string): boolean {
 }
 
 /**
+ * Read the current branch name for a linked worktree.
+ * Returns null if the directory is not a linked worktree, is detached HEAD,
+ * or no longer exists (e.g. the worktree was deleted after the session was created).
+ */
+export function readWorktreeBranch(cwd: string): string | null {
+  try {
+    const gitPath = path.join(cwd, ".git");
+    if (fs.statSync(gitPath).isDirectory()) return null;
+    const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+    if (!gitdir.includes("/.git/worktrees/")) return null;
+    const head = fs.readFileSync(path.join(gitdir, "HEAD"), "utf8").trim();
+    const m = head.match(/^ref: refs\/heads\/(.+)$/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Scan the sessions directory for this cwd and return the most recent pit session.
  * Returns null if no pit session exists (e.g. the user's own worktree, or it was deleted).
  *

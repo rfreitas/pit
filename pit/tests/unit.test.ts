@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
+import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, readWorktreeBranch, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -392,6 +392,82 @@ describe("isLinkedWorktree", () => {
     // Renamed branch, no pi/ prefix — still a linked worktree
     fs.writeFileSync(path.join(d, ".git"), "gitdir: /repo/.git/worktrees/my-custom-name\n");
     expect(isLinkedWorktree(d)).toBe(true);
+  });
+});
+
+// ── readWorktreeBranch ───────────────────────────────────────────────────
+//
+// Reads the current branch from a linked worktree's .git file without running
+// git. Used to label sessions in the picker. Returns null for main checkouts,
+// submodules, detached HEAD, or deleted worktrees.
+
+describe("readWorktreeBranch", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  // Reuse the same temp dir helper as isLinkedWorktree tests
+  function makeDir(): string {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "pit-wt-branch-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  function makeGitdir(d: string, branch: string): string {
+    // Path must contain /.git/worktrees/ to pass readWorktreeBranch's guard.
+    const gitdir = path.join(d + "-repo", ".git", "worktrees", "wt");
+    fs.mkdirSync(gitdir, { recursive: true });
+    fs.writeFileSync(path.join(gitdir, "HEAD"), `ref: refs/heads/${branch}\n`);
+    tmpDirs.push(d + "-repo");
+    return gitdir;
+  }
+
+  it("returns null for a directory with no .git", () => {
+    const d = makeDir();
+    expect(readWorktreeBranch(d)).toBeNull();
+  });
+
+  it("returns null when .git is a directory (main checkout)", () => {
+    const d = makeDir();
+    fs.mkdirSync(path.join(d, ".git"));
+    expect(readWorktreeBranch(d)).toBeNull();
+  });
+
+  it("returns null for a submodule (.git file with /modules/ path)", () => {
+    const d = makeDir();
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: ../.git/modules/sub\n");
+    expect(readWorktreeBranch(d)).toBeNull();
+  });
+
+  it("returns the branch name for a linked worktree", () => {
+    const d = makeDir();
+    const gitdir = makeGitdir(d, "pi/abc1234");
+    fs.writeFileSync(path.join(d, ".git"), `gitdir: ${gitdir}\n`);
+    expect(readWorktreeBranch(d)).toBe("pi/abc1234");
+  });
+
+  it("returns the branch name for non-pit branch names", () => {
+    const d = makeDir();
+    const gitdir = makeGitdir(d, "feature/my-renamed-branch");
+    fs.writeFileSync(path.join(d, ".git"), `gitdir: ${gitdir}\n`);
+    expect(readWorktreeBranch(d)).toBe("feature/my-renamed-branch");
+  });
+
+  it("returns null for detached HEAD", () => {
+    const d = makeDir();
+    const gitdir = path.join(d + "-repo", ".git", "worktrees", "wt");
+    fs.mkdirSync(gitdir, { recursive: true });
+    fs.writeFileSync(path.join(gitdir, "HEAD"), "abc1234def5678\n"); // detached
+    fs.writeFileSync(path.join(d, ".git"), `gitdir: ${gitdir}\n`);
+    tmpDirs.push(d + "-repo");
+    expect(readWorktreeBranch(d)).toBeNull();
+  });
+
+  it("returns null when the worktree directory does not exist", () => {
+    expect(readWorktreeBranch("/nonexistent/path/pit-test-wt")).toBeNull();
   });
 });
 
