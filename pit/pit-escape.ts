@@ -21,6 +21,10 @@
  *     Request:  { "op": "merge-to-parent", "parentBranch": "master" }
  *     Response: { "stdout": "...", "stderr": "...", "code": 0 }
  *
+ *   Check if worktree branch is merged to parent:
+ *     Request:  { "op": "is-merged" }
+ *     Response: { "merged": true, "branch": "pi/abc", "parentBranch": "master" }
+ *
  *   Refresh filtered settings (re-read host settings + apply pit denylist):
  *     Request:  { "op": "refresh-settings" }
  *     Response: { "ok": true } | { "error": "reason" }
@@ -273,6 +277,24 @@ const server = net.createServer((socket) => {
             result = await opMergeToParent(req.parentBranch);
           }
           break;
+
+        case "is-merged": {
+          const branch = getCurrentBranch();
+          const mainRepo = resolveMainRepo();
+          if (!branch || !mainRepo) {
+            result = { merged: false, branch: branch ?? null, parentBranch: null };
+            break;
+          }
+          const parentBranch = detectParentBranch(mainRepo);
+          if (!parentBranch) {
+            result = { merged: false, branch, parentBranch: null };
+            break;
+          }
+          // exit 0 = branch is an ancestor of parentBranch (i.e. merged)
+          const mr = await git(["merge-base", "--is-ancestor", branch, parentBranch], mainRepo);
+          result = { merged: mr.code === 0, branch, parentBranch };
+          break;
+        }
 
         case "refresh-settings":
           result = opRefreshSettings();
