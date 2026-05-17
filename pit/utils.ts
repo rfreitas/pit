@@ -6,7 +6,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { execFileSync } from "node:child_process";
+import { CURRENT_SESSION_VERSION, SessionManager, type CustomEntry } from "@earendil-works/pi-coding-agent";
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -20,8 +21,8 @@ export interface PitMetadata {
   branch: string;
   created: string;
   mode: "worktree" | "no-tree";
-  /** why no-tree: absent git repo, or user explicitly passed -nt/--no-tree */
-  noTreeReason?: "no-repo" | "forced";
+  /** why no-tree: absent git repo, user explicitly passed -nt/--no-tree, or cwd is already a linked worktree */
+  noTreeReason?: "no-repo" | "forced" | "linked-worktree";
 }
 
 export interface WorktreeResult {
@@ -87,6 +88,12 @@ branch: \`${meta.branch}\`   worktree: \`${meta.worktree}\`
 
 **Worktree:** You are working in an isolated git worktree on branch \`${meta.branch}\`, not on the main branch. Your changes stay here until the user reviews and merges them. The main working tree is untouched.${sandboxSection}`;
   }
+  if (meta.noTreeReason === "linked-worktree") {
+    return `**pit — no-tree mode** *(already inside a git worktree)*
+Running directly in this git worktree — no new worktree was created.
+
+No additional git isolation. Changes affect this worktree directly.${sandboxSection}`;
+  }
   if (meta.noTreeReason === "forced") {
     return `**pit — no-tree mode** *(worktree creation skipped)*
 Running in current directory — git worktree creation was skipped (\`-nt\`/\`--no-tree\`).
@@ -100,6 +107,87 @@ No git isolation. Changes affect the current directory directly.${sandboxSection
 }
 
 
+
+// ── worktree detection ───────────────────────────────────────────────────────
+
+/**
+ * Returns true if cwd is a git linked worktree (not a main checkout or submodule).
+ *
+ * Git invariant: a linked worktree always has .git as a plain file whose content
+ * is "gitdir: <path>/.git/worktrees/<name>". The main checkout has .git as a
+ * directory; submodules have .git as a file but their gitdir contains /modules/
+ * instead of /worktrees/. This check requires no branch name knowledge.
+ */
+export function isLinkedWorktree(cwd: string): boolean {
+  try {
+    const gitPath = path.join(cwd, ".git");
+    if (fs.statSync(gitPath).isDirectory()) return false;
+    const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+    return gitdir.includes("/.git/worktrees/");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Scan the sessions directory for this cwd and return the most recent pit session.
+ * Returns null if no pit session exists (e.g. the user's own worktree, or it was deleted).
+ *
+ * Accepts agentDir as a parameter so tests can pass a temp directory.
+ */
+export async function findPitSession(
+  cwd: string,
+  agentDir: string
+): Promise<{ sessionFile: string; meta: PitMetadata } | null> {
+  const sessionDir = path.join(agentDir, "sessions", cwdToBucket(cwd));
+  let sessions: Awaited<ReturnType<typeof SessionManager.list>>;
+  try {
+    sessions = await SessionManager.list(cwd, sessionDir);
+  } catch {
+    return null;
+  }
+  // Most recent first
+  sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+  for (const session of sessions) {
+    try {
+      const sm = SessionManager.open(session.path);
+      const entry = sm.getEntries().find(
+        (e): e is CustomEntry<PitMetadata> =>
+          e.type === "custom" && (e as CustomEntry).customType === "pit"
+      );
+      if (entry?.data) return { sessionFile: session.path, meta: entry.data };
+    } catch { /* skip corrupt or unreadable sessions */ }
+  }
+  return null;
+}
+
+/**
+ * List all linked worktrees for a git repository (excludes the main checkout).
+ * Used by pit -r to include worktree sessions in the picker's current-tab.
+ *
+ * Returns an empty array for non-git dirs or if git is unavailable.
+ */
+export function listRepoWorktrees(repo: string): string[] {
+  try {
+    const out = execFileSync("git", ["-C", repo, "worktree", "list", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const paths: string[] = [];
+    let currentPath = "";
+    for (const line of out.split("\n")) {
+      if (line.startsWith("worktree ")) {
+        currentPath = line.slice(9).trim();
+      } else if (line === "" && currentPath) {
+        if (currentPath !== repo) paths.push(currentPath);
+        currentPath = "";
+      }
+    }
+    return paths;
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Derive the session bucket directory name for a cwd path.

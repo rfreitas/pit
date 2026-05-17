@@ -21,9 +21,10 @@
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
+import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -329,6 +330,68 @@ describe("buildAnnouncement", () => {
     for (const meta of [worktreeMeta, forcedMeta, noRepoMeta]) {
       expect(buildAnnouncement(meta)).not.toContain("Sandbox (bwrap)");
     }
+  });
+});
+
+// ── isLinkedWorktree ─────────────────────────────────────────────────────
+//
+// Detects linked git worktrees via the .git-file invariant: a linked worktree
+// always has .git as a plain file containing "gitdir: <path>/.git/worktrees/...",
+// while the main checkout has .git as a directory and submodules use /modules/.
+// No branch name knowledge required.
+
+describe("isLinkedWorktree", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  function makeDir(): string {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "pit-linked-wt-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  it("returns false when .git does not exist (non-git dir)", () => {
+    const d = makeDir();
+    expect(isLinkedWorktree(d)).toBe(false);
+  });
+
+  it("returns false when .git is a directory (main checkout)", () => {
+    const d = makeDir();
+    fs.mkdirSync(path.join(d, ".git"));
+    expect(isLinkedWorktree(d)).toBe(false);
+  });
+
+  it("returns true when .git file contains a /worktrees/ gitdir (linked worktree)", () => {
+    const d = makeDir();
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: /home/user/repo/.git/worktrees/wt-abc\n");
+    expect(isLinkedWorktree(d)).toBe(true);
+  });
+
+  it("returns false when .git file contains a /modules/ gitdir (submodule)", () => {
+    const d = makeDir();
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: ../.git/modules/sub\n");
+    expect(isLinkedWorktree(d)).toBe(false);
+  });
+
+  it("returns false for a non-existent directory", () => {
+    expect(isLinkedWorktree("/nonexistent/path/pit-test-should-not-exist")).toBe(false);
+  });
+
+  it("handles gitdir value without trailing newline", () => {
+    const d = makeDir();
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: /repo/.git/worktrees/abc");
+    expect(isLinkedWorktree(d)).toBe(true);
+  });
+
+  it("is insensitive to the branch name — any /worktrees/ path returns true", () => {
+    const d = makeDir();
+    // Renamed branch, no pi/ prefix — still a linked worktree
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: /repo/.git/worktrees/my-custom-name\n");
+    expect(isLinkedWorktree(d)).toBe(true);
   });
 });
 

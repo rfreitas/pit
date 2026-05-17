@@ -33,6 +33,9 @@ import {
   parseFlags,
   buildAnnouncement,
   setupNewSession as _setupNewSession,
+  isLinkedWorktree,
+  findPitSession,
+  listRepoWorktrees,
 } from "./utils.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -320,7 +323,28 @@ async function showPicker(
     const tui = new TUI(terminal, true);
 
     const selector = new SessionSelectorComponent(
-      (progress) => SessionManager.list(process.cwd(), undefined, progress),
+      async (progress) => {
+        // Merge sessions from the main repo root and all its linked worktrees so
+        // that all pit sessions for a repo appear in the picker's current tab,
+        // regardless of which directory the user invoked pit -r from.
+        const repo = gitRepoRoot();
+        const cwdPaths = new Set<string>([process.cwd()]);
+        if (repo) {
+          cwdPaths.add(repo);
+          for (const wt of listRepoWorktrees(repo)) cwdPaths.add(wt);
+        }
+        const results = await Promise.all(
+          [...cwdPaths].map((p) =>
+            SessionManager.list(p, undefined, progress).catch(() => [] as Awaited<ReturnType<typeof SessionManager.list>>)
+          )
+        );
+        const seen = new Set<string>();
+        return results.flat().filter((s) => {
+          if (seen.has(s.path)) return false;
+          seen.add(s.path);
+          return true;
+        });
+      },
       (progress) => SessionManager.listAll(progress),
       (sessionPath) => { tui.stop(); resolve(sessionPath); }, // onSelect
       () => { tui.stop(); resolve(null); },                   // onCancel
@@ -561,6 +585,53 @@ void (async () => {
 
   // ── new session (or user-managed session) ────────────────────────────────
   const userManagingSession = filteredArgv.some((f) => SESSION_FLAGS.has(f));
+
+  // Pre-check: never create a nested worktree when already inside a linked git worktree.
+  // This catches any linked worktree, not just pit ones — nesting is never useful.
+  if (!noTree && isLinkedWorktree(process.cwd())) {
+    const cwd = process.cwd();
+    if (!userManagingSession) {
+      const existing = await findPitSession(cwd, AGENT_DIR);
+      if (existing) {
+        // Resume the existing pit session for this worktree
+        const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
+        const gitSocket = await startGitHelper(cwd, existing.meta.id);
+        if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
+        await launch(
+          cwd,
+          ["--session", existing.sessionFile, ...extensionArgs(), ...systemPromptArgs(existing.meta, sandboxMounts), ...filteredArgv],
+          sandbox
+        );
+        return;
+      }
+      console.log("pit: already in a git worktree — no pit session found, running no-tree");
+    }
+    // No pit session found, or user is managing their own session.
+    // Start a new no-tree session in place (don't nest worktrees).
+    const meta: PitMetadata = {
+      id: genId(),
+      repo: cwd,
+      worktree: cwd,
+      branch: "",
+      created: new Date().toISOString(),
+      mode: "no-tree",
+      noTreeReason: "linked-worktree",
+    };
+    const result: WorktreeResult = { mode: "no-tree", cwd, meta };
+    let piArgs: string[];
+    if (userManagingSession) {
+      piArgs = filteredArgv;
+    } else {
+      const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
+      const sessionFile = setupNewSession(result, sandboxMounts);
+      const gitSocket = await startGitHelper(cwd, meta.id);
+      if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
+      piArgs = ["--session", sessionFile, ...extensionArgs(), ...systemPromptArgs(meta, sandboxMounts), ...filteredArgv];
+    }
+    await launch(cwd, piArgs, sandbox);
+    return;
+  }
+
   const result = worktreeCheck(undefined, noTree);
 
   let piArgs: string[];
