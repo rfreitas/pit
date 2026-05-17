@@ -41,7 +41,7 @@ pit's sandbox is **OS-level** and **allowlist-based**. Worktree creation and ses
 | Mount | Access | Why |
 |---|---|---|
 | Worktree directory | read-write | the agent's workspace |
-| Pi config dir (`~/.pi/agent`) | read-write | auth tokens, settings |
+| `/pit-agent` (shadow agent dir) | read-write | auth tokens, filtered settings — session-scoped, dies with bwrap |
 | Node runtime + pi binary | read-only | needed to run |
 | Extension dirs + `node_modules` | read-only | Pi extensions |
 | `/usr`, `/etc`, `/lib`, `/proc`, `/dev` | read-only | system baseline |
@@ -85,6 +85,28 @@ sandbox bound to that worktree — not to wherever `pit -r` was invoked.
 
 ---
 
+## Extension denylist
+
+When running sandboxed, pit can suppress specific Pi packages that you don't want active in agent sessions. Create `~/.pi/pit/config.json`:
+
+```json
+{
+  "denyPackages": [
+    "npm:@casualjim/pi-heimdall",
+    "npm:@spences10/pi-confirm-destructive",
+    "npm:@jerryan/pi-sanity"
+  ]
+}
+```
+
+Package sources must match the entries in your Pi `settings.json` exactly. Any package not listed is loaded normally.
+
+**How it works:** at session start, pit generates a filtered copy of your Pi settings and mounts it into the sandbox at `/pit-agent/settings.json` (via `PI_CODING_AGENT_DIR`). The real `~/.pi/agent/settings.json` is never modified. `/reload` inside a session re-applies the denylist against the current host settings, so globally-installed packages are picked up correctly.
+
+**`--no-sandbox`** falls back to your full Pi settings unchanged — no filtering, no shadow dir.
+
+---
+
 ## Git worktree isolation
 
 Each `pit` session creates:
@@ -97,6 +119,17 @@ The agent works entirely in that directory. Your main working tree is untouched.
 Session metadata (id, branch, worktree path) is embedded directly in Pi's session file, so pit sessions appear normally in Pi's session picker and resume correctly.
 
 **Running `pit` inside an existing worktree** does the right thing automatically: instead of nesting a second worktree, pit detects it is already in a linked worktree and resumes the existing pit session for that directory. If no session exists yet (e.g. you created the worktree manually), it starts a new no-tree session in place.
+
+---
+
+## pit-escape
+
+Each sandboxed session spawns a small helper process (`pit-escape`) outside the bwrap namespace. It communicates with the sandboxed Pi over a Unix socket and handles operations that require host access:
+
+- **git operations** — the `git` tool inside the session routes through pit-escape, scoped to permitted subcommands
+- **settings refresh** — called by the bundled reload extension on `/reload` to regenerate the filtered settings file before Pi re-reads packages
+
+The socket path is passed into the sandbox via `PIT_ESCAPE_SOCKET`. pit-escape exits when the session ends.
 
 ---
 
@@ -130,3 +163,12 @@ plans/        Design docs and notes
 | `/rename` | Ask the model to name the session |
 | `/chat-summary` | Summarise the conversation |
 | `sudo` | Prompt before running privileged commands |
+
+### pit-bundled extensions
+
+These load only inside pit sessions (never in plain `pi`):
+
+| Extension | Purpose |
+|---|---|
+| `git` | git tool + `/merge` command via pit-escape |
+| `reload` | hooks `/reload` to refresh filtered settings before Pi reloads packages |

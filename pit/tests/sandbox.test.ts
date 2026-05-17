@@ -19,10 +19,11 @@
  *                 causing getApiKey() to return null for every provider.
  *                 pi reported "No models available" on startup.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeFilteredSettings } from "../utils.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -182,4 +183,192 @@ describe("pit bwrap sandbox", () => {
     const { count } = JSON.parse(result.stdout);
     expect(count, "no models — DNS or auth broken inside bwrap").toBeGreaterThan(0);
   });
+});
+
+// ── shadow agent dir ────────────────────────────────────────────────────────
+//
+// These tests verify that the bwrap mount configuration for the shadow agent
+// dir is wired correctly. They don't test the filtering logic (covered by
+// unit and pit-escape tests) — they test whether the cage was built right:
+// correct source paths, correct destination, correct bind order (rw beats ro),
+// and correct PI_CODING_AGENT_DIR env var.
+
+describe("shadow agent dir bwrap wiring", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  // Use /tmp for all temp dirs — it's already mounted rw in the bwrap sandbox.
+  function makeTmpDir(): string {
+    const d = fs.mkdtempSync(path.join("/tmp", "pit-shadow-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  const denylist = ["npm:@casualjim/pi-heimdall", "npm:@spences10/pi-confirm-destructive"];
+  const allowedPkg = "npm:pi-agent-browser-native";
+
+  /**
+   * Run a Node.js ESM script inside bwrap with the shadow agent dir mounted.
+   * agentDir             — fake ~/.pi/agent (rw bind base)
+   * filteredSettingsPath — pre-written filtered settings.json (rw bind, overrides base)
+   */
+  function runWithShadowAgent(
+    agentDir: string,
+    filteredSettingsPath: string,
+    script: string
+  ): { stdout: string; stderr: string; status: number } {
+    const bwrap = findBwrap()!;
+    const nodeBin = process.execPath;
+    const nodeDir = path.dirname(path.dirname(nodeBin));
+    const scriptFile = path.join("/tmp", `shadow-test-${Date.now()}.mjs`);
+    fs.writeFileSync(scriptFile, script);
+
+    try {
+      const result = spawnSync(
+        bwrap,
+        [
+          "--tmpfs", "/",
+          "--dev",   "/dev",
+          "--proc",  "/proc",
+          "--ro-bind",     "/usr",     "/usr",
+          "--ro-bind",     "/etc",     "/etc",
+          "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
+          "--ro-bind-try", "/lib",     "/lib",
+          "--ro-bind-try", "/lib64",   "/lib64",
+          "--ro-bind-try", "/bin",     "/bin",
+          "--ro-bind-try", "/sbin",    "/sbin",
+          "--ro-bind",     nodeDir,    nodeDir,
+          "--bind",        "/tmp",     "/tmp",
+          // Shadow agent dir: rw bind so proper-lockfile can create lock files
+          // (auth.json.lock etc.) next to auth.json. Later bind overrides settings.json.
+          "--bind", agentDir,             "/pit-agent",
+          "--bind", filteredSettingsPath, "/pit-agent/settings.json",
+          "--unshare-user",
+          "--unshare-pid",
+          "--die-with-parent",
+          "--setenv", "HOME",                process.env.HOME!,
+          "--setenv", "PATH",                `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
+          "--setenv", "PI_CODING_AGENT_DIR", "/pit-agent",
+          "--chdir",  "/tmp",
+          "--",
+          nodeBin, scriptFile,
+        ],
+        { encoding: "utf8", timeout: 10000 }
+      );
+      return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", status: result.status ?? 1 };
+    } finally {
+      fs.rmSync(scriptFile, { force: true });
+    }
+  }
+
+  function makeAgentDir() {
+    const agentDir = makeTmpDir();
+    fs.writeFileSync(path.join(agentDir, "auth.json"), "{}");
+    fs.mkdirSync(path.join(agentDir, "sessions"));
+    return agentDir;
+  }
+
+  it.skipIf(!hasBwrap)(
+    "PI_CODING_AGENT_DIR is set to /pit-agent inside the sandbox",
+    () => {
+      const agentDir = makeAgentDir();
+      fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
+      const filteredPath = path.join(makeTmpDir(), "settings.json");
+      writeFilteredSettings(agentDir, {}, filteredPath);
+
+      const result = runWithShadowAgent(
+        agentDir, filteredPath,
+        `process.stdout.write(process.env.PI_CODING_AGENT_DIR ?? "unset");`
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("/pit-agent");
+    }
+  );
+
+  it.skipIf(!hasBwrap)(
+    "settings.json at PI_CODING_AGENT_DIR is the filtered version: denied packages absent, allowed present",
+    () => {
+      const agentDir = makeAgentDir();
+      fs.writeFileSync(
+        path.join(agentDir, "settings.json"),
+        JSON.stringify({ packages: [...denylist, allowedPkg] })
+      );
+      const filteredPath = path.join(makeTmpDir(), "settings.json");
+      writeFilteredSettings(agentDir, { denyPackages: denylist }, filteredPath);
+
+      const result = runWithShadowAgent(agentDir, filteredPath, `
+        import { readFileSync } from "node:fs";
+        const s = JSON.parse(readFileSync(process.env.PI_CODING_AGENT_DIR + "/settings.json", "utf8"));
+        process.stdout.write(JSON.stringify(s.packages));
+      `);
+      expect(result.status, result.stderr).toBe(0);
+      const packages: string[] = JSON.parse(result.stdout);
+      for (const p of ["npm:@casualjim/pi-heimdall", "npm:@spences10/pi-confirm-destructive"]) {
+        expect(packages).not.toContain(p);
+      }
+      expect(packages).toContain(allowedPkg);
+    }
+  );
+
+  it.skipIf(!hasBwrap)(
+    "writes to PI_CODING_AGENT_DIR/auth.json are visible on the host (rw bind, not lost in tmpfs)",
+    () => {
+      const agentDir = makeAgentDir();
+      fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
+      const filteredPath = path.join(makeTmpDir(), "settings.json");
+      writeFilteredSettings(agentDir, {}, filteredPath);
+
+      runWithShadowAgent(agentDir, filteredPath, `
+        import { writeFileSync } from "node:fs";
+        writeFileSync(process.env.PI_CODING_AGENT_DIR + "/auth.json", JSON.stringify({ written: true }));
+      `);
+
+      const hostContent = JSON.parse(fs.readFileSync(path.join(agentDir, "auth.json"), "utf8"));
+      expect(hostContent.written).toBe(true);
+    }
+  );
+
+  it.skipIf(!hasBwrap)(
+    "writes to PI_CODING_AGENT_DIR/sessions are visible on the host (rw bind, not lost in tmpfs)",
+    () => {
+      const agentDir = makeAgentDir();
+      fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
+      const filteredPath = path.join(makeTmpDir(), "settings.json");
+      writeFilteredSettings(agentDir, {}, filteredPath);
+
+      runWithShadowAgent(agentDir, filteredPath, `
+        import { writeFileSync } from "node:fs";
+        writeFileSync(process.env.PI_CODING_AGENT_DIR + "/sessions/probe.txt", "ok");
+      `);
+
+      expect(fs.existsSync(path.join(agentDir, "sessions", "probe.txt"))).toBe(true);
+    }
+  );
+
+  it.skipIf(!hasBwrap)(
+    "writes to PI_CODING_AGENT_DIR/settings.json go to the filtered file, not the real settings",
+    () => {
+      // The later bind on settings.json must win over the base rw bind, so
+      // writing to settings.json inside the sandbox updates the filtered host
+      // file (pit-escape's refresh target) and leaves ~/.pi/agent/settings.json
+      // untouched. This is what makes /reload safe.
+      const agentDir = makeAgentDir();
+      fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: ["real"] }));
+      const filteredPath = path.join(makeTmpDir(), "settings.json");
+      writeFilteredSettings(agentDir, {}, filteredPath);
+
+      runWithShadowAgent(agentDir, filteredPath, `
+        import { writeFileSync } from "node:fs";
+        writeFileSync(process.env.PI_CODING_AGENT_DIR + "/settings.json", JSON.stringify({ packages: ["written"] }));
+      `);
+
+      // Filtered file updated
+      expect(JSON.parse(fs.readFileSync(filteredPath, "utf8")).packages).toEqual(["written"]);
+      // Real settings untouched
+      expect(JSON.parse(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8")).packages).toEqual(["real"]);
+    }
+  );
 });

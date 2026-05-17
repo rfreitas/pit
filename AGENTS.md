@@ -40,3 +40,10 @@ npm install <package>
 npm run typecheck   # must pass
 npm test            # must pass if tests exist for the changed code
 ```
+
+If the change adds or modifies a feature, update `README.md` to reflect it:
+- New flags, commands, or extensions → add to the relevant section
+- Changed behaviour (mounts, config, protocols) → update the description
+- New concepts or components → add a section if none exists
+
+`README.md` is the authoritative human doc. Keep it in sync.

@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, readWorktreeBranch, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
+import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, type WorktreeResult, type SandboxMounts, type PitMetadata } from "../utils.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -490,18 +490,12 @@ describe("setupNewSession", () => {
     tmpDirs.length = 0;
   });
 
-  const TEST_SANDBOX = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "test-sandbox"
-);
-
-function makeTmpAgentDir(): string {
-  fs.mkdirSync(TEST_SANDBOX, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(TEST_SANDBOX, "pit-test-agent-"));
-  tmpDirs.push(dir);
-  return dir;
-}
+  function makeTmpAgentDir(): string {
+    fs.mkdirSync(TEST_SANDBOX, { recursive: true });
+    const dir = fs.mkdtempSync(path.join(TEST_SANDBOX, "pit-test-agent-"));
+    tmpDirs.push(dir);
+    return dir;
+  }
 
   function makeWorktreeResult(overrides: Partial<WorktreeResult> = {}): WorktreeResult {
     return {
@@ -646,3 +640,214 @@ function makeTmpAgentDir(): string {
     expect(msg.content).toContain("no-tree mode");
   });
 });
+
+// ── applyDenylist ──────────────────────────────────────────────────────────────
+//
+// Pure function: filters the packages array in a settings object by removing
+// any entry present in the denylist. Must not mutate the input and must
+// preserve all other settings keys untouched.
+
+describe("applyDenylist", () => {
+  const settings = {
+    defaultModel: "claude-sonnet",
+    packages: [
+      "npm:@casualjim/pi-heimdall",
+      "npm:@spences10/pi-confirm-destructive",
+      "npm:@jerryan/pi-sanity",
+      "npm:pi-agent-browser-native",
+    ],
+  };
+
+  it("removes denied packages", () => {
+    const result = applyDenylist(settings, ["npm:@casualjim/pi-heimdall"]);
+    expect(result.packages).not.toContain("npm:@casualjim/pi-heimdall");
+  });
+
+  it("keeps allowed packages", () => {
+    const result = applyDenylist(settings, ["npm:@casualjim/pi-heimdall"]);
+    expect(result.packages).toContain("npm:pi-agent-browser-native");
+  });
+
+  it("removes all packages in the denylist in one pass", () => {
+    const result = applyDenylist(settings, [
+      "npm:@casualjim/pi-heimdall",
+      "npm:@spences10/pi-confirm-destructive",
+    ]);
+    expect(result.packages).toHaveLength(2);
+    expect(result.packages).not.toContain("npm:@casualjim/pi-heimdall");
+    expect(result.packages).not.toContain("npm:@spences10/pi-confirm-destructive");
+  });
+
+  it("empty denylist returns settings unchanged", () => {
+    const result = applyDenylist(settings, []);
+    expect(result.packages).toEqual(settings.packages);
+  });
+
+  it("denylist entry not in packages is silently ignored", () => {
+    const result = applyDenylist(settings, ["npm:@nobody/does-not-exist"]);
+    expect(result.packages).toEqual(settings.packages);
+  });
+
+  it("missing packages key is treated as empty array", () => {
+    const result = applyDenylist({ defaultModel: "sonnet" }, ["npm:@casualjim/pi-heimdall"]);
+    expect(result.packages).toEqual([]);
+  });
+
+  it("does not mutate the original settings object", () => {
+    const original = [...settings.packages];
+    applyDenylist(settings, ["npm:@casualjim/pi-heimdall"]);
+    expect(settings.packages).toEqual(original);
+  });
+
+  it("preserves all non-packages keys", () => {
+    const result = applyDenylist(settings, ["npm:@casualjim/pi-heimdall"]);
+    expect(result.defaultModel).toBe("claude-sonnet");
+  });
+});
+
+// ── readPitConfig ─────────────────────────────────────────────────────────────
+//
+// Reads <pitDir>/config.json and returns the parsed object. Must return an
+// empty object (not throw) for absent or malformed files.
+
+describe("readPitConfig", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  function makePitDir(): string {
+    const d = fs.mkdtempSync(path.join(TEST_SANDBOX, "pit-config-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  it("returns empty object when config.json does not exist", () => {
+    const pitDir = makePitDir();
+    expect(readPitConfig(pitDir)).toEqual({});
+  });
+
+  it("parses denyPackages from config.json", () => {
+    const pitDir = makePitDir();
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: ["npm:@casualjim/pi-heimdall"] })
+    );
+    expect(readPitConfig(pitDir).denyPackages).toEqual(["npm:@casualjim/pi-heimdall"]);
+  });
+
+  it("returns empty object for malformed JSON (does not throw)", () => {
+    const pitDir = makePitDir();
+    fs.writeFileSync(path.join(pitDir, "config.json"), "{ invalid json }");
+    expect(readPitConfig(pitDir)).toEqual({});
+  });
+
+  it("returns empty object when denyPackages is absent from valid JSON", () => {
+    const pitDir = makePitDir();
+    fs.writeFileSync(path.join(pitDir, "config.json"), JSON.stringify({}));
+    expect(readPitConfig(pitDir).denyPackages).toBeUndefined();
+  });
+});
+
+// ── writeFilteredSettings ────────────────────────────────────────────────────────
+//
+// Reads ~/.pi/agent/settings.json, applies the denylist, and writes the
+// filtered result to the host-side bound path. This is the file pit-escape
+// refreshes on /reload and bwrap bind-mounts as /tmp/pit-agent/settings.json.
+
+describe("writeFilteredSettings", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  function makeDir(): string {
+    const d = fs.mkdtempSync(path.join(TEST_SANDBOX, "pit-settings-test-"));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  const rawSettings = {
+    defaultModel: "claude-sonnet",
+    packages: [
+      "npm:@casualjim/pi-heimdall",
+      "npm:@spences10/pi-confirm-destructive",
+      "npm:pi-agent-browser-native",
+    ],
+  };
+
+  it("writes a file at the given path", () => {
+    const agentDir = makeDir();
+    const outDir = makeDir();
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
+    const outPath = path.join(outDir, "settings.json");
+    writeFilteredSettings(agentDir, {}, outPath);
+    expect(fs.existsSync(outPath)).toBe(true);
+  });
+
+  it("output is valid JSON", () => {
+    const agentDir = makeDir();
+    const outDir = makeDir();
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
+    const outPath = path.join(outDir, "settings.json");
+    writeFilteredSettings(agentDir, {}, outPath);
+    expect(() => JSON.parse(fs.readFileSync(outPath, "utf8"))).not.toThrow();
+  });
+
+  it("removes denied packages from the output", () => {
+    const agentDir = makeDir();
+    const outDir = makeDir();
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
+    const outPath = path.join(outDir, "settings.json");
+    writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath);
+    const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    expect(result.packages).not.toContain("npm:@casualjim/pi-heimdall");
+    expect(result.packages).toContain("npm:pi-agent-browser-native");
+  });
+
+  it("with empty denylist, output packages match input exactly", () => {
+    const agentDir = makeDir();
+    const outDir = makeDir();
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
+    const outPath = path.join(outDir, "settings.json");
+    writeFilteredSettings(agentDir, {}, outPath);
+    const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    expect(result.packages).toEqual(rawSettings.packages);
+  });
+
+  it("creates parent directories if they don't exist", () => {
+    const agentDir = makeDir();
+    const outDir = makeDir();
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
+    const outPath = path.join(outDir, "nested", "deep", "settings.json");
+    writeFilteredSettings(agentDir, {}, outPath);
+    expect(fs.existsSync(outPath)).toBe(true);
+  });
+
+  it("preserves non-packages keys in the output", () => {
+    const agentDir = makeDir();
+    const outDir = makeDir();
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
+    const outPath = path.join(outDir, "settings.json");
+    writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath);
+    const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    expect(result.defaultModel).toBe("claude-sonnet");
+  });
+
+  it("absent settings.json produces an empty object (no throw)", () => {
+    const agentDir = makeDir(); // no settings.json written
+    const outDir = makeDir();
+    const outPath = path.join(outDir, "settings.json");
+    expect(() => writeFilteredSettings(agentDir, {}, outPath)).not.toThrow();
+    const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    expect(result).toEqual({});
+  });
+});
+
+const TEST_SANDBOX = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "test-sandbox"
+);

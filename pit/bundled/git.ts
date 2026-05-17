@@ -16,8 +16,8 @@ import * as net from "node:net";
 
 const ALLOWED = ["add", "commit", "diff", "log", "merge", "rebase", "reset", "show", "stash", "status"];
 
-type GitResponse   = { stdout: string; stderr: string; code: number };
-type ErrorResponse = { error: string };
+type GitResponse    = { stdout: string; stderr: string; code: number };
+type ErrorResponse  = { error: string };
 type HelperResponse = GitResponse | ErrorResponse;
 
 type StateResponse = {
@@ -35,10 +35,10 @@ function send(socketPath: string, req: object): Promise<HelperResponse> {
     sock.once("connect", () => { sock.write(JSON.stringify(req) + "\n"); });
     sock.on("data", (chunk: Buffer) => { buf += chunk.toString("utf8"); });
     sock.once("end", () => {
-      try { resolve(JSON.parse(buf.trim())); }
-      catch { resolve({ error: "Failed to parse git helper response" }); }
+      try { resolve(JSON.parse(buf.trim()) as HelperResponse); }
+      catch { resolve({ error: "Failed to parse pit-escape response" }); }
     });
-    sock.once("error", (err: Error) => { resolve({ error: `Git helper unavailable: ${err.message}` }); });
+    sock.once("error", (err: Error) => { resolve({ error: `pit-escape unavailable: ${err.message}` }); });
   });
 }
 
@@ -49,7 +49,7 @@ function errMsg(r: HelperResponse): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  const socketPath = process.env.PIT_GIT_SOCKET;
+  const socketPath = process.env.PIT_ESCAPE_SOCKET;
   if (!socketPath) return;
 
   // ── git tool ───────────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ export default function (pi: ExtensionAPI) {
       }),
     }),
     async execute(_id, params, signal) {
-      const resp = await send(socketPath!, { args: params.args });
+      const resp = await send(socketPath!, { op: "git", args: params.args });
       signal; // unused but required by signature
       if ("error" in resp) {
         return { content: [{ type: "text" as const, text: resp.error }], isError: true, details: { code: undefined as number | undefined } };
@@ -89,7 +89,7 @@ export default function (pi: ExtensionAPI) {
       // Get current state from helper (one round-trip)
       const stateResp = await send(socketPath!, { op: "get-state" });
       if ("error" in stateResp) {
-        ctx.ui.notify(`git helper error: ${stateResp.error}`, "error");
+        ctx.ui.notify(`pit-escape error: ${stateResp.error}`, "error");
         return;
       }
       const state = stateResp as unknown as StateResponse;

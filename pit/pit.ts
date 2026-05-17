@@ -37,6 +37,8 @@ import {
   findPitSession,
   listRepoWorktrees,
   readWorktreeBranch,
+  readPitConfig,
+  writeFilteredSettings,
 } from "./utils.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -258,29 +260,57 @@ function extensionArgs(): string[] {
     .flatMap((f) => ["--extension", path.join(bundledDir, f)]);
 }
 
+// ── pit dir ───────────────────────────────────────────────────────────────────
+
+/** ~/.pi/pit — sits alongside ~/.pi/agent */
+const PIT_DIR = path.join(path.dirname(AGENT_DIR), "pit");
+
+/** Path to the per-session filtered settings file on the host filesystem. */
+function hostSettingsPath(id: string): string {
+  return path.join(PIT_DIR, "sessions", `${id}.json`);
+}
+
+// ── pit-escape ────────────────────────────────────────────────────────────────
+
 /**
- * Start the out-of-sandbox git helper for this worktree session.
- * Spawns git-helper.ts, waits for its "ready" signal, then returns the socket
- * path. Returns undefined if the helper fails to start or cwd is not a linked
- * worktree (i.e. cwd/.git is a directory, not a gitdir pointer file).
+ * Start pit-escape for this session.
+ *
+ * pit-escape runs OUTSIDE the bwrap sandbox with full host access. It handles
+ * git operations (via the sandboxed git tool) and settings refresh (called by
+ * the bundled reload extension on /reload).
+ *
+ * Returns the socket path (set as PIT_ESCAPE_SOCKET in the sandbox env), or
+ * undefined if the helper fails to start or cwd is not a linked worktree.
  */
-async function startGitHelper(worktreeCwd: string, sessionId: string): Promise<string | undefined> {
+async function startPitEscape(
+  worktreeCwd: string,
+  sessionId: string,
+  settingsPath: string
+): Promise<string | undefined> {
   const gitFile = path.join(worktreeCwd, ".git");
   try {
-    if (fs.statSync(gitFile).isDirectory()) return undefined; // main checkout, not a linked worktree
+    if (fs.statSync(gitFile).isDirectory()) return undefined; // main worktree, not linked
   } catch {
     return undefined; // not a git repo
   }
 
-  const socketPath = path.join(AGENT_DIR, `pit-git-${sessionId}.sock`);
+  const socketPath = path.join(AGENT_DIR, `pit-${sessionId}.sock`);
   try { fs.unlinkSync(socketPath); } catch { /* stale socket from crashed session */ }
 
   const scriptDir = path.resolve(path.dirname(process.argv[1]));
-  const helperScript = path.join(scriptDir, "git-helper.ts");
+  const escapeScript = path.join(scriptDir, "pit-escape.ts");
 
   const child = spawn(
     process.execPath,
-    ["--experimental-strip-types", helperScript, socketPath, worktreeCwd],
+    [
+      "--experimental-strip-types",
+      escapeScript,
+      socketPath,
+      worktreeCwd,
+      fs.realpathSync(AGENT_DIR),
+      PIT_DIR,
+      settingsPath,
+    ],
     { stdio: ["ignore", "pipe", "inherit"] }
   );
 
@@ -291,13 +321,19 @@ async function startGitHelper(worktreeCwd: string, sessionId: string): Promise<s
 
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      console.warn("pit: git helper timed out — git tool unavailable");
+      console.warn("pit: pit-escape timed out — git tool and settings refresh unavailable");
       resolve(undefined);
     }, 3000);
 
     child.stdout!.once("data", () => { clearTimeout(timer); resolve(socketPath); });
-    child.once("error", (err) => { clearTimeout(timer); console.warn(`pit: git helper: ${err.message}`); resolve(undefined); });
-    child.once("exit", (code) => { if (code !== 0) { clearTimeout(timer); resolve(undefined); } });
+    child.once("error", (err) => {
+      clearTimeout(timer);
+      console.warn(`pit: pit-escape: ${err.message}`);
+      resolve(undefined);
+    });
+    child.once("exit", (code) => {
+      if (code !== 0) { clearTimeout(timer); resolve(undefined); }
+    });
   });
 }
 
@@ -521,11 +557,29 @@ function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: 
 }
 
 /**
+ * Build bwrap args for the shadow agent dir — a view of ~/.pi/agent inside the
+ * sandbox where only settings.json is replaced with the pit-filtered version.
+ *
+ * The agent dir is bound rw (not ro) so proper-lockfile can create lock files
+ * next to auth.json. Writing to settings.json goes to the filtered host-side
+ * file (the later bind wins), not to the real ~/.pi/agent/settings.json.
+ */
+function shadowAgentMountArgs(agentDirReal: string, settingsPath: string): string[] {
+  return [
+    // rw bind: lock files (auth.json.lock etc.) need a writable directory.
+    "--bind", agentDirReal, "/pit-agent",
+    // Override settings.json with the filtered version.
+    // Later mount wins — writes go to filteredSettingsPath, not the real settings.
+    "--bind", settingsPath, "/pit-agent/settings.json",
+  ];
+}
+
+/**
  * Spawn the sandboxed pi session via bwrap.
  * The outer process handles all worktree/session setup; bwrap only wraps
  * the actual pi session. Never returns — exits the process.
  */
-function bwrapLaunch(cwd: string, piArgs: string[]): never {
+function bwrapLaunch(cwd: string, piArgs: string[], settingsPath?: string): never {
   const bwrap = findBwrap()!; // caller checks first
   const nodeBin = process.execPath;
   const nodeDir = path.dirname(path.dirname(nodeBin));
@@ -533,7 +587,8 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     execSync("which pi", { encoding: "utf8" }).trim()
   );
 
-  const mounts = buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir);
+  const agentDirReal = fs.realpathSync(AGENT_DIR);
+  const mounts = buildSandboxMounts(cwd, agentDirReal, getExtensionMounts(), nodeDir);
   const mountArgs: string[] = [];
   for (const m of mounts.ro) {
     mountArgs.push(m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path);
@@ -542,17 +597,25 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
     mountArgs.push("--bind", m.path, m.path);
   }
 
+  // Shadow agent dir: settingsPath provided → filtered settings active
+  const shadowArgs = settingsPath ? shadowAgentMountArgs(agentDirReal, settingsPath) : [];
+  const agentDirEnv = settingsPath ? [
+    "--setenv", "PI_CODING_AGENT_DIR", "/pit-agent",
+  ] : [];
+
   const args: string[] = [
     "--tmpfs", "/",
     "--dev",   "/dev",
     "--proc",  "/proc",
     ...mountArgs,
+    ...shadowArgs,
     "--unshare-user",
     "--unshare-pid",
     "--die-with-parent",
     "--setenv", "HOME", HOME,
     "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
     "--setenv", "PI_CODING_AGENT", "true",
+    ...agentDirEnv,
     "--chdir", cwd,
     "--",
     nodeBin, piScript, ...piArgs,
@@ -564,19 +627,22 @@ function bwrapLaunch(cwd: string, piArgs: string[]): never {
 
 /**
  * Launch pi — sandboxed via bwrap if available and requested, direct otherwise.
+ * settingsPath is only used in sandboxed mode (shadow agent dir).
  */
 async function launch(
   cwd: string,
   piArgs: string[],
-  sandbox: boolean
+  sandbox: boolean,
+  settingsPath?: string,
 ): Promise<void> {
   if (sandbox) {
     const bwrap = findBwrap();
     if (bwrap) {
-      bwrapLaunch(cwd, piArgs); // never returns
+      bwrapLaunch(cwd, piArgs, settingsPath); // never returns
     }
     console.warn("pit: bwrap not found — running without sandbox");
   }
+  // No sandbox: use real pi settings unchanged
   process.chdir(cwd);
   await main(piArgs);
 }
@@ -609,9 +675,25 @@ void (async () => {
 
     const result = worktreeCheck(picked.meta);
     const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
-    const gitSocket = await startGitHelper(result.cwd, result.meta.id);
-    if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
-    await launch(result.cwd, ["--session", picked.sessionFile, ...extensionArgs(), ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs], sandbox);
+
+    let settingsPath: string | undefined;
+    if (sandbox && findBwrap()) {
+      settingsPath = hostSettingsPath(result.meta.id);
+      writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), settingsPath);
+    }
+
+    const escapeSocket = await startPitEscape(
+      result.cwd,
+      result.meta.id,
+      settingsPath ?? hostSettingsPath(result.meta.id),
+    );
+    if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
+    await launch(
+      result.cwd,
+      ["--session", picked.sessionFile, ...extensionArgs(), ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs],
+      sandbox,
+      settingsPath,
+    );
     return;
   }
 
@@ -666,6 +748,20 @@ void (async () => {
 
   const result = worktreeCheck(undefined, noTree);
 
+  // Initialise filtered settings and pit-escape for every session (both new
+  // and user-managed), so /reload works and the git tool is always available.
+  let settingsPath: string | undefined;
+  if (sandbox && findBwrap()) {
+    settingsPath = hostSettingsPath(result.meta.id);
+    writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), settingsPath);
+  }
+  const escapeSocket = await startPitEscape(
+    result.cwd,
+    result.meta.id,
+    settingsPath ?? hostSettingsPath(result.meta.id),
+  );
+  if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
+
   let piArgs: string[];
   if (userManagingSession) {
     // User controls session — just establish the worktree and pass through
@@ -675,12 +771,10 @@ void (async () => {
     // Context reaches the model via --append-system-prompt on every launch.
     const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
     const sessionFile = setupNewSession(result, sandboxMounts);
-    const gitSocket = await startGitHelper(result.cwd, result.meta.id);
-    if (gitSocket) process.env.PIT_GIT_SOCKET = gitSocket;
     piArgs = ["--session", sessionFile, ...extensionArgs(), ...systemPromptArgs(result.meta, sandboxMounts), ...filteredArgv];
   }
 
-  await launch(result.cwd, piArgs, sandbox);
+  await launch(result.cwd, piArgs, sandbox, settingsPath);
 })().catch((err: unknown) => {
   console.error(`pit: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
