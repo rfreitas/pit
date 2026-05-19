@@ -21,8 +21,7 @@
 
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { readWorktreeBranch } from "../git-utils.ts";
 import { send, errMsg } from "../escape-client.ts";
 
 // ── git context ────────────────────────────────────────────────────────────
@@ -101,21 +100,6 @@ Respond ONLY with valid JSON matching this schema, no other text:
 ${context}
 </context>`;
 
-// ── branch helpers ─────────────────────────────────────────────────────────
-
-function getCurrentBranch(cwd: string): string | null {
-  try {
-    const gitPath = path.join(cwd, ".git");
-    if (fs.statSync(gitPath).isDirectory()) return null;
-    const worktreeGitDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
-    const head = fs.readFileSync(path.join(worktreeGitDir, "HEAD"), "utf8").trim();
-    const m = head.match(/^ref: refs\/heads\/(.+)$/);
-    return m ? m[1] : null;
-  } catch {
-    return null;
-  }
-}
-
 // ── extension ─────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -127,7 +111,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       // Fail fast if we're not in a worktree
       const cwd = process.cwd();
-      const currentBranch = getCurrentBranch(cwd);
+      const currentBranch = readWorktreeBranch(cwd);
       if (!currentBranch) {
         ctx.ui.notify("Could not read current branch — are you in a pit worktree?", "error");
         return;
