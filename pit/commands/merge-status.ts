@@ -41,6 +41,24 @@ function sendOnce(socketPath: string, req: object): Promise<IsMergedResponse> {
 const STATUS_KEY = "pit-merged";
 const FALLBACK_POLL_MS = 5 * 60_000; // 5-minute safety net if subscription drops
 
+/**
+ * Pure function: convert ahead/behind counts into footer text.
+ * Exported for testing.
+ */
+export function formatStatus(aheadCount: number, behindCount: number, parentBranch: string): string {
+  if (aheadCount === 0 && behindCount === 0) {
+    return `in sync with ${parentBranch}`;
+  } else if (aheadCount > 0 && behindCount === 0) {
+    const noun = aheadCount === 1 ? "commit" : "commits";
+    return `${aheadCount} ${noun} ahead of ${parentBranch}`;
+  } else if (aheadCount === 0 && behindCount > 0) {
+    const noun = behindCount === 1 ? "commit" : "commits";
+    return `${behindCount} ${noun} behind ${parentBranch}`;
+  } else {
+    return `${aheadCount} ahead \u00b7 ${behindCount} behind ${parentBranch}`;
+  }
+}
+
 export default function (pi: ExtensionAPI) {
   const socketPath = process.env.PIT_ESCAPE_SOCKET;
   if (!socketPath) return;
@@ -52,18 +70,7 @@ export default function (pi: ExtensionAPI) {
     const resp = await sendOnce(socketPath!, { op: "is-merged" });
     if ("error" in resp) return;
     if (!resp.parentBranch) return;
-    const { aheadCount, behindCount, parentBranch } = resp;
-    if (aheadCount === 0 && behindCount === 0) {
-      setStatus(`in sync with ${parentBranch}`);
-    } else if (aheadCount > 0 && behindCount === 0) {
-      const noun = aheadCount === 1 ? "commit" : "commits";
-      setStatus(`${aheadCount} ${noun} ahead of ${parentBranch}`);
-    } else if (aheadCount === 0 && behindCount > 0) {
-      const noun = behindCount === 1 ? "commit" : "commits";
-      setStatus(`${behindCount} ${noun} behind ${parentBranch}`);
-    } else {
-      setStatus(`${aheadCount} ahead · ${behindCount} behind ${parentBranch}`);
-    }
+    setStatus(formatStatus(resp.aheadCount, resp.behindCount, resp.parentBranch));
   }
 
   function openSubscription(setStatus: (text: string | undefined) => void): void {
