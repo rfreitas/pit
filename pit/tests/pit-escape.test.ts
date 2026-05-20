@@ -636,6 +636,7 @@ describe("pit-escape is-merged op", () => {
     expect(resp.branch).toBe("pi/test");
     expect(resp.parentBranch).toBe("master");
     expect(resp.aheadCount).toBe(1);
+    expect(resp.behindCount).toBe(0);
   });
 
   it("returns merged:true after the branch is fast-forward merged into master", async () => {
@@ -659,6 +660,7 @@ describe("pit-escape is-merged op", () => {
     expect(resp.branch).toBe("pi/test");
     expect(resp.parentBranch).toBe("master");
     expect(resp.aheadCount).toBe(0);
+    expect(resp.behindCount).toBe(0);
   });
 
   it("returns merged:true when branch has no unique commits (newly forked, is-ancestor of master)", async () => {
@@ -678,6 +680,7 @@ describe("pit-escape is-merged op", () => {
     expect(resp.merged).toBe(true);
     expect(resp.parentBranch).toBe("master");
     expect(resp.aheadCount).toBe(0);
+    expect(resp.behindCount).toBe(0);
   });
 
   it("detects 'main' as the parent branch when master does not exist", async () => {
@@ -697,6 +700,7 @@ describe("pit-escape is-merged op", () => {
     expect(resp.merged).toBe(false);
     expect(resp.parentBranch).toBe("main");
     expect(resp.aheadCount).toBe(1);
+    expect(resp.behindCount).toBe(0);
   });
 
   it("returns merged:false with null parentBranch when neither master nor main exists", async () => {
@@ -716,6 +720,7 @@ describe("pit-escape is-merged op", () => {
     expect(resp.merged).toBe(false);
     expect(resp.parentBranch).toBeNull();
     expect(resp.aheadCount).toBe(0);
+    expect(resp.behindCount).toBe(0);
   });
 
   it("returns merged:false with null branch when worktreePath is not a linked worktree", async () => {
@@ -730,6 +735,7 @@ describe("pit-escape is-merged op", () => {
     expect(resp.branch).toBeNull();
     expect(resp.parentBranch).toBeNull();
     expect(resp.aheadCount).toBe(0);
+    expect(resp.behindCount).toBe(0);
   });
 
   it("returns aheadCount matching the number of unique commits on the branch", async () => {
@@ -749,6 +755,32 @@ describe("pit-escape is-merged op", () => {
 
     expect(resp.merged).toBe(false);
     expect(resp.aheadCount).toBe(2);
+    expect(resp.behindCount).toBe(0);
+  });
+
+  it("returns correct aheadCount and behindCount when branch has diverged from master", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    // 2 commits on the worktree branch
+    addCommit(worktreeDir);
+    addCommit(worktreeDir);
+    // 3 commits on master that the branch doesn't have
+    addCommit(mainRepo);
+    addCommit(mainRepo);
+    addCommit(mainRepo);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.aheadCount).toBe(2);
+    expect(resp.behindCount).toBe(3);
   });
 });
 
