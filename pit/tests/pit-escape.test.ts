@@ -20,7 +20,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -54,8 +54,7 @@ function makeDir(): string {
 
 /**
  * Spawn pit-escape and wait for it to signal readiness.
- * worktreePath defaults to agentDir (fine for refresh-settings which ignores it;
- * pass a real linked worktree for is-merged tests).
+ * Uses a dummy worktree path — the refresh-settings op doesn't need a real worktree.
  */
 async function spawnEscape(opts: {
   agentDir: string;
@@ -93,99 +92,8 @@ async function spawnEscape(opts: {
   return { socketPath };
 }
 
-// ── git test helpers (shared by is-merged and subscribe describe blocks) ──────
-
-/** Create a git repo with an initial commit on `branch` (default: master). */
-function initGitRepo(dir: string, branch = "master"): void {
-  execFileSync("git", ["init", "-b", branch], { cwd: dir });
-  execFileSync("git", ["config", "user.email", "test@pit.test"], { cwd: dir });
-  execFileSync("git", ["config", "user.name", "pit test"], { cwd: dir });
-  fs.writeFileSync(path.join(dir, "README.md"), "init\n");
-  execFileSync("git", ["add", "."], { cwd: dir });
-  execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
-}
-
-/** Add a file commit in `dir` (worktree or main repo). */
-function addCommit(dir: string, filename = "work.txt"): void {
-  fs.writeFileSync(path.join(dir, filename), String(Date.now()));
-  execFileSync("git", ["add", "."], { cwd: dir });
-  execFileSync("git", ["commit", "-m", `add ${filename}`], { cwd: dir });
-}
-
-/** Create a linked worktree from the main repo's HEAD. */
-function createWorktree(mainRepo: string, worktreeDir: string, branch: string): void {
-  execFileSync("git", ["-C", mainRepo, "worktree", "add", "-b", branch, worktreeDir, "HEAD"]);
-}
-
-// ── subscribe helper ──────────────────────────────────────────────────────────
-
-interface Subscription {
-  /** Resolves with the next message, or rejects after timeoutMs. */
-  waitForMessage(timeoutMs?: number): Promise<Record<string, unknown>>;
-  close(): void;
-}
-
-/**
- * Open a persistent subscribe connection to pit-escape.
- * Messages arrive as newline-delimited JSON; waitForMessage() lets tests
- * read them one at a time without racing with the data event.
- */
-function openSubscription(socketPath: string): Subscription {
-  const sock = net.createConnection(socketPath);
-  let buf = "";
-  const queue: Array<Record<string, unknown>> = [];
-  const waiters: Array<{
-    resolve: (m: Record<string, unknown>) => void;
-    reject: (e: Error) => void;
-  }> = [];
-
-  const dispatch = (msg: Record<string, unknown>) => {
-    const waiter = waiters.shift();
-    if (waiter) waiter.resolve(msg);
-    else queue.push(msg);
-  };
-
-  sock.once("connect", () => sock.write(JSON.stringify({ op: "subscribe" }) + "\n"));
-  sock.on("data", (chunk: Buffer) => {
-    buf += chunk.toString("utf8");
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const line = buf.slice(0, nl);
-      buf = buf.slice(nl + 1);
-      try { dispatch(JSON.parse(line)); } catch { /* skip malformed */ }
-    }
-  });
-  sock.once("end", () => {
-    // Server closed the connection (error case) — reject any pending waiters
-    for (const w of waiters) w.reject(new Error("subscribe: connection closed"));
-    waiters.length = 0;
-  });
-  sock.once("error", (err: Error) => {
-    for (const w of waiters) w.reject(err);
-    waiters.length = 0;
-  });
-
-  return {
-    waitForMessage: (timeoutMs = 3000) =>
-      new Promise((resolve, reject) => {
-        const queued = queue.shift();
-        if (queued) { resolve(queued); return; }
-        const entry = { resolve, reject };
-        waiters.push(entry);
-        setTimeout(() => {
-          const idx = waiters.indexOf(entry);
-          if (idx !== -1) {
-            waiters.splice(idx, 1);
-            reject(new Error("subscribe: timed out waiting for message"));
-          }
-        }, timeoutMs);
-      }),
-    close: () => sock.destroy(),
-  };
-}
-
 /** Send one request to pit-escape and return the parsed response. */
-function send(socketPath: string, req: object): Promise<Record<string, unknown>> {
+function send(socketPath: string, req: object): Promise<Record<string, string | number | null | undefined>> {
   return new Promise((resolve) => {
     const sock = net.createConnection(socketPath);
     let buf = "";
@@ -334,8 +242,380 @@ describe("pit-escape refresh-settings op", () => {
   });
 });
 
-// ── is-merged op ──────────────────────────────────────────────────────────────
+// ── rename-branch op ──────────────────────────────────────────────────────────
 
+/**
+ * Create a minimal git repo with one empty commit, then add a linked worktree
+ * on a branch named `pi/test-branch`. Returns the paths needed to spawn
+ * pit-escape against that worktree.
+ */
+function setupWorktree(baseDir: string): { worktreeDir: string; branchName: string } {
+  const repoDir = path.join(baseDir, "repo");
+  const worktreeDir = path.join(baseDir, "worktree");
+  const branchName = "pi/test-branch";
+
+  fs.mkdirSync(repoDir, { recursive: true });
+  const git = (args: string[]) => execFileSync("git", args, { cwd: repoDir, stdio: "pipe" });
+  git(["init"]);
+  git(["config", "user.email", "test@pit.local"]);
+  git(["config", "user.name", "pit test"]);
+  git(["commit", "--allow-empty", "-m", "initial"]);
+  git(["worktree", "add", "-b", branchName, worktreeDir]);
+
+  return { worktreeDir, branchName };
+}
+
+function readCurrentBranch(worktreeDir: string): string | null {
+  try {
+    const gitFile = fs.readFileSync(path.join(worktreeDir, ".git"), "utf8")
+      .trim().replace(/^gitdir:\s*/, "");
+    const head = fs.readFileSync(path.join(gitFile, "HEAD"), "utf8").trim();
+    const m = head.match(/^ref: refs\/heads\/(.+)$/);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+
+describe("pit-escape rename-branch op", () => {
+  it("renames the current branch and updates the worktree HEAD", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir, branchName } = setupWorktree(base);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "rename-branch", newBranch: "pi/new-name" });
+
+    expect(resp.code).toBe(0);
+    expect(resp.error).toBeUndefined();
+    expect(readCurrentBranch(worktreeDir)).toBe("pi/new-name");
+    expect(branchName).toBe("pi/test-branch"); // confirm it changed
+  });
+
+  it("returns an error when newBranch is missing", async () => {
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    const resp = await send(socketPath, { op: "rename-branch" });
+
+    expect(resp.error).toMatch(/newBranch/);
+  });
+
+  it("returns a git error when the target branch name already exists", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir } = setupWorktree(base);
+
+    // create a second branch in the repo so the name is taken
+    const repoDir = path.join(base, "repo");
+    execFileSync("git", ["-C", repoDir, "branch", "pi/already-exists"]);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "rename-branch", newBranch: "pi/already-exists" });
+
+    expect(resp.code).not.toBe(0);
+  });
+});
+
+// ── git context ops (log + diff used by rename-branch) ──────────────────────
+
+async function getParentBranch(socketPath: string): Promise<string> {
+  const resp = await send(socketPath, { op: "get-state" });
+  const parent = (resp as Record<string, unknown>).parentBranch as string | null;
+  if (!parent) throw new Error("get-state returned no parentBranch");
+  return parent;
+}
+
+describe("git log and diff ops for rename-branch context", () => {
+  it("log returns empty output when branch has no commits ahead of parent", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir } = setupWorktree(base);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const parentBranch = await getParentBranch(socketPath);
+    const resp = await send(socketPath, { op: "git", args: ["log", `${parentBranch}..HEAD`, "--oneline"] });
+
+    expect(resp.code).toBe(0);
+    expect((resp.stdout as string | undefined)?.trim()).toBe("");
+  });
+
+  it("log returns commit messages after commits are made on the branch", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir } = setupWorktree(base);
+
+    const file = path.join(worktreeDir, "change.txt");
+    fs.writeFileSync(file, "hello");
+    execFileSync("git", ["-C", worktreeDir, "add", "change.txt"]);
+    execFileSync("git", ["-C", worktreeDir, "commit", "-m", "add change file"],
+      { env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" } });
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const parentBranch = await getParentBranch(socketPath);
+    const resp = await send(socketPath, { op: "git", args: ["log", `${parentBranch}..HEAD`, "--oneline"] });
+
+    expect(resp.code).toBe(0);
+    expect(resp.stdout).toContain("add change file");
+  });
+
+  it("diff --stat returns file summary after commits are made on the branch", async () => {
+    const base = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+    const { worktreeDir } = setupWorktree(base);
+
+    const file = path.join(worktreeDir, "feature.ts");
+    fs.writeFileSync(file, "export const x = 1;");
+    execFileSync("git", ["-C", worktreeDir, "add", "feature.ts"]);
+    execFileSync("git", ["-C", worktreeDir, "commit", "-m", "add feature"],
+      { env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" } });
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const parentBranch = await getParentBranch(socketPath);
+    const resp = await send(socketPath, { op: "git", args: ["diff", "--stat", `${parentBranch}...HEAD`] });
+
+    expect(resp.code).toBe(0);
+    expect(resp.stdout).toContain("feature.ts");
+  });
+});
+
+// ── git test helpers (shared by is-merged and subscribe describe blocks) ──────
+
+/** Create a git repo with an initial commit on `branch` (default: master). */
+function initGitRepo(dir: string, branch = "master"): void {
+  execFileSync("git", ["init", "-b", branch], { cwd: dir });
+  execFileSync("git", ["config", "user.email", "test@pit.test"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "pit test"], { cwd: dir });
+  fs.writeFileSync(path.join(dir, "README.md"), "init\n");
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+}
+
+/** Add a file commit in `dir` (worktree or main repo). */
+function addCommit(dir: string, filename = "work.txt"): void {
+  fs.writeFileSync(path.join(dir, filename), String(Date.now()));
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["commit", "-m", `add ${filename}`], { cwd: dir });
+}
+
+/** Create a linked worktree from the main repo's HEAD. */
+function createWorktree(mainRepo: string, worktreeDir: string, branch: string): void {
+  execFileSync("git", ["-C", mainRepo, "worktree", "add", "-b", branch, worktreeDir, "HEAD"]);
+}
+
+// ── subscribe helper ──────────────────────────────────────────────────────────
+
+interface Subscription {
+  /** Resolves with the next message, or rejects after timeoutMs. */
+  waitForMessage(timeoutMs?: number): Promise<Record<string, unknown>>;
+  close(): void;
+}
+
+/**
+ * Open a persistent subscribe connection to pit-escape.
+ * Messages arrive as newline-delimited JSON; waitForMessage() lets tests
+ * read them one at a time without racing with the data event.
+ */
+function openSubscription(socketPath: string): Subscription {
+  const sock = net.createConnection(socketPath);
+  let buf = "";
+  const queue: Array<Record<string, unknown>> = [];
+  const waiters: Array<{
+    resolve: (m: Record<string, unknown>) => void;
+    reject: (e: Error) => void;
+  }> = [];
+
+  const dispatch = (msg: Record<string, unknown>) => {
+    const waiter = waiters.shift();
+    if (waiter) waiter.resolve(msg);
+    else queue.push(msg);
+  };
+
+  sock.once("connect", () => sock.write(JSON.stringify({ op: "subscribe" }) + "\n"));
+  sock.on("data", (chunk: Buffer) => {
+    buf += chunk.toString("utf8");
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      try { dispatch(JSON.parse(line)); } catch { /* skip malformed */ }
+    }
+  });
+  sock.once("end", () => {
+    // Server closed the connection (error case) — reject any pending waiters
+    for (const w of waiters) w.reject(new Error("subscribe: connection closed"));
+    waiters.length = 0;
+  });
+  sock.once("error", (err: Error) => {
+    for (const w of waiters) w.reject(err);
+    waiters.length = 0;
+  });
+
+  return {
+    waitForMessage: (timeoutMs = 3000) =>
+      new Promise((resolve, reject) => {
+        const queued = queue.shift();
+        if (queued) { resolve(queued); return; }
+        const entry = { resolve, reject };
+        waiters.push(entry);
+        setTimeout(() => {
+          const idx = waiters.indexOf(entry);
+          if (idx !== -1) {
+            waiters.splice(idx, 1);
+            reject(new Error("subscribe: timed out waiting for message"));
+          }
+        }, timeoutMs);
+      }),
+    close: () => sock.destroy(),
+  };
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+describe("pit-escape refresh-settings op", () => {
+  const denylist = [
+    "npm:@casualjim/pi-heimdall",
+    "npm:@spences10/pi-confirm-destructive",
+    "npm:@jerryan/pi-sanity",
+  ];
+
+  const allPackages = [...denylist, "npm:pi-agent-browser-native", "npm:agent-browser"];
+
+  it("responds { ok: true } on success", async () => {
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: allPackages })
+    );
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: denylist })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    const resp = await send(socketPath, { op: "refresh-settings" });
+    expect(resp.ok).toBe(true);
+    expect(resp.error).toBeUndefined();
+  });
+
+  it("writes the filtered settings file to hostSettingsPath", async () => {
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: allPackages })
+    );
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: denylist })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    await send(socketPath, { op: "refresh-settings" });
+
+    expect(fs.existsSync(hostSettingsPath)).toBe(true);
+    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    for (const p of denylist) {
+      expect(written.packages).not.toContain(p);
+    }
+    expect(written.packages).toContain("npm:pi-agent-browser-native");
+    expect(written.packages).toContain("npm:agent-browser");
+  });
+
+  it("without a pit config, passes all packages through unchanged", async () => {
+    const agentDir = makeDir();
+    const pitDir = makeDir(); // no config.json
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: allPackages })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    await send(socketPath, { op: "refresh-settings" });
+
+    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    expect(written.packages).toEqual(allPackages);
+  });
+
+  it("picks up changes to settings.json on a second call (the /reload case)", async () => {
+    // Simulate: user runs `pi install npm:new-package` outside the session.
+    // A subsequent /reload in the pit session should pick it up (minus denylist).
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: allPackages })
+    );
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: denylist })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+
+    // First call — baseline
+    await send(socketPath, { op: "refresh-settings" });
+    const before = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    expect(before.packages).not.toContain("npm:brand-new-package");
+
+    // Host settings change (global install outside the session)
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [...allPackages, "npm:brand-new-package"] })
+    );
+
+    // Second call — should pick up the new package (and still apply denylist)
+    await send(socketPath, { op: "refresh-settings" });
+    const after = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    expect(after.packages).toContain("npm:brand-new-package");
+    for (const p of denylist) {
+      expect(after.packages).not.toContain(p);
+    }
+  });
+
+  it("absent settings.json produces an empty-packages output without crashing", async () => {
+    const agentDir = makeDir(); // no settings.json
+    const pitDir = makeDir();
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: denylist })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    const resp = await send(socketPath, { op: "refresh-settings" });
+    expect(resp.ok).toBe(true);
+    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    expect(written.packages ?? []).toEqual([]);
+  });
+});
+
+// ── is-merged op ──────────────────────────────────────────────────────────────
 describe("pit-escape is-merged op", () => {
   it("returns merged:false for an unmerged branch with unique commits", async () => {
     const mainRepo = makeDir();

@@ -43,6 +43,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import gitExt from "../bundled/git.ts";
+import mergeExt from "../bundled/merge.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -176,7 +177,7 @@ describe("git tool registration", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     expect(pi.hasGitTool()).toBe(true);
   });
@@ -184,7 +185,7 @@ describe("git tool registration", () => {
   it("does NOT register the git tool when PIT_ESCAPE_SOCKET is unset", () => {
     delete process.env.PIT_ESCAPE_SOCKET;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
     expect(pi.hasGitTool()).toBe(false);
   });
 });
@@ -197,7 +198,7 @@ describe("git tool execution", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     await pi.runGitTool(["status"]);
 
@@ -212,7 +213,7 @@ describe("git tool execution", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const result = await pi.runGitTool(["status"]) as { content: { text: string }[]; isError: boolean };
     expect(result.content[0].text).toContain("On branch pi/abc123");
@@ -226,7 +227,7 @@ describe("git tool execution", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const result = await pi.runGitTool(["status"]) as { isError: boolean };
     expect(result.isError).toBe(true);
@@ -239,7 +240,7 @@ describe("git tool execution", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const result = await pi.runGitTool(["add", "."]) as { isError: boolean; content: { text: string }[] };
     expect(result.isError).toBe(true);
@@ -257,7 +258,7 @@ describe("/merge registration", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     expect(pi.hasMerge()).toBe(true);
   });
@@ -265,7 +266,7 @@ describe("/merge registration", () => {
   it("does NOT register /merge when PIT_ESCAPE_SOCKET is unset", () => {
     delete process.env.PIT_ESCAPE_SOCKET;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
     expect(pi.hasMerge()).toBe(false);
   });
 });
@@ -284,7 +285,7 @@ describe("/merge phase 1 — merge in progress", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     await pi.runMerge();
 
@@ -302,7 +303,7 @@ describe("/merge phase 1 — merge in progress", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const notifications: Notification[] = [];
     await pi.runMerge("", notifications);
@@ -319,7 +320,7 @@ describe("/merge phase 1 — merge in progress", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const notifications: Notification[] = [];
     await pi.runMerge("", notifications);
@@ -337,7 +338,7 @@ describe("/merge phase 1 — merge in progress", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     await pi.runMerge();
 
@@ -364,7 +365,7 @@ describe("/merge phase 2 — worktree behind parent", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     await pi.runMerge();
 
@@ -385,7 +386,7 @@ describe("/merge phase 2 — worktree behind parent", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const notifications: Notification[] = [];
     await pi.runMerge("", notifications);
@@ -412,7 +413,7 @@ describe("/merge phase 2 — worktree behind parent", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const notifications: Notification[] = [];
     await pi.runMerge("", notifications);
@@ -439,7 +440,7 @@ describe("/merge phase 2 — worktree behind parent", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const notifications: Notification[] = [];
     await pi.runMerge("", notifications);
@@ -463,7 +464,7 @@ describe("/merge phase 3 — fast-forward", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     await pi.runMerge();
 
@@ -483,7 +484,7 @@ describe("/merge phase 3 — fast-forward", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const notifications: Notification[] = [];
     await pi.runMerge("", notifications);
@@ -503,7 +504,7 @@ describe("/merge phase 3 — fast-forward", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const notifications: Notification[] = [];
     await pi.runMerge("", notifications);
@@ -526,7 +527,7 @@ describe("/merge parent branch resolution", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     await pi.runMerge();
 
@@ -545,7 +546,7 @@ describe("/merge parent branch resolution", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     await pi.runMerge("develop");
 
@@ -562,7 +563,7 @@ describe("/merge parent branch resolution", () => {
 
     process.env.PIT_ESCAPE_SOCKET = socketPath;
     const pi = makeMockPi();
-    gitExt(pi as never);
+    gitExt(pi as never); mergeExt(pi as never);
 
     const notifications: Notification[] = [];
     await pi.runMerge("", notifications);

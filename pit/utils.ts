@@ -169,70 +169,9 @@ export function resolveUnversionedDirs(parentRepo: string): string[] {
   return result;
 }
 
-/**
- * Return the parent repo root for a linked worktree, or null if cwd is a main
- * checkout, a submodule, or not a git directory.
- *
- * A linked worktree's .git file contains "gitdir: <mainGitDir>/worktrees/<name>".
- * The parent repo root is path.dirname(mainGitDir).
- *
- * Returns null for:
- *   - non-git directories (no .git)
- *   - main worktrees (.git is a directory)
- *   - submodules (.git file whose gitdir contains /modules/ not /worktrees/)
- */
-export function resolveParentRepo(cwd: string): string | null {
-  try {
-    const gitPath = path.join(cwd, ".git");
-    if (fs.statSync(gitPath).isDirectory()) return null; // main worktree
-    const worktreeDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
-    if (!worktreeDir.includes("/.git/worktrees/")) return null; // submodule
-    const mainGitDir = path.resolve(worktreeDir, "../..");
-    return path.dirname(mainGitDir);
-  } catch {
-    return null;
-  }
-}
-
 // ── worktree detection ───────────────────────────────────────────────────────
 
-/**
- * Returns true if cwd is a git linked worktree (not a main checkout or submodule).
- *
- * Git invariant: a linked worktree always has .git as a plain file whose content
- * is "gitdir: <path>/.git/worktrees/<name>". The main checkout has .git as a
- * directory; submodules have .git as a file but their gitdir contains /modules/
- * instead of /worktrees/. This check requires no branch name knowledge.
- */
-export function isLinkedWorktree(cwd: string): boolean {
-  try {
-    const gitPath = path.join(cwd, ".git");
-    if (fs.statSync(gitPath).isDirectory()) return false;
-    const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
-    return gitdir.includes("/.git/worktrees/");
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Read the current branch name for a linked worktree.
- * Returns null if the directory is not a linked worktree, is detached HEAD,
- * or no longer exists (e.g. the worktree was deleted after the session was created).
- */
-export function readWorktreeBranch(cwd: string): string | null {
-  try {
-    const gitPath = path.join(cwd, ".git");
-    if (fs.statSync(gitPath).isDirectory()) return null;
-    const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
-    if (!gitdir.includes("/.git/worktrees/")) return null;
-    const head = fs.readFileSync(path.join(gitdir, "HEAD"), "utf8").trim();
-    const m = head.match(/^ref: refs\/heads\/(.+)$/);
-    return m ? m[1] : null;
-  } catch {
-    return null;
-  }
-}
+export { isLinkedWorktree, resolveMainRepo, readWorktreeBranch, listRepoWorktrees } from "./git-utils.ts";
 
 /**
  * Scan the sessions directory for this cwd and return the most recent pit session.
@@ -264,34 +203,6 @@ export async function findPitSession(
     } catch { /* skip corrupt or unreadable sessions */ }
   }
   return null;
-}
-
-/**
- * List all linked worktrees for a git repository (excludes the main checkout).
- * Used by pit -r to include worktree sessions in the picker's current-tab.
- *
- * Returns an empty array for non-git dirs or if git is unavailable.
- */
-export function listRepoWorktrees(repo: string): string[] {
-  try {
-    const out = execFileSync("git", ["-C", repo, "worktree", "list", "--porcelain"], {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const paths: string[] = [];
-    let currentPath = "";
-    for (const line of out.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        currentPath = line.slice(9).trim();
-      } else if (line === "" && currentPath) {
-        if (currentPath !== repo) paths.push(currentPath);
-        currentPath = "";
-      }
-    }
-    return paths;
-  } catch {
-    return [];
-  }
 }
 
 /**

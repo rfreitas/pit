@@ -41,7 +41,7 @@ pit's sandbox is **OS-level** and **allowlist-based**. Worktree creation and ses
 | Mount | Access | Why |
 |---|---|---|
 | Worktree directory | read-write | the agent's workspace |
-| Worktree git metadata, objects, branch ref | read-write | git commits scoped to this session's branch |
+| Worktree git metadata, objects | read-write | staging area and new git objects (commits via pit-escape) |
 | `/pit-agent` (shadow agent dir) | read-write | auth tokens, filtered settings — session-scoped, dies with bwrap |
 | Pi config dir (`~/.pi/agent`) | read-write | needed so `proper-lockfile` can create lock files next to `auth.json` |
 | npm cache, mise shims | read-write | `pi install` inside a session |
@@ -186,7 +186,26 @@ plans/        Design docs and notes
 
 These load only inside pit sessions (never in plain `pi`):
 
-| Extension | Purpose |
-|---|---|
-| `git` | git tool + `/merge` command via pit-escape |
-| `reload` | hooks `/reload` to refresh filtered settings before Pi reloads packages |
+| File | Kind | Purpose |
+|---|---|---|
+| `git.ts` | agent tool | `git` tool — permitted subcommands routed through pit-escape |
+| `merge.ts` | user command | `/merge` — merge worktree branch back to parent |
+| `rename-branch.ts` | user command | `/rename-branch` — rename branch from session topic |
+| `reload.ts` | hook | hooks `/reload` to refresh filtered settings before Pi reloads packages |
+
+Agent tools and user commands are kept in separate files: tools run autonomously and are tightly constrained; commands are human-initiated and trusted.
+
+`pit/escape-client.ts` is a shared socket client imported by all bundled files that communicate with pit-escape. It lives outside `bundled/` so it is not loaded as an extension itself.
+
+### Bundled command: `/rename-branch`
+
+Renames the current worktree branch based on the session topic while preserving the branch path prefix.
+
+```
+/rename-branch
+```
+
+- Only available in pit sessions (guards on `PIT_ESCAPE_SOCKET`).
+- Analyzes the conversation, asks the model for a branch slug.
+- Renames `pi/<id>` to `pi/<topic-slug>` — the prefix is always preserved.
+- Runs `git branch -m` directly inside the sandbox (no pit-escape needed: the bwrap mounts already include `refs/heads/pi/` as read-write).

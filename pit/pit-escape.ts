@@ -45,6 +45,7 @@ import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
+import { resolveMainRepo, readWorktreeBranch, readWorktreeGitdir } from "./git-utils.ts";
 
 const [, , socketPath, worktreePath, agentDir, pitDir, hostSettingsPath] = process.argv;
 if (!socketPath || !worktreePath || !agentDir || !pitDir || !hostSettingsPath) {
@@ -73,42 +74,8 @@ function git(
   });
 }
 
-/**
- * Resolve the main repo root from the worktree's .git pointer file.
- * worktree/.git → gitdir: <mainRepo>/.git/worktrees/<id>
- */
-function resolveMainRepo(): string | null {
-  try {
-    const gitFile = path.join(worktreePath, ".git");
-    if (fs.statSync(gitFile).isDirectory()) return null;
-    const worktreeGitDir = fs.readFileSync(gitFile, "utf8").trim().replace(/^gitdir:\s*/, "");
-    return path.resolve(worktreeGitDir, "../../..");
-  } catch {
-    return null;
-  }
-}
-
-function resolveWorktreeGitDir(): string | null {
-  try {
-    const gitFile = path.join(worktreePath, ".git");
-    if (fs.statSync(gitFile).isDirectory()) return null;
-    return fs.readFileSync(gitFile, "utf8").trim().replace(/^gitdir:\s*/, "");
-  } catch {
-    return null;
-  }
-}
-
-function getCurrentBranch(): string | null {
-  const worktreeGitDir = resolveWorktreeGitDir();
-  if (!worktreeGitDir) return null;
-  try {
-    const head = fs.readFileSync(path.join(worktreeGitDir, "HEAD"), "utf8").trim();
-    const m = head.match(/^ref: refs\/heads\/(.+)$/);
-    return m ? m[1] : null;
-  } catch {
-    return null;
-  }
-}
+// All agent-facing git operations run in the worktree — bound once here.
+const worktreeGit = (args: string[]) => git(args, worktreePath);
 
 function detectParentBranch(mainRepo: string): string | null {
   for (const candidate of ["master", "main"]) {
@@ -126,24 +93,24 @@ function detectParentBranch(mainRepo: string): string | null {
 // ── ops ───────────────────────────────────────────────────────────────────────
 
 async function opGetState(): Promise<object> {
-  const branch = getCurrentBranch();
-  const mainRepo = resolveMainRepo();
+  const branch = readWorktreeBranch(worktreePath);
+  const mainRepo = resolveMainRepo(worktreePath);
   const parentBranch = mainRepo ? detectParentBranch(mainRepo) : null;
 
-  const worktreeGitDir = resolveWorktreeGitDir();
-  const mergeInProgress = worktreeGitDir
-    ? fs.existsSync(path.join(worktreeGitDir, "MERGE_HEAD"))
+  const gitdir = readWorktreeGitdir(worktreePath);
+  const mergeInProgress = gitdir
+    ? fs.existsSync(path.join(gitdir, "MERGE_HEAD"))
     : false;
 
   let conflicts: string[] = [];
   if (mergeInProgress) {
-    const r = await git(["diff", "--name-only", "--diff-filter=U"], worktreePath);
+    const r = await worktreeGit(["diff", "--name-only", "--diff-filter=U"]);
     conflicts = r.stdout.trim().split("\n").filter(Boolean);
   }
 
   let behindParent = false;
   if (parentBranch && mainRepo) {
-    const r = await git(["log", "--oneline", `HEAD..${parentBranch}`], worktreePath);
+    const r = await worktreeGit(["log", "--oneline", `HEAD..${parentBranch}`]);
     behindParent = r.stdout.trim().length > 0;
   }
 
@@ -151,10 +118,10 @@ async function opGetState(): Promise<object> {
 }
 
 async function opMergeToParent(parentBranch: string): Promise<object> {
-  const mainRepo = resolveMainRepo();
+  const mainRepo = resolveMainRepo(worktreePath);
   if (!mainRepo) return { error: "Cannot resolve main repo from worktree" };
 
-  const branch = getCurrentBranch();
+  const branch = readWorktreeBranch(worktreePath);
   if (!branch) return { error: "Cannot determine current branch (detached HEAD?)" };
 
   try {
@@ -234,7 +201,7 @@ const server = net.createServer((socket) => {
     const line = buf.slice(0, nl);
     buf = "";
 
-    let req: { op?: string; args?: unknown; parentBranch?: string };
+    let req: { op?: string; args?: unknown; parentBranch?: string; newBranch?: string };
     try {
       req = JSON.parse(line);
     } catch {
@@ -267,12 +234,7 @@ const server = net.createServer((socket) => {
             };
             break;
           }
-          result = await new Promise((resolve) => {
-            execFile("git", [sub, ...rest], { cwd: worktreePath }, (err, stdout, stderr) => {
-              const code = err ? (Number((err as NodeJS.ErrnoException).code) || 1) : 0;
-              resolve({ stdout, stderr, code });
-            });
-          });
+          result = await worktreeGit([sub, ...rest]);
           break;
         }
 
@@ -290,7 +252,7 @@ const server = net.createServer((socket) => {
 
         case "subscribe": {
           keepOpen = true;
-          const mainRepo = resolveMainRepo();
+          const mainRepo = resolveMainRepo(worktreePath);
           if (!mainRepo) {
             socket.end(JSON.stringify({ error: "cannot resolve main repo from worktree" }) + "\n");
             break;
@@ -349,8 +311,8 @@ const server = net.createServer((socket) => {
         }
 
         case "is-merged": {
-          const branch = getCurrentBranch();
-          const mainRepo = resolveMainRepo();
+          const branch = readWorktreeBranch(worktreePath);
+          const mainRepo = resolveMainRepo(worktreePath);
           if (!branch || !mainRepo) {
             result = { merged: false, branch: branch ?? null, parentBranch: null };
             break;
@@ -369,6 +331,16 @@ const server = net.createServer((socket) => {
         case "refresh-settings":
           result = opRefreshSettings();
           break;
+
+        case "rename-branch": {
+          const { newBranch } = req;
+          if (!newBranch || typeof newBranch !== "string") {
+            result = { error: "rename-branch requires newBranch (string)" };
+            break;
+          }
+          result = await worktreeGit(["branch", "-m", newBranch]);
+          break;
+        }
 
         default:
           result = { error: `Unknown op: ${req.op}` };
