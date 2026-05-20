@@ -32,7 +32,7 @@
  *
  *   Check if worktree branch is merged to parent:
  *     Request:  { "op": "is-merged" }
- *     Response: { "merged": true, "branch": "pi/abc", "parentBranch": "master" }
+ *     Response: { "merged": true, "branch": "pi/abc", "parentBranch": "master", "aheadCount": 0 }
  *
  *   Refresh filtered settings (re-read host settings + apply pit denylist):
  *     Request:  { "op": "refresh-settings" }
@@ -290,17 +290,19 @@ const server = net.createServer((socket) => {
           const branch = readWorktreeBranch(worktreePath);
           const mainRepo = resolveMainRepo(worktreePath);
           if (!branch || !mainRepo) {
-            result = { merged: false, branch: branch ?? null, parentBranch: null };
+            result = { merged: false, branch: branch ?? null, parentBranch: null, aheadCount: 0 };
             break;
           }
           const parentBranch = detectParentBranch(mainRepo);
           if (!parentBranch) {
-            result = { merged: false, branch, parentBranch: null };
+            result = { merged: false, branch, parentBranch: null, aheadCount: 0 };
             break;
           }
           // exit 0 = branch is an ancestor of parentBranch (i.e. merged)
           const mr = await git(["merge-base", "--is-ancestor", branch, parentBranch], mainRepo);
-          result = { merged: mr.code === 0, branch, parentBranch };
+          const countR = await worktreeGit(["rev-list", "--count", `${parentBranch}..HEAD`]);
+          const aheadCount = parseInt(countR.stdout.trim(), 10) || 0;
+          result = { merged: mr.code === 0, branch, parentBranch, aheadCount };
           break;
         }
 

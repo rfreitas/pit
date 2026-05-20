@@ -14,7 +14,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as net from "node:net";
 
 type IsMergedResponse =
-  | { merged: boolean; branch: string | null; parentBranch: string | null }
+  | { merged: boolean; branch: string | null; parentBranch: string | null; aheadCount: number }
   | { error: string };
 
 type SubscribeMessage =
@@ -51,7 +51,13 @@ export default function (pi: ExtensionAPI) {
   async function updateStatus(setStatus: (text: string | undefined) => void): Promise<void> {
     const resp = await sendOnce(socketPath!, { op: "is-merged" });
     if ("error" in resp) return;
-    setStatus(resp.merged && resp.parentBranch ? `✓ merged → ${resp.parentBranch}` : undefined);
+    if (!resp.parentBranch) return;
+    if (resp.aheadCount === 0) {
+      setStatus(`in sync with ${resp.parentBranch}`);
+    } else {
+      const noun = resp.aheadCount === 1 ? "commit" : "commits";
+      setStatus(`${resp.aheadCount} ${noun} ahead of ${resp.parentBranch}`);
+    }
   }
 
   function openSubscription(setStatus: (text: string | undefined) => void): void {
