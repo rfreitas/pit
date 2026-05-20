@@ -328,9 +328,14 @@ function findBwrap(): string | null {
 function getExtensionMounts(): string[] {
   const settingsFile = path.join(AGENT_DIR, "settings.json");
   if (!fs.existsSync(settingsFile)) return [];
-  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8")) as {
-    extensions?: string[];
-  };
+  let settings: { extensions?: string[] };
+  try {
+    const raw = fs.readFileSync(settingsFile, "utf8");
+    if (!raw.trim()) return [];
+    settings = JSON.parse(raw) as { extensions?: string[] };
+  } catch {
+    return [];
+  }
   const mounts = new Set<string>();
   for (const ext of settings.extensions ?? []) {
     if (!fs.existsSync(ext)) continue;
@@ -534,7 +539,7 @@ void (async () => {
     const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
     const session = await findOrCreateLinkedSession(cwd, AGENT_DIR, sandboxMounts);
     if (session.kind === "new") {
-      console.log("pit: already in a git worktree — no pit session found, running no-tree");
+      console.error("pit: already in a git worktree — no pit session found, running no-tree");
     }
     const sessionSettingsPath = makeTempSettingsFile();
     const escapeSocket = await startPitEscape(

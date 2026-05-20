@@ -11,26 +11,26 @@ import type { PitMetadata, WorktreeResult } from "../types.ts";
 // ── worktree creation / recreation ────────────────────────────────────────────
 
 export function createWorktree({ branch, worktree }: { branch: string; worktree: string }): void {
-  console.log("pit: creating worktree");
-  console.log(`  branch:   ${branch}`);
-  console.log(`  worktree: ${worktree}`);
-  execFileSync("git", ["worktree", "add", "-b", branch, worktree, "HEAD"], { stdio: "inherit" });
+  console.error("pit: creating worktree");
+  console.error(`  branch:   ${branch}`);
+  console.error(`  worktree: ${worktree}`);
+  execFileSync("git", ["worktree", "add", "-b", branch, worktree, "HEAD"], { stdio: ["ignore", process.stderr, process.stderr] });
 }
 
 export function recreateWorktree({ repo, branch, worktree }: { repo: string; branch: string; worktree: string }): void {
-  console.log("pit: worktree missing, attempting to recreate…");
+  console.error("pit: worktree missing, attempting to recreate…");
   if (!branchExists(repo, branch)) {
     console.error(`pit: branch '${branch}' no longer exists — cannot recreate worktree`);
     process.exit(1);
   }
   try {
     execSync("git worktree prune", { cwd: repo, stdio: "ignore" });
-    execFileSync("git", ["-C", repo, "worktree", "add", worktree, branch], { stdio: "inherit" });
+    execFileSync("git", ["-C", repo, "worktree", "add", worktree, branch], { stdio: ["ignore", process.stderr, process.stderr] });
   } catch (e: unknown) {
     console.error(`pit: failed to recreate worktree: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
   }
-  console.log(`pit: worktree recreated at ${worktree}`);
+  console.error(`pit: worktree recreated at ${worktree}`);
 }
 
 // ── worktree check ────────────────────────────────────────────────────────────
