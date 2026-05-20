@@ -31,9 +31,7 @@ import {
   type SandboxMounts,
   type OverlayMount,
   resolveUnversionedDirs,
-  cwdToBucket as _cwdToBucket,
   parseFlags,
-  buildAnnouncement,
   setupNewSession as _setupNewSession,
   isLinkedWorktree,
   resolveMainRepo,
@@ -45,6 +43,12 @@ import {
   genId,
   prepareLinkedWorktreeSession,
 } from "./utils.ts";
+import {
+  buildNoTreeMeta,
+  buildWorktreeMeta,
+  buildSandboxMountSpec,
+  systemPromptArgs,
+} from "./pure.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -108,26 +112,6 @@ function branchExists(repo: string, branch: string): boolean {
   }
 }
 
-// ── worktree: pure computations ───────────────────────────────────────────────
-
-function buildBaseMeta(repo: string) {
-  return { id: genId(), repo, created: new Date().toISOString() };
-}
-
-function buildNoTreeMeta(cwd: string, repo: string, reason: "no-repo" | "forced"): PitMetadata {
-  return { ...buildBaseMeta(repo), worktree: cwd, branch: "", mode: "no-tree", noTreeReason: reason };
-}
-
-function buildWorktreeMeta(repo: string): PitMetadata {
-  const base = buildBaseMeta(repo);
-  return {
-    ...base,
-    worktree: path.join(path.dirname(repo), `${path.basename(repo)}-wt-${base.id}`),
-    branch: `pi/${base.id}`,
-    mode: "worktree",
-  };
-}
-
 // ── worktree: side effects ────────────────────────────────────────────────────
 
 function createWorktree({ branch, worktree }: { branch: string; worktree: string }): void {
@@ -186,14 +170,17 @@ function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): Worktre
   const repo = gitRepoRoot();
   const cwd = process.cwd();
 
+  const id = genId();
+  const created = new Date().toISOString();
+
   if (!repo) {
-    return { mode: "no-tree", cwd, meta: buildNoTreeMeta(cwd, cwd, "no-repo") };
+    return { mode: "no-tree", cwd, meta: buildNoTreeMeta(cwd, cwd, "no-repo", id, created) };
   }
   if (forceNoTree) {
-    return { mode: "no-tree", cwd, meta: buildNoTreeMeta(cwd, repo, "forced") };
+    return { mode: "no-tree", cwd, meta: buildNoTreeMeta(cwd, repo, "forced", id, created) };
   }
 
-  const meta = buildWorktreeMeta(repo);
+  const meta = buildWorktreeMeta(repo, id, created);
   createWorktree(meta);
   return { mode: "worktree", cwd: meta.worktree, meta };
 }
@@ -214,15 +201,6 @@ function resolveSandboxMounts(cwd: string, useSandbox: boolean): SandboxMounts |
 
 function setupNewSession(result: WorktreeResult, sandboxMounts: SandboxMounts | undefined): string {
   return _setupNewSession(result, AGENT_DIR, sandboxMounts);
-}
-
-/**
- * Build the --append-system-prompt args to pass to pi on every launch.
- * Gives the model current pit mode and sandbox state without touching the
- * session file tree.
- */
-function systemPromptArgs(meta: PitMetadata, sandboxMounts: SandboxMounts | undefined): string[] {
-  return ["--append-system-prompt", buildAnnouncement(meta, sandboxMounts)];
 }
 
 /**
@@ -498,19 +476,18 @@ function resolveWorktreeGitRwMounts(cwd: string): Array<{ path: string; label?: 
 }
 
 /**
- * Build the canonical mount list for the bwrap sandbox.
+ * Collect IO inputs and delegate to the pure buildSandboxMountSpec.
  *
- * agentDirReal must be the symlink-resolved path: --ro-bind HOME HOME copies
- * the symlink into the new root, so mounting the real target here is what makes
- * the rw --bind override the ro home mount correctly.
+ * All filesystem reads happen here:
+ *   - resolveMainRepo + resolveUnversionedDirs + fs.statSync → overlay dirs
+ *   - resolveWorktreeGitRwMounts → git rw mount paths
  *
  * bwrapLaunch emits ro first then rw — later mounts win, so rw overrides ro
  * for any overlapping paths (e.g. the rw worktree subdir beats the ro home).
  */
 function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[], nodeDir: string): SandboxMounts {
-  // Overlay mounts: unversioned dirs from the parent repo overlaid onto the
-  // worktree with a tmpfs upper layer. Only applies to linked worktrees.
-  const overlay: OverlayMount[] = [];
+  // IO: collect overlay dirs from the parent repo's unversioned directories.
+  const overlayDirs: OverlayMount[] = [];
   const parentRepo = resolveMainRepo(cwd);
   if (parentRepo) {
     for (const rel of resolveUnversionedDirs(parentRepo)) {
@@ -518,43 +495,15 @@ function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: 
       const dest = path.join(cwd, rel);
       try {
         if (fs.statSync(src).isDirectory()) {
-          overlay.push({ src, dest, label: rel });
+          overlayDirs.push({ src, dest, label: rel });
         }
       } catch { /* src disappeared between git scan and stat — skip */ }
     }
   }
+  // IO: collect worktree-scoped git rw mounts.
+  const gitRwMounts = resolveWorktreeGitRwMounts(cwd);
 
-  return {
-    ro: [
-      // home (ro base — covers mise installs, ~/.cache/ms-playwright, etc.)
-      { path: HOME, label: "home directory" },
-      // system dirs
-      { path: "/usr",     label: "system dirs" },
-      { path: "/etc",     label: "system dirs" },
-      // /etc/resolv.conf → /mnt/wsl/resolv.conf on WSL; without this mount
-      // the symlink dangles inside the sandbox and DNS fails with EAI_AGAIN.
-      { path: "/mnt/wsl", label: "system dirs", optional: true },
-      { path: "/lib",     label: "system dirs", optional: true },
-      { path: "/lib64",   label: "system dirs", optional: true },
-      { path: "/bin",     label: "system dirs", optional: true },
-      { path: "/sbin",    label: "system dirs", optional: true },
-      // Pi extensions and their node_modules
-      ...extensionMounts.map((p) => ({ path: p, label: "Pi extensions" })),
-    ],
-    rw: [
-      // git access scoped to this worktree's branch (no-op for non-worktree sessions)
-      ...resolveWorktreeGitRwMounts(cwd),
-      // worktree directory and pi config
-      { path: cwd },
-      { path: agentDirReal,                               label: "Pi config dir" },
-      // npm cache + global node_modules (needed for `pi install` inside a session)
-      { path: path.join(HOME, ".npm"),                    label: "npm cache" },
-      { path: path.join(HOME, ".local/share/mise/shims"), label: "mise shims" },
-      { path: path.join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },
-      { path: path.join(nodeDir, "bin"),                  label: "Node.js bin" },
-    ],
-    overlay,
-  };
+  return buildSandboxMountSpec({ home: HOME, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs });
 }
 
 /**

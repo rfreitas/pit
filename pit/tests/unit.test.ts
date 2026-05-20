@@ -26,6 +26,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, resolveMainRepo, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, resolveUnversionedDirs, type WorktreeResult, type SandboxMounts, type OverlayMount, type PitMetadata } from "../utils.ts";
+import { buildNoTreeMeta, buildWorktreeMeta, buildSandboxMountSpec, buildSessionLines, systemPromptArgs } from "../pure.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -1169,6 +1170,252 @@ describe("writeFilteredSettings", () => {
     expect(() => writeFilteredSettings(agentDir, {}, outPath)).not.toThrow();
     const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
     expect(result).toEqual({});
+  });
+});
+
+// ── buildNoTreeMeta ──────────────────────────────────────────────────────────
+//
+// Pure metadata builder for no-tree sessions. Callers supply id + created so
+// the IO boundary (genId, new Date) stays in worktreeCheck / prepareLinkedWorktreeSession.
+
+describe("buildNoTreeMeta", () => {
+  it("sets mode to 'no-tree'", () => {
+    expect(buildNoTreeMeta("/cwd", "/repo", "no-repo", "abc", "2026-01-01T00:00:00.000Z").mode).toBe("no-tree");
+  });
+
+  it("sets noTreeReason correctly for all variants", () => {
+    expect(buildNoTreeMeta("/cwd", "/repo", "no-repo",         "a", "t").noTreeReason).toBe("no-repo");
+    expect(buildNoTreeMeta("/cwd", "/repo", "forced",          "a", "t").noTreeReason).toBe("forced");
+    expect(buildNoTreeMeta("/cwd", "/repo", "linked-worktree", "a", "t").noTreeReason).toBe("linked-worktree");
+  });
+
+  it("uses the supplied id and created timestamp", () => {
+    const meta = buildNoTreeMeta("/cwd", "/repo", "no-repo", "deadbeef", "2026-06-01T12:00:00.000Z");
+    expect(meta.id).toBe("deadbeef");
+    expect(meta.created).toBe("2026-06-01T12:00:00.000Z");
+  });
+
+  it("sets worktree and repo to the provided paths", () => {
+    const meta = buildNoTreeMeta("/my/cwd", "/my/repo", "forced", "id", "ts");
+    expect(meta.worktree).toBe("/my/cwd");
+    expect(meta.repo).toBe("/my/repo");
+  });
+
+  it("always has an empty branch", () => {
+    expect(buildNoTreeMeta("/cwd", "/repo", "no-repo", "id", "ts").branch).toBe("");
+  });
+});
+
+// ── buildWorktreeMeta ─────────────────────────────────────────────────────────
+//
+// Pure metadata builder for worktree sessions. Derives worktree path and branch
+// from repo + id. Callers supply id + created.
+
+describe("buildWorktreeMeta", () => {
+  it("sets mode to 'worktree'", () => {
+    expect(buildWorktreeMeta("/repo", "abc12345", "ts").mode).toBe("worktree");
+  });
+
+  it("derives branch as pi/<id>", () => {
+    expect(buildWorktreeMeta("/repo", "abc12345", "ts").branch).toBe("pi/abc12345");
+  });
+
+  it("derives worktree path as <parent>/<basename>-wt-<id>", () => {
+    const meta = buildWorktreeMeta("/home/user/repo", "abc12345", "ts");
+    expect(meta.worktree).toBe("/home/user/repo-wt-abc12345");
+  });
+
+  it("uses the supplied id and created timestamp", () => {
+    const meta = buildWorktreeMeta("/repo", "deadbeef", "2026-06-01T00:00:00.000Z");
+    expect(meta.id).toBe("deadbeef");
+    expect(meta.created).toBe("2026-06-01T00:00:00.000Z");
+  });
+
+  it("sets repo to the provided path", () => {
+    expect(buildWorktreeMeta("/my/repo", "id", "ts").repo).toBe("/my/repo");
+  });
+});
+
+// ── buildSessionLines ─────────────────────────────────────────────────────────
+//
+// Pure content builder for session JSONL files. setupNewSession calls this after
+// generating sessionId + isoTs at the IO boundary.
+
+describe("buildSessionLines", () => {
+  const result: WorktreeResult = {
+    mode: "worktree",
+    cwd: "/tmp/repo-wt-abc",
+    meta: {
+      id: "abc12345",
+      repo: "/tmp/repo",
+      worktree: "/tmp/repo-wt-abc",
+      branch: "pi/abc12345",
+      created: "2026-01-01T00:00:00.000Z",
+      mode: "worktree",
+    },
+  };
+
+  it("returns exactly 3 newline-terminated lines", () => {
+    const lines = buildSessionLines(result, "uuid-1", "2026-01-01T00:00:00.000Z").trim().split("\n");
+    expect(lines).toHaveLength(3);
+  });
+
+  it("line 1 is a session header with the supplied id and timestamp", () => {
+    const [line1] = buildSessionLines(result, "my-uuid", "2026-06-01T12:00:00.000Z").split("\n");
+    const header = JSON.parse(line1);
+    expect(header.type).toBe("session");
+    expect(header.id).toBe("my-uuid");
+    expect(header.timestamp).toBe("2026-06-01T12:00:00.000Z");
+    expect(header.cwd).toBe(result.cwd);
+    expect(header.version).toBe(CURRENT_SESSION_VERSION);
+  });
+
+  it("line 2 is a pit CustomEntry with the worktree metadata", () => {
+    const [, line2] = buildSessionLines(result, "uuid", "ts").split("\n");
+    const entry = JSON.parse(line2);
+    expect(entry.type).toBe("custom");
+    expect(entry.customType).toBe("pit");
+    expect(entry.parentId).toBeNull();
+    expect(entry.data.id).toBe(result.meta.id);
+    expect(entry.data.branch).toBe(result.meta.branch);
+  });
+
+  it("line 3 is a custom_message with display:true that chains to line 2", () => {
+    const [, line2, line3] = buildSessionLines(result, "uuid", "ts").split("\n");
+    const custom = JSON.parse(line2);
+    const msg = JSON.parse(line3);
+    expect(msg.type).toBe("custom_message");
+    expect(msg.display).toBe(true);
+    expect(msg.parentId).toBe(custom.id);
+  });
+
+  it("sandbox section appears in line 3 content when mounts provided", () => {
+    const mounts: SandboxMounts = { ro: [{ path: "/home", label: "home directory" }], rw: [{ path: result.cwd }] };
+    const [, , line3] = buildSessionLines(result, "uuid", "ts", mounts).split("\n");
+    expect(JSON.parse(line3).content).toContain("Sandbox (bwrap)");
+  });
+
+  it("sandbox section absent when no mounts provided", () => {
+    const [, , line3] = buildSessionLines(result, "uuid", "ts").split("\n");
+    expect(JSON.parse(line3).content).not.toContain("Sandbox (bwrap)");
+  });
+
+  it("calling twice produces different id1/id2 values (not hardcoded)", () => {
+    const a = JSON.parse(buildSessionLines(result, "u", "t").split("\n")[1]).id;
+    const b = JSON.parse(buildSessionLines(result, "u", "t").split("\n")[1]).id;
+    // With high probability two 4-byte random hex strings differ
+    expect(a).not.toBe(b);
+  });
+});
+
+// ── buildSandboxMountSpec ─────────────────────────────────────────────────────
+//
+// Pure mount-list assembler. Callers resolve all IO (git rw mounts, overlay
+// dirs) and pass pre-computed arrays.
+
+describe("buildSandboxMountSpec", () => {
+  const base = {
+    home: "/home/user",
+    cwd: "/home/user/repo-wt-abc",
+    agentDirReal: "/home/user/.pi/agent",
+    extensionMounts: [],
+    nodeDir: "/usr/local",
+    gitRwMounts: [] as Array<{ path: string; label?: string }>,
+    overlayDirs: [] as OverlayMount[],
+  };
+
+  it("ro section includes home directory entry", () => {
+    const mounts = buildSandboxMountSpec(base);
+    expect(mounts.ro.some((m) => m.label === "home directory")).toBe(true);
+  });
+
+  it("ro section includes /usr and /etc as system dirs", () => {
+    const mounts = buildSandboxMountSpec(base);
+    const systemPaths = mounts.ro.filter((m) => m.label === "system dirs").map((m) => m.path);
+    expect(systemPaths).toContain("/usr");
+    expect(systemPaths).toContain("/etc");
+  });
+
+  it("rw section includes the cwd", () => {
+    const mounts = buildSandboxMountSpec(base);
+    expect(mounts.rw.some((m) => m.path === base.cwd)).toBe(true);
+  });
+
+  it("rw section includes the agentDirReal as Pi config dir", () => {
+    const mounts = buildSandboxMountSpec(base);
+    expect(mounts.rw.some((m) => m.label === "Pi config dir" && m.path === base.agentDirReal)).toBe(true);
+  });
+
+  it("extension mounts appear in ro section labelled 'Pi extensions'", () => {
+    const mounts = buildSandboxMountSpec({ ...base, extensionMounts: ["/ext/foo.ts", "/ext/bar.ts"] });
+    const extEntries = mounts.ro.filter((m) => m.label === "Pi extensions");
+    expect(extEntries.map((m) => m.path)).toContain("/ext/foo.ts");
+    expect(extEntries.map((m) => m.path)).toContain("/ext/bar.ts");
+  });
+
+  it("gitRwMounts appear at the start of the rw section", () => {
+    const gitMounts = [
+      { path: "/repo/.git/worktrees/wt", label: "worktree git metadata" },
+      { path: "/repo/.git/objects",      label: "git objects" },
+    ];
+    const mounts = buildSandboxMountSpec({ ...base, gitRwMounts: gitMounts });
+    expect(mounts.rw[0].label).toBe("worktree git metadata");
+    expect(mounts.rw[1].label).toBe("git objects");
+  });
+
+  it("overlayDirs appear in the overlay field", () => {
+    const overlayDirs: OverlayMount[] = [
+      { src: "/repo/node_modules", dest: "/repo-wt/node_modules", label: "node_modules" },
+    ];
+    const mounts = buildSandboxMountSpec({ ...base, overlayDirs });
+    expect(mounts.overlay).toHaveLength(1);
+    expect(mounts.overlay![0].label).toBe("node_modules");
+  });
+
+  it("empty overlayDirs produces an empty overlay array", () => {
+    const mounts = buildSandboxMountSpec(base);
+    expect(mounts.overlay).toEqual([]);
+  });
+
+  it("home path drives the npm + mise + nodeDir rw entries", () => {
+    const mounts = buildSandboxMountSpec({ ...base, home: "/custom/home", nodeDir: "/custom/node" });
+    const rwPaths = mounts.rw.map((m) => m.path);
+    expect(rwPaths).toContain("/custom/home/.npm");
+    expect(rwPaths).toContain("/custom/home/.local/share/mise/shims");
+    expect(rwPaths).toContain("/custom/node/lib/node_modules");
+    expect(rwPaths).toContain("/custom/node/bin");
+  });
+});
+
+// ── systemPromptArgs ──────────────────────────────────────────────────────────
+//
+// Thin wrapper that packages the announcement into --append-system-prompt args.
+
+describe("systemPromptArgs", () => {
+  const meta: PitMetadata = {
+    id: "abc",
+    repo: "/repo",
+    worktree: "/repo-wt-abc",
+    branch: "pi/abc",
+    created: "2026-01-01T00:00:00.000Z",
+    mode: "worktree",
+  };
+
+  it("returns a two-element array", () => {
+    expect(systemPromptArgs(meta, undefined)).toHaveLength(2);
+  });
+
+  it("first element is --append-system-prompt", () => {
+    expect(systemPromptArgs(meta, undefined)[0]).toBe("--append-system-prompt");
+  });
+
+  it("second element is the buildAnnouncement output", () => {
+    expect(systemPromptArgs(meta, undefined)[1]).toBe(buildAnnouncement(meta, undefined));
+  });
+
+  it("sandbox section is included when mounts are provided", () => {
+    const mounts: SandboxMounts = { ro: [{ path: "/home" }], rw: [{ path: "/work" }] };
+    expect(systemPromptArgs(meta, mounts)[1]).toContain("Sandbox (bwrap)");
   });
 });
 

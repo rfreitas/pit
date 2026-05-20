@@ -46,6 +46,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { resolveMainRepo, readWorktreeBranch, readWorktreeGitdir } from "./git-utils.ts";
+import { readPitConfig, writeFilteredSettings } from "./utils.ts";
 
 const [, , socketPath, worktreePath, agentDir, pitDir, hostSettingsPath] = process.argv;
 if (!socketPath || !worktreePath || !agentDir || !pitDir || !hostSettingsPath) {
@@ -149,32 +150,7 @@ async function opMergeToParent(parentBranch: string): Promise<object> {
  */
 function opRefreshSettings(): object {
   try {
-    // Read current host settings (absent file = empty object, not a crash)
-    const settingsFile = path.join(agentDir, "settings.json");
-    const rawSettings = fs.existsSync(settingsFile)
-      ? fs.readFileSync(settingsFile, "utf8")
-      : "{}";
-    const settings = JSON.parse(rawSettings) as { packages?: string[] };
-
-    // Read pit config denylist (absent = no filtering)
-    let denyPackages: string[] = [];
-    const configPath = path.join(pitDir, "config.json");
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        denyPackages?: string[];
-      };
-      denyPackages = config.denyPackages ?? [];
-    }
-
-    // Filter and write
-    const filtered = {
-      ...settings,
-      packages: (settings.packages ?? []).filter((p) => !denyPackages.includes(p)),
-    };
-
-    fs.mkdirSync(path.dirname(hostSettingsPath), { recursive: true });
-    fs.writeFileSync(hostSettingsPath, JSON.stringify(filtered, null, 2) + "\n");
-
+    writeFilteredSettings(agentDir, readPitConfig(pitDir), hostSettingsPath);
     return { ok: true };
   } catch (e) {
     return { error: (e as Error).message };
