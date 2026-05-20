@@ -126,6 +126,19 @@ bash .pi/skills/pit-dev/scripts/reset.sh
 bash .pi/skills/pit-dev/scripts/teardown.sh
 ```
 
+## If something doesn't work
+
+If any command or test fails, do not just report the error — diagnose the cause
+and propose a concrete fix to the user before attempting anything. Typical issues:
+
+- **Unexpected stdout content**: a `console.log` in pit source is leaking to stdout — change it to `console.error`
+- **`Unexpected end of JSON input`**: a `JSON.parse` call is not guarding against empty file content — add a `.trim() || "{}"` guard
+- **Test repo cwd wrong**: pit uses `process.cwd()` — ensure the node invocation runs with the test repo as cwd, not the agent worktree
+- **Nested bwrap skipped**: expected when running inside a pit session on kernels that block nested user namespaces — note it and continue
+- **`$PIT_SCRIPT` empty**: `setup.sh` failed to resolve the pit path — check the relative path depth from `scripts/` to `pit/`
+
+---
+
 ## Adding a new E2E test
 
 Follow the pattern in `pit/tests/e2e.test.ts`:
