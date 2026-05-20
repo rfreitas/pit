@@ -38,6 +38,8 @@ export PATH="$HOME/Repos/agent/pit:$PATH"
 
 pit's sandbox is **OS-level** and **allowlist-based**. Worktree creation and session setup run in the outer process; once that's done, the Pi session itself is launched inside a [`bwrap`](https://github.com/containers/bubblewrap) user/PID namespace with a minimal filesystem. If bwrap is not found, pit warns and runs unsandboxed.
 
+> **Limitation — IPC channels cross sandbox boundaries.** bwrap enforces filesystem and process isolation, but it cannot protect against application-level sockets that the sandboxed process can reach. pit-escape runs outside the sandbox with full host access and listens on a Unix socket whose path is set in `PIT_ESCAPE_SOCKET` inside the environment. Any code running in the session — including loaded extensions — can connect to that socket and issue its full op set. This is an intentional design tradeoff, not a bypass of bwrap itself. See [`security.md`](./security.md) for a full treatment.
+
 | Mount | Access | Why |
 |---|---|---|
 | Worktree directory | read-write | the agent's workspace |
