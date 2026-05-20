@@ -388,3 +388,474 @@ describe("git log and diff ops for rename-branch context", () => {
     expect(resp.stdout).toContain("feature.ts");
   });
 });
+
+// ── git test helpers (shared by is-merged and subscribe describe blocks) ──────
+
+/** Create a git repo with an initial commit on `branch` (default: master). */
+function initGitRepo(dir: string, branch = "master"): void {
+  execFileSync("git", ["init", "-b", branch], { cwd: dir });
+  execFileSync("git", ["config", "user.email", "test@pit.test"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "pit test"], { cwd: dir });
+  fs.writeFileSync(path.join(dir, "README.md"), "init\n");
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+}
+
+/** Add a file commit in `dir` (worktree or main repo). */
+function addCommit(dir: string, filename = "work.txt"): void {
+  fs.writeFileSync(path.join(dir, filename), String(Date.now()));
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["commit", "-m", `add ${filename}`], { cwd: dir });
+}
+
+/** Create a linked worktree from the main repo's HEAD. */
+function createWorktree(mainRepo: string, worktreeDir: string, branch: string): void {
+  execFileSync("git", ["-C", mainRepo, "worktree", "add", "-b", branch, worktreeDir, "HEAD"]);
+}
+
+// ── subscribe helper ──────────────────────────────────────────────────────────
+
+interface Subscription {
+  /** Resolves with the next message, or rejects after timeoutMs. */
+  waitForMessage(timeoutMs?: number): Promise<Record<string, unknown>>;
+  close(): void;
+}
+
+/**
+ * Open a persistent subscribe connection to pit-escape.
+ * Messages arrive as newline-delimited JSON; waitForMessage() lets tests
+ * read them one at a time without racing with the data event.
+ */
+function openSubscription(socketPath: string): Subscription {
+  const sock = net.createConnection(socketPath);
+  let buf = "";
+  const queue: Array<Record<string, unknown>> = [];
+  const waiters: Array<{
+    resolve: (m: Record<string, unknown>) => void;
+    reject: (e: Error) => void;
+  }> = [];
+
+  const dispatch = (msg: Record<string, unknown>) => {
+    const waiter = waiters.shift();
+    if (waiter) waiter.resolve(msg);
+    else queue.push(msg);
+  };
+
+  sock.once("connect", () => sock.write(JSON.stringify({ op: "subscribe" }) + "\n"));
+  sock.on("data", (chunk: Buffer) => {
+    buf += chunk.toString("utf8");
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      try { dispatch(JSON.parse(line)); } catch { /* skip malformed */ }
+    }
+  });
+  sock.once("end", () => {
+    // Server closed the connection (error case) — reject any pending waiters
+    for (const w of waiters) w.reject(new Error("subscribe: connection closed"));
+    waiters.length = 0;
+  });
+  sock.once("error", (err: Error) => {
+    for (const w of waiters) w.reject(err);
+    waiters.length = 0;
+  });
+
+  return {
+    waitForMessage: (timeoutMs = 3000) =>
+      new Promise((resolve, reject) => {
+        const queued = queue.shift();
+        if (queued) { resolve(queued); return; }
+        const entry = { resolve, reject };
+        waiters.push(entry);
+        setTimeout(() => {
+          const idx = waiters.indexOf(entry);
+          if (idx !== -1) {
+            waiters.splice(idx, 1);
+            reject(new Error("subscribe: timed out waiting for message"));
+          }
+        }, timeoutMs);
+      }),
+    close: () => sock.destroy(),
+  };
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+describe("pit-escape refresh-settings op", () => {
+  const denylist = [
+    "npm:@casualjim/pi-heimdall",
+    "npm:@spences10/pi-confirm-destructive",
+    "npm:@jerryan/pi-sanity",
+  ];
+
+  const allPackages = [...denylist, "npm:pi-agent-browser-native", "npm:agent-browser"];
+
+  it("responds { ok: true } on success", async () => {
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: allPackages })
+    );
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: denylist })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    const resp = await send(socketPath, { op: "refresh-settings" });
+    expect(resp.ok).toBe(true);
+    expect(resp.error).toBeUndefined();
+  });
+
+  it("writes the filtered settings file to hostSettingsPath", async () => {
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: allPackages })
+    );
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: denylist })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    await send(socketPath, { op: "refresh-settings" });
+
+    expect(fs.existsSync(hostSettingsPath)).toBe(true);
+    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    for (const p of denylist) {
+      expect(written.packages).not.toContain(p);
+    }
+    expect(written.packages).toContain("npm:pi-agent-browser-native");
+    expect(written.packages).toContain("npm:agent-browser");
+  });
+
+  it("without a pit config, passes all packages through unchanged", async () => {
+    const agentDir = makeDir();
+    const pitDir = makeDir(); // no config.json
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: allPackages })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    await send(socketPath, { op: "refresh-settings" });
+
+    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    expect(written.packages).toEqual(allPackages);
+  });
+
+  it("picks up changes to settings.json on a second call (the /reload case)", async () => {
+    // Simulate: user runs `pi install npm:new-package` outside the session.
+    // A subsequent /reload in the pit session should pick it up (minus denylist).
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: allPackages })
+    );
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: denylist })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+
+    // First call — baseline
+    await send(socketPath, { op: "refresh-settings" });
+    const before = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    expect(before.packages).not.toContain("npm:brand-new-package");
+
+    // Host settings change (global install outside the session)
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [...allPackages, "npm:brand-new-package"] })
+    );
+
+    // Second call — should pick up the new package (and still apply denylist)
+    await send(socketPath, { op: "refresh-settings" });
+    const after = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    expect(after.packages).toContain("npm:brand-new-package");
+    for (const p of denylist) {
+      expect(after.packages).not.toContain(p);
+    }
+  });
+
+  it("absent settings.json produces an empty-packages output without crashing", async () => {
+    const agentDir = makeDir(); // no settings.json
+    const pitDir = makeDir();
+    const outDir = makeDir();
+    const hostSettingsPath = path.join(outDir, "settings.json");
+
+    fs.writeFileSync(
+      path.join(pitDir, "config.json"),
+      JSON.stringify({ denyPackages: denylist })
+    );
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    const resp = await send(socketPath, { op: "refresh-settings" });
+    expect(resp.ok).toBe(true);
+    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
+    expect(written.packages ?? []).toEqual([]);
+  });
+});
+
+// ── is-merged op ──────────────────────────────────────────────────────────────
+describe("pit-escape is-merged op", () => {
+  it("returns merged:false for an unmerged branch with unique commits", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir); // diverges from master
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.branch).toBe("pi/test");
+    expect(resp.parentBranch).toBe("master");
+  });
+
+  it("returns merged:true after the branch is fast-forward merged into master", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    // Fast-forward master to include the worktree branch's commit
+    execFileSync("git", ["-C", mainRepo, "merge", "--ff-only", "pi/test"]);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(true);
+    expect(resp.branch).toBe("pi/test");
+    expect(resp.parentBranch).toBe("master");
+  });
+
+  it("returns merged:true when branch has no unique commits (newly forked, is-ancestor of master)", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    // No extra commits — branch tip equals master tip; branch IS an ancestor of master
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(true);
+    expect(resp.parentBranch).toBe("master");
+  });
+
+  it("detects 'main' as the parent branch when master does not exist", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo, "main");
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.parentBranch).toBe("main");
+  });
+
+  it("returns merged:false with null parentBranch when neither master nor main exists", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo, "trunk"); // neither master nor main
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.parentBranch).toBeNull();
+  });
+
+  it("returns merged:false with null branch when worktreePath is not a linked worktree", async () => {
+    const agentDir = makeDir(); // plain temp dir — no .git file
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: agentDir });
+    const resp = await send(socketPath, { op: "is-merged" });
+
+    expect(resp.merged).toBe(false);
+    expect(resp.branch).toBeNull();
+    expect(resp.parentBranch).toBeNull();
+  });
+});
+
+// ── subscribe op ─────────────────────────────────────────────────────────────
+
+describe("pit-escape subscribe op", () => {
+  it("acknowledges subscription with { ok: true, watching: parentBranch }", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const sub = openSubscription(socketPath);
+    const ack = await sub.waitForMessage();
+    sub.close();
+
+    expect(ack.ok).toBe(true);
+    expect(ack.watching).toBe("master");
+  });
+
+  it("pushes { event: 'ref-change' } when parent branch is fast-forwarded", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const sub = openSubscription(socketPath);
+
+    // Wait for ack before triggering — ensures watcher is set up first
+    await sub.waitForMessage();
+
+    // Fast-forward master to include the worktree commit
+    execFileSync("git", ["-C", mainRepo, "merge", "--ff-only", "pi/test"]);
+
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
+
+  it("sends error and closes when worktreePath is not a linked worktree", async () => {
+    const agentDir = makeDir(); // plain dir, no .git file
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: agentDir });
+    const sub = openSubscription(socketPath);
+    const resp = await sub.waitForMessage();
+    sub.close();
+
+    expect(resp.error).toBeDefined();
+    expect(resp.ok).toBeUndefined();
+  });
+
+  it("sends error and closes when no master/main branch exists", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo, "trunk");
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const sub = openSubscription(socketPath);
+    const resp = await sub.waitForMessage();
+    sub.close();
+
+    expect(resp.error).toBeDefined();
+    expect(resp.ok).toBeUndefined();
+  });
+
+  it("pushes ref-change when merge-to-parent op is used (the /merge command path)", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const sub = openSubscription(socketPath);
+    await sub.waitForMessage(); // ack
+
+    // Trigger via the escape op exactly as /merge does
+    const mergeResp = await send(socketPath, { op: "merge-to-parent", parentBranch: "master" });
+    expect(mergeResp.code).toBe(0);
+
+    // Subscription must receive the push without any polling
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
+
+  it("server continues to handle other requests after a subscription is closed", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+    addCommit(worktreeDir);
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+
+    // Open subscription, wait for ack, then close it
+    const sub = openSubscription(socketPath);
+    await sub.waitForMessage();
+    sub.close();
+
+    // A little breathing room for the server to process the close
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Server should still handle normal request-response
+    const resp = await send(socketPath, { op: "is-merged" });
+    expect(resp.merged).toBe(false); // branch has unique commits
+  });
+});

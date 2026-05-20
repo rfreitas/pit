@@ -40,6 +40,8 @@ import {
   readWorktreeBranch,
   readPitConfig,
   writeFilteredSettings,
+  genId,
+  prepareLinkedWorktreeSession,
 } from "./utils.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -77,10 +79,6 @@ const SESSION_FLAGS = new Set([
 ]);
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function genId(): string {
-  return crypto.randomBytes(4).toString("hex");
-}
 
 // ── git ───────────────────────────────────────────────────────────────────────
 
@@ -710,65 +708,35 @@ void (async () => {
   // This catches any linked worktree, not just pit ones — nesting is never useful.
   if (!noTree && isLinkedWorktree(process.cwd())) {
     const cwd = process.cwd();
-    if (!userManagingSession) {
-      const existing = await findPitSession(cwd, AGENT_DIR);
-      if (existing) {
-        // Resume the existing pit session for this worktree
-        const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
-        let settingsPath: string | undefined;
-        if (sandbox && findBwrap()) {
-          settingsPath = hostSettingsPath(existing.meta.id);
-          writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), settingsPath);
-        }
-        const escapeSocket = await startPitEscape(
-          cwd,
-          existing.meta.id,
-          settingsPath ?? hostSettingsPath(existing.meta.id),
-        );
-        if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
-        await launch(
-          cwd,
-          ["--session", existing.sessionFile, ...extensionArgs(), ...systemPromptArgs(existing.meta, sandboxMounts), ...filteredArgv],
-          sandbox,
-          settingsPath,
-        );
-        return;
-      }
-      console.log("pit: already in a git worktree — no pit session found, running no-tree");
-    }
-    // No pit session found, or user is managing their own session.
-    // Start a new no-tree session in place (don't nest worktrees).
-    const meta: PitMetadata = {
-      id: genId(),
-      repo: cwd,
-      worktree: cwd,
-      branch: "",
-      created: new Date().toISOString(),
-      mode: "no-tree",
-      noTreeReason: "linked-worktree",
-    };
-    const result: WorktreeResult = { mode: "no-tree", cwd, meta };
-    let piArgs: string[];
     if (userManagingSession) {
-      piArgs = filteredArgv;
-    } else {
-      const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
-      const sessionFile = setupNewSession(result, sandboxMounts);
-      let settingsPath: string | undefined;
-      if (sandbox && findBwrap()) {
-        settingsPath = hostSettingsPath(meta.id);
-        writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), settingsPath);
-      }
-      const escapeSocket = await startPitEscape(
-        cwd,
-        meta.id,
-        settingsPath ?? hostSettingsPath(meta.id),
-      );
-      if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
-      piArgs = ["--session", sessionFile, ...extensionArgs(), ...systemPromptArgs(meta, sandboxMounts), ...filteredArgv];
-      await launch(cwd, piArgs, sandbox, settingsPath);
+      // User controls session directly — launch in place, no pit session management.
+      await launch(cwd, filteredArgv, sandbox);
       return;
     }
+    const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
+    const session = await prepareLinkedWorktreeSession({
+      cwd,
+      agentDir: AGENT_DIR,
+      pitDir: PIT_DIR,
+      useSandbox: sandbox,
+      hasBwrap: !!findBwrap(),
+      sandboxMounts,
+    });
+    if (session.kind === "new") {
+      console.log("pit: already in a git worktree — no pit session found, running no-tree");
+    }
+    const escapeSocket = await startPitEscape(
+      cwd,
+      session.meta.id,
+      session.settingsPath ?? hostSettingsPath(session.meta.id),
+    );
+    if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
+    await launch(
+      cwd,
+      ["--session", session.sessionFile, ...extensionArgs(), ...systemPromptArgs(session.meta, sandboxMounts), ...filteredArgv],
+      sandbox,
+      session.settingsPath,
+    );
     return;
   }
 
