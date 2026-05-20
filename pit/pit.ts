@@ -108,6 +108,57 @@ function branchExists(repo: string, branch: string): boolean {
   }
 }
 
+// ── worktree: pure computations ───────────────────────────────────────────────
+
+function buildBaseMeta(repo: string) {
+  return { id: genId(), repo, created: new Date().toISOString() };
+}
+
+function buildNoTreeMeta(cwd: string, repo: string, reason: "no-repo" | "forced"): PitMetadata {
+  return { ...buildBaseMeta(repo), worktree: cwd, branch: "", mode: "no-tree", noTreeReason: reason };
+}
+
+function buildWorktreeMeta(repo: string): PitMetadata {
+  const base = buildBaseMeta(repo);
+  return {
+    ...base,
+    worktree: path.join(path.dirname(repo), `${path.basename(repo)}-wt-${base.id}`),
+    branch: `pi/${base.id}`,
+    mode: "worktree",
+  };
+}
+
+// ── worktree: side effects ────────────────────────────────────────────────────
+
+function createWorktree({ branch, worktree }: { branch: string; worktree: string }): void {
+  console.log("pit: creating worktree");
+  console.log(`  branch:   ${branch}`);
+  console.log(`  worktree: ${worktree}`);
+  execFileSync("git", ["worktree", "add", "-b", branch, worktree, "HEAD"], {
+    stdio: "inherit",
+  });
+}
+
+function recreateWorktree({ repo, branch, worktree }: { repo: string; branch: string; worktree: string }): void {
+  console.log("pit: worktree missing, attempting to recreate…");
+  if (!branchExists(repo, branch)) {
+    console.error(`pit: branch '${branch}' no longer exists — cannot recreate worktree`);
+    process.exit(1);
+  }
+  try {
+    execSync("git worktree prune", { cwd: repo, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-C", repo, "worktree", "add", worktree, branch],
+      { stdio: "inherit" },
+    );
+  } catch (e: unknown) {
+    console.error(`pit: failed to recreate worktree: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
+  console.log(`pit: worktree recreated at ${worktree}`);
+}
+
 // ── worktree check ────────────────────────────────────────────────────────────
 
 /**
@@ -125,99 +176,26 @@ function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): Worktre
     if (existingMeta.mode === "no-tree") {
       return { mode: "no-tree", cwd: existingMeta.worktree, meta: existingMeta };
     }
-
-    if (fs.existsSync(existingMeta.worktree)) {
-      return { mode: "worktree", cwd: existingMeta.worktree, meta: existingMeta };
+    if (!fs.existsSync(existingMeta.worktree)) {
+      recreateWorktree(existingMeta);
     }
-
-    // Worktree directory missing — try to recreate
-    console.log("pit: worktree missing, attempting to recreate…");
-    if (!branchExists(existingMeta.repo, existingMeta.branch)) {
-      console.error(
-        `pit: branch '${existingMeta.branch}' no longer exists — cannot recreate worktree`
-      );
-      process.exit(1);
-    }
-    try {
-      execSync("git worktree prune", { cwd: existingMeta.repo, stdio: "ignore" });
-      execFileSync(
-        "git",
-        [
-          "-C",
-          existingMeta.repo,
-          "worktree",
-          "add",
-          existingMeta.worktree,
-          existingMeta.branch,
-        ],
-        { stdio: "inherit" }
-      );
-    } catch (e: unknown) {
-      console.error(
-        `pit: failed to recreate worktree: ${e instanceof Error ? e.message : String(e)}`
-      );
-      process.exit(1);
-    }
-    console.log(`pit: worktree recreated at ${existingMeta.worktree}`);
     return { mode: "worktree", cwd: existingMeta.worktree, meta: existingMeta };
   }
 
   // ── new session path ───────────────────────────────────────────────────────
   const repo = gitRepoRoot();
+  const cwd = process.cwd();
 
   if (!repo) {
-    const cwd = process.cwd();
-    const meta: PitMetadata = {
-      id: genId(),
-      repo: cwd,
-      worktree: cwd,
-      branch: "",
-      created: new Date().toISOString(),
-      mode: "no-tree",
-      noTreeReason: "no-repo",
-    };
-    return { mode: "no-tree", cwd, meta };
+    return { mode: "no-tree", cwd, meta: buildNoTreeMeta(cwd, cwd, "no-repo") };
   }
-
   if (forceNoTree) {
-    // Inside a git repo but the user explicitly requested no worktree.
-    // Use cwd as-is (no branch, no worktree directory).
-    const cwd = process.cwd();
-    const meta: PitMetadata = {
-      id: genId(),
-      repo: repo,
-      worktree: cwd,
-      branch: "",
-      created: new Date().toISOString(),
-      mode: "no-tree",
-      noTreeReason: "forced",
-    };
-    return { mode: "no-tree", cwd, meta };
+    return { mode: "no-tree", cwd, meta: buildNoTreeMeta(cwd, repo, "forced") };
   }
 
-  const id = genId();
-  const branch = `pi/${id}`;
-  const worktree = path.join(
-    path.dirname(repo),
-    `${path.basename(repo)}-wt-${id}`
-  );
-  const meta: PitMetadata = {
-    id,
-    repo,
-    worktree,
-    branch,
-    created: new Date().toISOString(),
-    mode: "worktree",
-  };
-
-  console.log("pit: creating worktree");
-  console.log(`  branch:   ${branch}`);
-  console.log(`  worktree: ${worktree}`);
-  execFileSync("git", ["worktree", "add", "-b", branch, worktree, "HEAD"], {
-    stdio: "inherit",
-  });
-
-  return { mode: "worktree", cwd: worktree, meta };
+  const meta = buildWorktreeMeta(repo);
+  createWorktree(meta);
+  return { mode: "worktree", cwd: meta.worktree, meta };
 }
 
 // ── session pre-seeding ───────────────────────────────────────────────────────
