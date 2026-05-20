@@ -33,7 +33,7 @@ vi.mock("@earendil-works/pi-ai", () => ({
 }));
 
 import { complete } from "@earendil-works/pi-ai";
-import renameBranchExt from "../bundled/rename-branch.ts";
+import renameBranchExt from "../commands/rename-branch.ts";
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 

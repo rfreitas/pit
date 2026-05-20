@@ -1,7 +1,5 @@
 /**
- * Shared client for communicating with pit-escape from bundled extensions.
- * Imported by bundled extensions; not in bundled/ so it is never loaded as
- * an extension itself.
+ * Shared client for communicating with the escape server from tools and commands.
  */
 
 import * as net from "node:net";

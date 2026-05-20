@@ -25,8 +25,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, parseFlags, setupNewSession, formatSandboxNote, buildAnnouncement, isLinkedWorktree, resolveMainRepo, readWorktreeBranch, readPitConfig, applyDenylist, writeFilteredSettings, resolveUnversionedDirs, type WorktreeResult, type SandboxMounts, type OverlayMount, type PitMetadata } from "../utils.ts";
-import { buildNoTreeMeta, buildWorktreeMeta, buildSandboxMountSpec, buildSessionLines, systemPromptArgs } from "../pure.ts";
+import { cwdToBucket, buildAnnouncement, buildSessionLines, systemPromptArgs } from "../session/pure.ts";
+import { setupNewSession } from "../session/io.ts";
+import { formatSandboxNote, buildSandboxMountSpec, applyDenylist } from "../sandbox/pure.ts";
+import { readPitConfig, writeFilteredSettings, resolveUnversionedDirs } from "../sandbox/io.ts";
+import { isLinkedWorktree, resolveMainRepo, readWorktreeBranch } from "../git/utils.ts";
+import { parseFlags, buildNoTreeMeta, buildWorktreeMeta } from "../worktree/pure.ts";
+import type { WorktreeResult, SandboxMounts, OverlayMount, PitMetadata } from "../types.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //

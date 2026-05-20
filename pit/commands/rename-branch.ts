@@ -21,8 +21,8 @@
 
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readWorktreeBranch } from "../git-utils.ts";
-import { send, errMsg } from "../escape-client.ts";
+import { readWorktreeBranch } from "../git/utils.ts";
+import { send, errMsg } from "../escape/client.ts";
 
 // ── git context ────────────────────────────────────────────────────────────
 

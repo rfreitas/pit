@@ -20,7 +20,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { setupNewSession, cwdToBucket, type WorktreeResult } from "../utils.ts";
+import { setupNewSession } from "../session/io.ts";
+import { cwdToBucket } from "../session/pure.ts";
+import type { WorktreeResult } from "../types.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

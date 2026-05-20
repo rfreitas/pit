@@ -45,8 +45,8 @@ import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
-import { resolveMainRepo, readWorktreeBranch, readWorktreeGitdir } from "./git-utils.ts";
-import { readPitConfig, writeFilteredSettings } from "./utils.ts";
+import { resolveMainRepo, readWorktreeBranch, readWorktreeGitdir } from "../git/utils.ts";
+import { readPitConfig, writeFilteredSettings } from "../sandbox/io.ts";
 
 const [, , socketPath, worktreePath, agentDir, pitDir, hostSettingsPath] = process.argv;
 if (!socketPath || !worktreePath || !agentDir || !pitDir || !hostSettingsPath) {

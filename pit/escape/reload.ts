@@ -6,13 +6,11 @@
  * When the user runs /reload, pi fires session_shutdown with reason "reload"
  * before tearing down extensions. We await a refresh-settings call to
  * pit-escape here so the host-side settings file is up-to-date before pi
- * re-reads it during the reload cycle. This means globally-installed packages
- * (added outside the session) are picked up correctly, with the denylist
- * still applied.
+ * re-reads it during the reload cycle.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { send } from "../escape-client.ts";
+import { send } from "./client.ts";
 
 export default function (pi: ExtensionAPI) {
   const socketPath = process.env.PIT_ESCAPE_SOCKET;
@@ -23,7 +21,6 @@ export default function (pi: ExtensionAPI) {
 
     const result = await send(socketPath, { op: "refresh-settings" });
     if ("error" in result) {
-      // Non-fatal: reload proceeds with stale settings rather than blocking
       process.stderr.write(`pit: settings refresh failed: ${result.error}\n`);
     }
   });

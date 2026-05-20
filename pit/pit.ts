@@ -15,8 +15,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as crypto from "node:crypto";
-import { execSync, execFileSync, spawnSync, spawn } from "node:child_process";
+import { execSync, spawnSync, spawn } from "node:child_process";
 import {
   main,
   SessionManager,
@@ -25,30 +24,21 @@ import {
   getAgentDir,
   type CustomEntry,
 } from "@earendil-works/pi-coding-agent";
+import type { PitMetadata, SandboxMounts, OverlayMount } from "./types.ts";
+import { parseFlags } from "./worktree/pure.ts";
+import { worktreeCheck } from "./worktree/io.ts";
+import { systemPromptArgs, buildAnnouncement } from "./session/pure.ts";
+import { setupNewSession, findOrCreateLinkedSession } from "./session/io.ts";
+import { buildSandboxMountSpec, applyDenylist } from "./sandbox/pure.ts";
+import { resolveUnversionedDirs, readPitConfig, writeFilteredSettings } from "./sandbox/io.ts";
 import {
-  type PitMetadata,
-  type WorktreeResult,
-  type SandboxMounts,
-  type OverlayMount,
-  resolveUnversionedDirs,
-  parseFlags,
-  setupNewSession as _setupNewSession,
   isLinkedWorktree,
   resolveMainRepo,
-  findPitSession,
   listRepoWorktrees,
   readWorktreeBranch,
-  readPitConfig,
-  writeFilteredSettings,
-  genId,
-  prepareLinkedWorktreeSession,
-} from "./utils.ts";
-import {
-  buildNoTreeMeta,
-  buildWorktreeMeta,
-  buildSandboxMountSpec,
-  systemPromptArgs,
-} from "./pure.ts";
+  resolveWorktreeGitRwMounts,
+  gitRepoRoot,
+} from "./git/utils.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -84,113 +74,13 @@ const SESSION_FLAGS = new Set([
   "--fork",
 ]);
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-// ── git ───────────────────────────────────────────────────────────────────────
-
-function gitRepoRoot(): string | null {
-  try {
-    return execSync("git rev-parse --show-toplevel", {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function branchExists(repo: string, branch: string): boolean {
-  try {
-    execFileSync(
-      "git",
-      ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
-      { stdio: "ignore" }
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// ── worktree: side effects ────────────────────────────────────────────────────
-
-function createWorktree({ branch, worktree }: { branch: string; worktree: string }): void {
-  console.log("pit: creating worktree");
-  console.log(`  branch:   ${branch}`);
-  console.log(`  worktree: ${worktree}`);
-  execFileSync("git", ["worktree", "add", "-b", branch, worktree, "HEAD"], {
-    stdio: "inherit",
-  });
-}
-
-function recreateWorktree({ repo, branch, worktree }: { repo: string; branch: string; worktree: string }): void {
-  console.log("pit: worktree missing, attempting to recreate…");
-  if (!branchExists(repo, branch)) {
-    console.error(`pit: branch '${branch}' no longer exists — cannot recreate worktree`);
-    process.exit(1);
-  }
-  try {
-    execSync("git worktree prune", { cwd: repo, stdio: "ignore" });
-    execFileSync(
-      "git",
-      ["-C", repo, "worktree", "add", worktree, branch],
-      { stdio: "inherit" },
-    );
-  } catch (e: unknown) {
-    console.error(`pit: failed to recreate worktree: ${e instanceof Error ? e.message : String(e)}`);
-    process.exit(1);
-  }
-  console.log(`pit: worktree recreated at ${worktree}`);
-}
-
-// ── worktree check ────────────────────────────────────────────────────────────
-
-/**
- * Determine launch mode and cwd.
- *
- * - Resume (existingMeta provided): verify/recreate the existing worktree.
- * - New session: check for git, create a worktree if possible, else no-tree.
- *   Pass forceNoTree=true to skip worktree creation even inside a git repo.
- *
- * Always returns a fully populated WorktreeResult.
- */
-function worktreeCheck(existingMeta?: PitMetadata, forceNoTree = false): WorktreeResult {
-  // ── resume path ────────────────────────────────────────────────────────────
-  if (existingMeta) {
-    if (existingMeta.mode === "no-tree") {
-      return { mode: "no-tree", cwd: existingMeta.worktree, meta: existingMeta };
-    }
-    if (!fs.existsSync(existingMeta.worktree)) {
-      recreateWorktree(existingMeta);
-    }
-    return { mode: "worktree", cwd: existingMeta.worktree, meta: existingMeta };
-  }
-
-  // ── new session path ───────────────────────────────────────────────────────
-  const repo = gitRepoRoot();
-  const cwd = process.cwd();
-
-  const id = genId();
-  const created = new Date().toISOString();
-
-  if (!repo) {
-    return { mode: "no-tree", cwd, meta: buildNoTreeMeta(cwd, cwd, "no-repo", id, created) };
-  }
-  if (forceNoTree) {
-    return { mode: "no-tree", cwd, meta: buildNoTreeMeta(cwd, repo, "forced", id, created) };
-  }
-
-  const meta = buildWorktreeMeta(repo, id, created);
-  createWorktree(meta);
-  return { mode: "worktree", cwd: meta.worktree, meta };
-}
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 // ── session pre-seeding ───────────────────────────────────────────────────────
 
 /**
  * Resolve sandbox mounts for a new session announcement.
  * Returns the mount list when bwrap is active, undefined otherwise.
- * Passing undefined to setupNewSession suppresses the sandbox section entirely.
  */
 function resolveSandboxMounts(cwd: string, useSandbox: boolean): SandboxMounts | undefined {
   if (!useSandbox) return undefined;
@@ -199,22 +89,18 @@ function resolveSandboxMounts(cwd: string, useSandbox: boolean): SandboxMounts |
   return buildSandboxMounts(cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir);
 }
 
-function setupNewSession(result: WorktreeResult, sandboxMounts: SandboxMounts | undefined): string {
-  return _setupNewSession(result, AGENT_DIR, sandboxMounts);
-}
-
 /**
- * Build --extension args for pit's bundled extensions.
- * Only loads from extensions/bundled/ to avoid conflicts with the user's
- * globally-configured extensions (extensions/*.ts).
+ * Build --extension args pointing to pit's extension files.
  */
 function extensionArgs(): string[] {
-  const scriptDir = path.resolve(path.dirname(process.argv[1]));
-  const bundledDir = path.join(scriptDir, "bundled");
-  if (!fs.existsSync(bundledDir)) return [];
-  return fs.readdirSync(bundledDir)
-    .filter((f) => f.endsWith(".ts"))
-    .flatMap((f) => ["--extension", path.join(bundledDir, f)]);
+  const d = path.resolve(path.dirname(process.argv[1]));
+  return [
+    path.join(d, "escape", "reload.ts"),
+    path.join(d, "tools", "git.ts"),
+    path.join(d, "commands", "merge.ts"),
+    path.join(d, "commands", "merge-status.ts"),
+    path.join(d, "commands", "rename-branch.ts"),
+  ].flatMap((f) => ["--extension", f]);
 }
 
 // ── pit dir ───────────────────────────────────────────────────────────────────
@@ -255,7 +141,7 @@ async function startPitEscape(
   try { fs.unlinkSync(socketPath); } catch { /* stale socket from crashed session */ }
 
   const scriptDir = path.resolve(path.dirname(process.argv[1]));
-  const escapeScript = path.join(scriptDir, "pit-escape.ts");
+  const escapeScript = path.join(scriptDir, "escape", "server.ts");
 
   const child = spawn(
     process.execPath,
@@ -449,44 +335,9 @@ function getExtensionMounts(): string[] {
 }
 
 /**
- * Resolve rw git mounts for a linked worktree (where cwd/.git is a file,
- * not a directory). Returns the two paths needed for git operations:
- *   - the worktree metadata dir  (index, HEAD, ORIG_HEAD, lock files, etc.)
- *   - the shared objects store   (new blobs/trees/commits; content-addressed)
- *
- * Notably does NOT mount refs/heads/ — that is shared state across all
- * worktrees. Branch ref updates (commits, renames) go through pit-escape,
- * which runs outside the sandbox with full host access.
- *
- * Returns [] for main worktrees, non-git dirs, or any error.
- */
-function resolveWorktreeGitRwMounts(cwd: string): Array<{ path: string; label?: string }> {
-  try {
-    const gitPath = path.join(cwd, ".git");
-    if (fs.statSync(gitPath).isDirectory()) return []; // main worktree, not linked
-    const worktreeDir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
-    const mainGitDir = path.resolve(worktreeDir, "../..");
-    return [
-      { path: worktreeDir, label: "worktree git metadata" },
-      { path: path.join(mainGitDir, "objects"), label: "git objects" },
-    ];
-  } catch {
-    return [];
-  }
-}
-
-/**
  * Collect IO inputs and delegate to the pure buildSandboxMountSpec.
- *
- * All filesystem reads happen here:
- *   - resolveMainRepo + resolveUnversionedDirs + fs.statSync → overlay dirs
- *   - resolveWorktreeGitRwMounts → git rw mount paths
- *
- * bwrapLaunch emits ro first then rw — later mounts win, so rw overrides ro
- * for any overlapping paths (e.g. the rw worktree subdir beats the ro home).
  */
 function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: string[], nodeDir: string): SandboxMounts {
-  // IO: collect overlay dirs from the parent repo's unversioned directories.
   const overlayDirs: OverlayMount[] = [];
   const parentRepo = resolveMainRepo(cwd);
   if (parentRepo) {
@@ -494,16 +345,15 @@ function buildSandboxMounts(cwd: string, agentDirReal: string, extensionMounts: 
       const src = path.join(parentRepo, rel);
       const dest = path.join(cwd, rel);
       try {
-        if (fs.statSync(src).isDirectory()) {
-          overlayDirs.push({ src, dest, label: rel });
-        }
-      } catch { /* src disappeared between git scan and stat — skip */ }
+        if (fs.statSync(src).isDirectory()) overlayDirs.push({ src, dest, label: rel });
+      } catch { /* src disappeared — skip */ }
     }
   }
-  // IO: collect worktree-scoped git rw mounts.
-  const gitRwMounts = resolveWorktreeGitRwMounts(cwd);
-
-  return buildSandboxMountSpec({ home: HOME, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs });
+  return buildSandboxMountSpec({
+    home: HOME, cwd, agentDirReal, extensionMounts, nodeDir,
+    gitRwMounts: resolveWorktreeGitRwMounts(cwd),
+    overlayDirs,
+  });
 }
 
 /**
@@ -669,28 +519,26 @@ void (async () => {
       return;
     }
     const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
-    const session = await prepareLinkedWorktreeSession({
-      cwd,
-      agentDir: AGENT_DIR,
-      pitDir: PIT_DIR,
-      useSandbox: sandbox,
-      hasBwrap: !!findBwrap(),
-      sandboxMounts,
-    });
+    const session = await findOrCreateLinkedSession(cwd, AGENT_DIR, sandboxMounts);
     if (session.kind === "new") {
       console.log("pit: already in a git worktree — no pit session found, running no-tree");
+    }
+    let sessionSettingsPath: string | undefined;
+    if (sandbox && findBwrap()) {
+      sessionSettingsPath = hostSettingsPath(session.meta.id);
+      writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), sessionSettingsPath);
     }
     const escapeSocket = await startPitEscape(
       cwd,
       session.meta.id,
-      session.settingsPath ?? hostSettingsPath(session.meta.id),
+      sessionSettingsPath ?? hostSettingsPath(session.meta.id),
     );
     if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
     await launch(
       cwd,
       ["--session", session.sessionFile, ...extensionArgs(), ...systemPromptArgs(session.meta, sandboxMounts), ...filteredArgv],
       sandbox,
-      session.settingsPath,
+      sessionSettingsPath,
     );
     return;
   }
@@ -719,7 +567,7 @@ void (async () => {
     // pit seeds the session file with the TUI banner (once, on creation).
     // Context reaches the model via --append-system-prompt on every launch.
     const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
-    const sessionFile = setupNewSession(result, sandboxMounts);
+    const sessionFile = setupNewSession(result, AGENT_DIR, sandboxMounts);
     piArgs = ["--session", sessionFile, ...extensionArgs(), ...systemPromptArgs(result.meta, sandboxMounts), ...filteredArgv];
   }
 

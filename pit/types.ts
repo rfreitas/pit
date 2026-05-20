@@ -91,11 +91,4 @@ export interface LinkedWorktreeSession {
   kind: "resume" | "new";
   sessionFile: string;
   meta: PitMetadata;
-  /**
-   * Host-side path to the filtered settings file for bwrap's shadow agent dir.
-   * Defined iff useSandbox && hasBwrap — pass to launch() so bwrap can
-   * bind-mount it as /pit-agent/settings.json.
-   * Undefined when not sandboxed; the caller should skip the shadow mount.
-   */
-  settingsPath: string | undefined;
 }

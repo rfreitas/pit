@@ -17,13 +17,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import {
-  findPitSession,
-  listRepoWorktrees,
-  setupNewSession,
-  type WorktreeResult,
-  type PitMetadata,
-} from "../utils.ts";
+import { setupNewSession, findPitSession } from "../session/io.ts";
+import { listRepoWorktrees } from "../git/utils.ts";
+import { cwdToBucket } from "../session/pure.ts";
+import type { WorktreeResult, PitMetadata } from "../types.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

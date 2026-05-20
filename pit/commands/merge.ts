@@ -11,7 +11,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { send, isOk, errMsg } from "../escape-client.ts";
+import { send, isOk, errMsg } from "../escape/client.ts";
 
 type StateResponse = {
   branch: string | null;

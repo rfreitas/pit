@@ -23,7 +23,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { writeFilteredSettings } from "../utils.ts";
+import { writeFilteredSettings } from "../sandbox/io.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

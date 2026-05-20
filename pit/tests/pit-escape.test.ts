@@ -32,7 +32,8 @@ const TEST_SANDBOX = path.join(
 const PIT_ESCAPE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
-  "pit-escape.ts"
+  "escape",
+  "server.ts"
 );
 
 const tmpDirs: string[] = [];
