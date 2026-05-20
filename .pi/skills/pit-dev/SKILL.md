@@ -40,8 +40,8 @@ repo=$(mktemp -d) && git -C "$repo" init -b main -q \
 
 agentdir=$(mktemp -d) && echo '{}' > "$agentdir/auth.json"
 
-PI_CODING_AGENT_DIR="$agentdir" PI_SKIP_VERSION_CHECK=1 \
-  node --experimental-strip-types pit/pit.ts --mode json "hello" 2>/dev/null \
+cd "$repo" && PI_CODING_AGENT_DIR="$agentdir" PI_SKIP_VERSION_CHECK=1 \
+  node --experimental-strip-types ../../../pit/pit.ts --mode json "hello" 2>/dev/null \
   | head -1 | python3 -m json.tool
 ```
 
@@ -51,8 +51,8 @@ a `*-wt-<id>` worktree directory.
 ## Quick manual test — verify --no-session skips worktree
 
 ```bash
-PI_CODING_AGENT_DIR="$agentdir" PI_SKIP_VERSION_CHECK=1 \
-  node --experimental-strip-types pit/pit.ts --no-session --mode json "hello" 2>/dev/null \
+cd "$repo" && PI_CODING_AGENT_DIR="$agentdir" PI_SKIP_VERSION_CHECK=1 \
+  node --experimental-strip-types ../../../pit/pit.ts --no-session --mode json "hello" 2>/dev/null \
   | head -1 | python3 -m json.tool
 ```
 
@@ -61,8 +61,8 @@ Expected: `cwd` in the session header equals `$repo` (no worktree created).
 ## Check stdout is clean JSON for --mode json
 
 ```bash
-PI_CODING_AGENT_DIR="$agentdir" PI_SKIP_VERSION_CHECK=1 \
-  node --experimental-strip-types pit/pit.ts --mode json "hello" 2>/dev/null \
+cd "$repo" && PI_CODING_AGENT_DIR="$agentdir" PI_SKIP_VERSION_CHECK=1 \
+  node --experimental-strip-types ../../../pit/pit.ts --mode json "hello" 2>/dev/null \
   | while read line; do echo "$line" | python3 -c "import sys,json; json.load(sys.stdin)" \
     || echo "NOT JSON: $line"; done
 ```
