@@ -32,18 +32,29 @@ vi.mock("@earendil-works/pi-ai", () => ({
   complete: vi.fn(),
 }));
 
-vi.mock("../git-utils.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../git-utils.ts")>()),
-  readWorktreeBranch: vi.fn(),
-}));
-
 import { complete } from "@earendil-works/pi-ai";
-import { readWorktreeBranch } from "../git-utils.ts";
 import renameBranchExt from "../bundled/rename-branch.ts";
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
 const CURRENT_BRANCH = "pi/fd9b759f";
+
+/**
+ * Create a minimal linked-worktree filesystem fixture.
+ * worktreeDir/.git  →  gitdir: <gitdir>
+ * <gitdir>/HEAD     →  ref: refs/heads/pi/fd9b759f
+ */
+function setupWorktreeFixture(): { worktreeDir: string; gitdir: string; cleanup: () => void } {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "pit-rename-branch-test-"));
+  const worktreeDir = path.join(base, "worktree");
+  // Path must contain /.git/worktrees/ so readWorktreeBranch passes its check
+  const gitdir = path.join(base, "repo", ".git", "worktrees", "test-id");
+  fs.mkdirSync(worktreeDir);
+  fs.mkdirSync(gitdir, { recursive: true });
+  fs.writeFileSync(path.join(worktreeDir, ".git"), `gitdir: ${gitdir}\n`);
+  fs.writeFileSync(path.join(gitdir, "HEAD"), `ref: refs/heads/${CURRENT_BRANCH}\n`);
+  return { worktreeDir, gitdir, cleanup: () => fs.rmSync(base, { recursive: true, force: true }) };
+}
 
 /** Minimal complete() response fixture with a given slug. */
 function aiResponse(slug: string) {
@@ -160,14 +171,19 @@ function withCommitsHandler(req: Record<string, unknown>): object {
 
 const servers: net.Server[] = [];
 const socketPaths: string[] = [];
+let fixture: ReturnType<typeof setupWorktreeFixture>;
+const originalCwd = process.cwd();
 
 beforeEach(() => {
   fs.mkdirSync(TEST_SANDBOX, { recursive: true });
-  vi.mocked(readWorktreeBranch).mockReturnValue(CURRENT_BRANCH);
+  fixture = setupWorktreeFixture();
+  process.chdir(fixture.worktreeDir);
   vi.mocked(complete).mockResolvedValue(aiResponse("fix-branch-renaming") as any);
 });
 
 afterEach(async () => {
+  process.chdir(originalCwd);
+  fixture.cleanup();
   delete process.env.PIT_ESCAPE_SOCKET;
   vi.clearAllMocks();
   await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
