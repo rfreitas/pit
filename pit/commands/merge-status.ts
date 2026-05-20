@@ -10,11 +10,19 @@
  * Only active when PIT_ESCAPE_SOCKET is set (running under pit with a worktree session).
  */
 
+import { Effect } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as net from "node:net";
+import { sendEffect } from "../escape/client.ts";
 
 type IsMergedResponse =
-  | { merged: boolean; branch: string | null; parentBranch: string | null; aheadCount: number; behindCount: number }
+  | {
+      merged: boolean;
+      branch: string | null;
+      parentBranch: string | null;
+      aheadCount: number;
+      behindCount: number;
+    }
   | { error: string };
 
 type SubscribeMessage =
@@ -22,30 +30,18 @@ type SubscribeMessage =
   | { event: "ref-change" }
   | { error: string };
 
-function sendOnce(socketPath: string, req: object): Promise<IsMergedResponse> {
-  return new Promise((resolve) => {
-    const sock = net.createConnection(socketPath);
-    let buf = "";
-    sock.once("connect", () => { sock.write(JSON.stringify(req) + "\n"); });
-    sock.on("data", (chunk: Buffer) => { buf += chunk.toString("utf8"); });
-    sock.once("end", () => {
-      try { resolve(JSON.parse(buf.trim()) as IsMergedResponse); }
-      catch { resolve({ error: "Failed to parse pit-escape response" }); }
-    });
-    sock.once("error", (err: Error) => {
-      resolve({ error: `pit-escape unavailable: ${err.message}` });
-    });
-  });
-}
-
 const STATUS_KEY = "pit-merged";
-const FALLBACK_POLL_MS = 5 * 60_000; // 5-minute safety net if subscription drops
+const FALLBACK_POLL_MS = 5 * 60_000;
 
 /**
  * Pure function: convert ahead/behind counts into footer text.
  * Exported for testing.
  */
-export function formatStatus(aheadCount: number, behindCount: number, parentBranch: string): string {
+export function formatStatus(
+  aheadCount: number,
+  behindCount: number,
+  parentBranch: string,
+): string {
   if (aheadCount === 0 && behindCount === 0) {
     return `in sync with ${parentBranch}`;
   } else if (aheadCount > 0 && behindCount === 0) {
@@ -66,19 +62,27 @@ export default function (pi: ExtensionAPI) {
   let fallbackTimer: ReturnType<typeof setInterval> | undefined;
   let subSocket: net.Socket | undefined;
 
-  async function updateStatus(setStatus: (text: string | undefined) => void): Promise<void> {
-    const resp = await sendOnce(socketPath!, { op: "is-merged" });
-    if ("error" in resp) return;
-    if (!resp.parentBranch) return;
-    setStatus(formatStatus(resp.aheadCount, resp.behindCount, resp.parentBranch));
-  }
+  const updateStatusEffect = (
+    setStatus: (text: string | undefined) => void,
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const resp = yield* sendEffect(socketPath!, { op: "is-merged" });
+      const r = resp as IsMergedResponse;
+      if ("error" in r) return;
+      if (!r.parentBranch) return;
+      setStatus(formatStatus(r.aheadCount, r.behindCount, r.parentBranch));
+    });
 
-  function openSubscription(setStatus: (text: string | undefined) => void): void {
+  function openSubscription(
+    setStatus: (text: string | undefined) => void,
+  ): void {
     const sock = net.createConnection(socketPath!);
     subSocket = sock;
     let buf = "";
 
-    sock.once("connect", () => sock.write(JSON.stringify({ op: "subscribe" }) + "\n"));
+    sock.once("connect", () =>
+      sock.write(JSON.stringify({ op: "subscribe" }) + "\n"),
+    );
     sock.on("data", (chunk: Buffer) => {
       buf += chunk.toString("utf8");
       let nl: number;
@@ -86,30 +90,45 @@ export default function (pi: ExtensionAPI) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
         let msg: SubscribeMessage;
-        try { msg = JSON.parse(line) as SubscribeMessage; } catch { continue; }
-        if ("event" in msg && msg.event === "ref-change") {
-          void updateStatus(setStatus);
+        try {
+          msg = JSON.parse(line) as SubscribeMessage;
+        } catch {
+          continue;
         }
-        // ok/error acks are informational only; errors mean the subscription
-        // couldn't be established — fall back to the poll timer
+        if ("event" in msg && msg.event === "ref-change") {
+          void Effect.runPromise(updateStatusEffect(setStatus));
+        }
       }
     });
-    sock.once("error", () => { subSocket = undefined; });
-    sock.once("close", () => { subSocket = undefined; });
+    sock.once("error", () => {
+      subSocket = undefined;
+    });
+    sock.once("close", () => {
+      subSocket = undefined;
+    });
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    const setStatus = (text: string | undefined) => ctx.ui.setStatus(STATUS_KEY, text);
+    const setStatus = (text: string | undefined) =>
+      ctx.ui.setStatus(STATUS_KEY, text);
 
-    await updateStatus(setStatus);
+    await Effect.runPromise(updateStatusEffect(setStatus));
     openSubscription(setStatus);
 
-    // Safety-net poll in case the subscription socket ever drops
-    fallbackTimer = setInterval(() => void updateStatus(setStatus), FALLBACK_POLL_MS);
+    fallbackTimer = setInterval(
+      () => void Effect.runPromise(updateStatusEffect(setStatus)),
+      FALLBACK_POLL_MS,
+    );
   });
 
   pi.on("session_shutdown", async () => {
-    if (fallbackTimer !== undefined) { clearInterval(fallbackTimer); fallbackTimer = undefined; }
-    if (subSocket) { subSocket.destroy(); subSocket = undefined; }
+    if (fallbackTimer !== undefined) {
+      clearInterval(fallbackTimer);
+      fallbackTimer = undefined;
+    }
+    if (subSocket) {
+      subSocket.destroy();
+      subSocket = undefined;
+    }
   });
 }

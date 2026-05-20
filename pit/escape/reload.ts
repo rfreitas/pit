@@ -2,15 +2,11 @@
  * pit reload hook — refreshes filtered settings before pi reloads extensions.
  *
  * Only active when PIT_ESCAPE_SOCKET is set (running under pit, sandboxed).
- *
- * When the user runs /reload, pi fires session_shutdown with reason "reload"
- * before tearing down extensions. We await a refresh-settings call to
- * pit-escape here so the host-side settings file is up-to-date before pi
- * re-reads it during the reload cycle.
  */
 
+import { Effect } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { send } from "./client.ts";
+import { sendEffect } from "./client.ts";
 
 export default function (pi: ExtensionAPI) {
   const socketPath = process.env.PIT_ESCAPE_SOCKET;
@@ -19,9 +15,15 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (event) => {
     if (event.reason !== "reload") return;
 
-    const result = await send(socketPath, { op: "refresh-settings" });
-    if ("error" in result) {
-      process.stderr.write(`pit: settings refresh failed: ${result.error}\n`);
-    }
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const result = yield* sendEffect(socketPath!, { op: "refresh-settings" });
+        if ("error" in result) {
+          process.stderr.write(
+            `pit: settings refresh failed: ${result.error}\n`,
+          );
+        }
+      }),
+    );
   });
 }

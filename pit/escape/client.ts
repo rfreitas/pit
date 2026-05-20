@@ -1,13 +1,41 @@
 /**
  * Shared client for communicating with the escape server from tools and commands.
+ *
+ * probeSocket keeps its Promise signature (tested directly).
+ * send is Effect-based; commands wrap it with Effect.runPromise where needed.
  */
 
 import * as net from "node:net";
 import * as fs from "node:fs";
+import { Effect } from "effect";
 
-export type GitResult    = { stdout: string; stderr: string; code: number };
-export type ErrorResult  = { error: string };
+export type GitResult = { stdout: string; stderr: string; code: number };
+export type ErrorResult = { error: string };
 export type EscapeResult = GitResult | ErrorResult;
+
+// ── socket probe ──────────────────────────────────────────────────────────────
+
+export const probeSocketEffect = (
+  socketPath: string,
+): Effect.Effect<"alive" | "stale" | "absent"> =>
+  Effect.async((resume) => {
+    if (!fs.existsSync(socketPath)) {
+      resume(Effect.succeed("absent" as const));
+      return;
+    }
+    const sock = net.createConnection(socketPath);
+    sock.once("connect", () => {
+      sock.destroy();
+      resume(Effect.succeed("alive" as const));
+    });
+    sock.once("error", (err: NodeJS.ErrnoException) => {
+      resume(
+        Effect.succeed(
+          err.code === "ENOENT" ? ("absent" as const) : ("stale" as const),
+        ),
+      );
+    });
+  });
 
 /**
  * Check whether a pit-escape process is actively listening on socketPath.
@@ -15,33 +43,50 @@ export type EscapeResult = GitResult | ErrorResult;
  *   "alive"  — socket file exists and a process accepted the connection
  *   "stale"  — socket file exists but nobody is listening (ECONNREFUSED/ENOTSOCK)
  *   "absent" — socket file does not exist (ENOENT)
- *
- * Used by startPitEscape to decide whether to fail-fast (alive) or respawn (stale/absent).
  */
-export function probeSocket(socketPath: string): Promise<"alive" | "stale" | "absent"> {
-  return new Promise((resolve) => {
-    if (!fs.existsSync(socketPath)) { resolve("absent"); return; }
-    const sock = net.createConnection(socketPath);
-    sock.once("connect", () => { sock.destroy(); resolve("alive"); });
-    sock.once("error", (err: NodeJS.ErrnoException) => {
-      resolve(err.code === "ENOENT" ? "absent" : "stale");
-    });
-  });
+export function probeSocket(
+  socketPath: string,
+): Promise<"alive" | "stale" | "absent"> {
+  return Effect.runPromise(probeSocketEffect(socketPath));
 }
 
-export function send(socketPath: string, req: object): Promise<EscapeResult> {
-  return new Promise((resolve) => {
+// ── send ──────────────────────────────────────────────────────────────────────
+
+export const sendEffect = (
+  socketPath: string,
+  req: object,
+): Effect.Effect<EscapeResult> =>
+  Effect.async((resume) => {
     const sock = net.createConnection(socketPath);
     let buf = "";
-    sock.once("connect", () => { sock.write(JSON.stringify(req) + "\n"); });
-    sock.on("data", (chunk: Buffer) => { buf += chunk.toString("utf8"); });
-    sock.once("end", () => {
-      try { resolve(JSON.parse(buf.trim()) as EscapeResult); }
-      catch { resolve({ error: "Failed to parse pit-escape response" }); }
+    sock.once("connect", () => {
+      sock.write(JSON.stringify(req) + "\n");
     });
-    sock.once("error", (err: Error) => { resolve({ error: `pit-escape unavailable: ${err.message}` }); });
+    sock.on("data", (chunk: Buffer) => {
+      buf += chunk.toString("utf8");
+    });
+    sock.once("end", () => {
+      try {
+        resume(Effect.succeed(JSON.parse(buf.trim()) as EscapeResult));
+      } catch {
+        resume(
+          Effect.succeed({ error: "Failed to parse pit-escape response" }),
+        );
+      }
+    });
+    sock.once("error", (err: Error) => {
+      resume(
+        Effect.succeed({ error: `pit-escape unavailable: ${err.message}` }),
+      );
+    });
   });
+
+/** Run sendEffect as a Promise (for use in async extension handlers). */
+export function send(socketPath: string, req: object): Promise<EscapeResult> {
+  return Effect.runPromise(sendEffect(socketPath, req));
 }
+
+// ── result helpers ────────────────────────────────────────────────────────────
 
 export function isOk(r: EscapeResult): r is GitResult {
   return !("error" in r) && r.code === 0;
