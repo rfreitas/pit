@@ -65,7 +65,7 @@ export function writeFilteredSettings(
   const raw = fs.existsSync(path.join(agentDir, "settings.json"))
     ? fs.readFileSync(path.join(agentDir, "settings.json"), "utf8")
     : "{}";
-  const settings = JSON.parse(raw) as Record<string, unknown>;
+  const settings = JSON.parse(raw.trim() || "{}") as Record<string, unknown>;
   const filtered = applyDenylist(settings, pitConfig.denyPackages ?? []);
   fs.mkdirSync(path.dirname(hostSettingsPath), { recursive: true });
   fs.writeFileSync(hostSettingsPath, JSON.stringify(filtered, null, 2) + "\n");

@@ -146,6 +146,31 @@ describe("parseFlags", () => {
   it("empty argv returns all defaults", () => {
     expect(parseFlags([])).toEqual({ sandbox: true, noTree: false, filteredArgv: [] });
   });
+
+  // --no-session implies noTree: a session is the only way to reference a worktree
+  // from pit. No session = no tracking = orphan branch, so noTree is forced.
+
+  it("--no-session sets noTree", () => {
+    expect(parseFlags(["--no-session"]).noTree).toBe(true);
+  });
+
+  it("--no-session is forwarded to pi (not consumed by pit)", () => {
+    expect(parseFlags(["--no-session"]).filteredArgv).toContain("--no-session");
+  });
+
+  it("--no-session combined with other flags still sets noTree", () => {
+    const result = parseFlags(["--no-session", "--mode", "json", "hello"]);
+    expect(result.noTree).toBe(true);
+    expect(result.filteredArgv).toEqual(["--no-session", "--mode", "json", "hello"]);
+  });
+
+  it("--no-session with --no-sandbox: both flags take effect", () => {
+    const result = parseFlags(["--no-sandbox", "--no-session"]);
+    expect(result.sandbox).toBe(false);
+    expect(result.noTree).toBe(true);
+    expect(result.filteredArgv).toContain("--no-session");
+    expect(result.filteredArgv).not.toContain("--no-sandbox");
+  });
 });
 
 // ── formatSandboxNote ───────────────────────────────────────────────────────────

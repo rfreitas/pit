@@ -51,6 +51,11 @@ export function buildWorktreeMeta(repo: string, id: string, created: string): Pi
 /**
  * Strip pit-only flags from argv, returning the remainder for pi passthrough.
  * --no-sandbox and -nt/--no-tree are pit-only; everything else forwards to pi.
+ *
+ * --no-session implies noTree: a session is the only way to reference a worktree
+ * from pit. Without a session there is nothing to track, resume, or clean up the
+ * worktree against, so creating one would leave an orphan branch.
+ * The flag still forwards to pi unchanged.
  */
 export function parseFlags(argv: string[]): ParsedFlags {
   let sandbox = true;
@@ -59,7 +64,10 @@ export function parseFlags(argv: string[]): ParsedFlags {
   for (const arg of argv) {
     if (arg === "--no-sandbox") sandbox = false;
     else if (arg === "-nt" || arg === "--no-tree") noTree = true;
-    else filteredArgv.push(arg);
+    else {
+      if (arg === "--no-session") noTree = true;
+      filteredArgv.push(arg);
+    }
   }
   return { sandbox, noTree, filteredArgv };
 }
