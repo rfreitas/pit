@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "*",
     "typescript": "^5.0.0"
   }
 }
