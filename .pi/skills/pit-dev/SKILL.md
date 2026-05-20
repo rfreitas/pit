@@ -77,6 +77,55 @@ rm -rf "$repo" "$agentdir"
 rm -rf "${repo}-wt-"*
 ```
 
+---
+
+## Persistent test workspace
+
+For testing session behaviour across multiple pit invocations (resume, nesting,
+branch history), use a persistent workspace instead of mktemp per-run.
+
+The workspace lives at `$PIT_WS` (default `/tmp/pit-dev-ws`) — stable for the
+lifetime of the pit session. Set `PIT_WS` to a path inside the worktree
+(e.g. `PIT_WS=/path/to/repo/pit/test-sandbox/ws`) if you need it to survive
+across pit sessions.
+
+All scripts are in `scripts/` next to this file.
+
+### Setup
+
+```bash
+bash .pi/skills/pit-dev/scripts/setup.sh
+source /tmp/pit-dev-ws/env          # exports PIT_WS, PI_CODING_AGENT_DIR, PI_SKIP_VERSION_CHECK
+```
+
+### Run pit against the workspace
+
+```bash
+cd $PIT_WS/repo && node --experimental-strip-types $PIT_SCRIPT --mode json "hello" 2>/dev/null | head -1 | python3 -m json.tool
+```
+
+Run it again — a second session accumulates, same worktree is reused (resume path).
+
+### Inspect state
+
+```bash
+bash .pi/skills/pit-dev/scripts/inspect.sh
+```
+
+Shows: git branches, worktrees, and all session files with their cwd and timestamp.
+
+### Reset (tear down + recreate)
+
+```bash
+bash .pi/skills/pit-dev/scripts/reset.sh
+```
+
+### Tear down
+
+```bash
+bash .pi/skills/pit-dev/scripts/teardown.sh
+```
+
 ## Adding a new E2E test
 
 Follow the pattern in `pit/tests/e2e.test.ts`:
