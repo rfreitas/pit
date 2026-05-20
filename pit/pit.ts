@@ -30,7 +30,7 @@ import { worktreeCheck } from "./worktree/io.ts";
 import { systemPromptArgs, buildAnnouncement } from "./session/pure.ts";
 import { setupNewSession, findOrCreateLinkedSession } from "./session/io.ts";
 import { buildSandboxMountSpec, applyDenylist } from "./sandbox/pure.ts";
-import { resolveUnversionedDirs, readPitConfig, writeFilteredSettings } from "./sandbox/io.ts";
+import { resolveUnversionedDirs, readPitConfig, createTempSettingsFile } from "./sandbox/io.ts";
 import { probeSocket } from "./escape/client.ts";
 import {
   isLinkedWorktree,
@@ -109,9 +109,12 @@ function extensionArgs(): string[] {
 /** ~/.pi/agent/pit — inside the repo-tracked agent config dir */
 const PIT_DIR = path.join(AGENT_DIR, "pit");
 
-/** Path to the per-session filtered settings file on the host filesystem. */
-function hostSettingsPath(id: string): string {
-  return path.join(PIT_DIR, "sessions", `${id}.json`);
+/**
+ * Create a temp file containing filtered settings for this session.
+ * Returns the path; caller must delete it after bwrap exits.
+ */
+function makeTempSettingsFile(): string {
+  return createTempSettingsFile(AGENT_DIR, readPitConfig(PIT_DIR));
 }
 
 // ── pit-escape ────────────────────────────────────────────────────────────────
@@ -444,6 +447,7 @@ function bwrapLaunch(cwd: string, piArgs: string[], settingsPath?: string): neve
   ];
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
+  if (settingsPath) try { fs.unlinkSync(settingsPath); } catch { /* already gone */ }
   process.exit(result.status ?? 1);
 }
 
@@ -498,16 +502,11 @@ void (async () => {
     const result = worktreeCheck(picked.meta);
     const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
 
-    let settingsPath: string | undefined;
-    if (sandbox && findBwrap()) {
-      settingsPath = hostSettingsPath(result.meta.id);
-      writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), settingsPath);
-    }
-
+    const settingsPath = makeTempSettingsFile();
     const escapeSocket = await startPitEscape(
       result.cwd,
       result.meta.id,
-      settingsPath ?? hostSettingsPath(result.meta.id),
+      settingsPath,
     );
     if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
     await launch(
@@ -516,6 +515,7 @@ void (async () => {
       sandbox,
       settingsPath,
     );
+    try { fs.unlinkSync(settingsPath); } catch { /* already gone */ }
     return;
   }
 
@@ -536,15 +536,11 @@ void (async () => {
     if (session.kind === "new") {
       console.log("pit: already in a git worktree — no pit session found, running no-tree");
     }
-    let sessionSettingsPath: string | undefined;
-    if (sandbox && findBwrap()) {
-      sessionSettingsPath = hostSettingsPath(session.meta.id);
-      writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), sessionSettingsPath);
-    }
+    const sessionSettingsPath = makeTempSettingsFile();
     const escapeSocket = await startPitEscape(
       cwd,
       session.meta.id,
-      sessionSettingsPath ?? hostSettingsPath(session.meta.id),
+      sessionSettingsPath,
     );
     if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
     await launch(
@@ -553,6 +549,7 @@ void (async () => {
       sandbox,
       sessionSettingsPath,
     );
+    try { fs.unlinkSync(sessionSettingsPath); } catch { /* already gone */ }
     return;
   }
 
@@ -560,15 +557,11 @@ void (async () => {
 
   // Initialise filtered settings and pit-escape for every session (both new
   // and user-managed), so /reload works and the git tool is always available.
-  let settingsPath: string | undefined;
-  if (sandbox && findBwrap()) {
-    settingsPath = hostSettingsPath(result.meta.id);
-    writeFilteredSettings(AGENT_DIR, readPitConfig(PIT_DIR), settingsPath);
-  }
+  const settingsPath = makeTempSettingsFile();
   const escapeSocket = await startPitEscape(
     result.cwd,
     result.meta.id,
-    settingsPath ?? hostSettingsPath(result.meta.id),
+    settingsPath,
   );
   if (escapeSocket) process.env.PIT_ESCAPE_SOCKET = escapeSocket;
 
@@ -585,6 +578,7 @@ void (async () => {
   }
 
   await launch(result.cwd, piArgs, sandbox, settingsPath);
+  try { fs.unlinkSync(settingsPath); } catch { /* already gone */ }
 })().catch((err: unknown) => {
   console.error(`pit: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);

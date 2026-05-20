@@ -3,6 +3,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import type { PitConfig } from "../types.ts";
@@ -53,8 +54,8 @@ export function readPitConfig(pitDir: string): PitConfig {
 // ── settings filtering ────────────────────────────────────────────────────────
 
 /**
- * Write filtered settings to the host-side path used as the shadow agent dir's
- * settings.json. Applies the pit denylist before writing. Creates parent dirs.
+ * Write filtered settings to the given path.
+ * Applies the pit denylist before writing. Creates parent dirs.
  */
 export function writeFilteredSettings(
   agentDir: string,
@@ -68,4 +69,17 @@ export function writeFilteredSettings(
   const filtered = applyDenylist(settings, pitConfig.denyPackages ?? []);
   fs.mkdirSync(path.dirname(hostSettingsPath), { recursive: true });
   fs.writeFileSync(hostSettingsPath, JSON.stringify(filtered, null, 2) + "\n");
+}
+
+/**
+ * Create a temporary file in os.tmpdir(), write filtered settings into it,
+ * and return its path. The caller is responsible for deleting it when done.
+ */
+export function createTempSettingsFile(
+  agentDir: string,
+  pitConfig: PitConfig,
+): string {
+  const tmp = path.join(os.tmpdir(), `pit-settings-${process.pid}.json`);
+  writeFilteredSettings(agentDir, pitConfig, tmp);
+  return tmp;
 }
