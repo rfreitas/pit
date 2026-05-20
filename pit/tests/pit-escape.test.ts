@@ -800,6 +800,29 @@ describe("pit-escape subscribe op", () => {
     expect(evt.event).toBe("ref-change");
   });
 
+  it("pushes { event: 'ref-change' } when a commit is added to the worktree branch", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const sub = openSubscription(socketPath);
+    await sub.waitForMessage(); // ack
+
+    // New commit on the worktree branch — no parent-branch change involved
+    addCommit(worktreeDir);
+
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
+
   it("sends error and closes when worktreePath is not a linked worktree", async () => {
     const agentDir = makeDir(); // plain dir, no .git file
     const pitDir = makeDir();

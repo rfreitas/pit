@@ -269,6 +269,13 @@ const server = net.createServer((socket) => {
 
           // Loose ref: refs/heads/<parentBranch> updated on fast-forward
           tryWatch(refsHeadsDir, (f) => f === parentBranch);
+          // Loose ref: worktree branch (e.g. pi/abc → refs/heads/pi/) updated on every commit
+          const worktreeBranch = readWorktreeBranch(worktreePath);
+          if (worktreeBranch) {
+            const branchRefDir = path.join(refsHeadsDir, path.dirname(worktreeBranch));
+            const branchLeaf = path.basename(worktreeBranch);
+            tryWatch(branchRefDir, (f) => f === branchLeaf);
+          }
           // Packed refs: watch .git dir for atomic rename of packed-refs
           tryWatch(mainGitDir, (f) => f === "packed-refs");
           // Reftable format: branch updates land in reftable/
