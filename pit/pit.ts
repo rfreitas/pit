@@ -31,6 +31,7 @@ import { systemPromptArgs, buildAnnouncement } from "./session/pure.ts";
 import { setupNewSession, findOrCreateLinkedSession } from "./session/io.ts";
 import { buildSandboxMountSpec, applyDenylist } from "./sandbox/pure.ts";
 import { resolveUnversionedDirs, readPitConfig, writeFilteredSettings } from "./sandbox/io.ts";
+import { probeSocket } from "./escape/client.ts";
 import {
   isLinkedWorktree,
   resolveMainRepo,
@@ -138,7 +139,19 @@ async function startPitEscape(
   }
 
   const socketPath = path.join(AGENT_DIR, `pit-${sessionId}.sock`);
-  try { fs.unlinkSync(socketPath); } catch { /* stale socket from crashed session */ }
+
+  // Probe before touching the socket: if a live pit-escape already owns it,
+  // the user has this session open in another terminal — fail fast.
+  const probe = await probeSocket(socketPath);
+  if (probe === "alive") {
+    console.error(
+      `pit: session ${sessionId} is already open in another terminal.\n` +
+      `     Exit that session first, or resume a different one.`
+    );
+    process.exit(1);
+  }
+  // stale or absent — safe to respawn
+  try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
 
   const scriptDir = path.resolve(path.dirname(process.argv[1]));
   const escapeScript = path.join(scriptDir, "escape", "server.ts");
