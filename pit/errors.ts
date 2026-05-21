@@ -3,7 +3,7 @@
  * One error per distinct failure mode — callers pattern-match on the tag.
  */
 
-import { Data } from "effect";
+import * as Data from "effect/Data";
 
 // ── worktree errors ───────────────────────────────────────────────────────────
 

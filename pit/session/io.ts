@@ -5,7 +5,7 @@
 
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { FileSystem } from "@effect/platform/FileSystem";
 import { SessionManager, type CustomEntry } from "@earendil-works/pi-coding-agent";
 import type {

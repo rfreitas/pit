@@ -16,7 +16,8 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { execSync, spawnSync, spawn } from "node:child_process";
-import { Effect, Option } from "effect";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
 import {
   main,

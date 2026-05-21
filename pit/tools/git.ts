@@ -5,7 +5,7 @@
  * Subcommand allowlist enforced by pit-escape; the tool passes args through.
  */
 
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { sendEffect } from "../escape/client.ts";

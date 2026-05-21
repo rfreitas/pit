@@ -7,7 +7,7 @@
 
 import { createConnection } from "node:net";
 import { existsSync } from "node:fs";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 
 export type GitResult = { stdout: string; stderr: string; code: number };
 export type ErrorResult = { error: string };

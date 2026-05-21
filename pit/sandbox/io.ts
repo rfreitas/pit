@@ -5,7 +5,7 @@
 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { make as makeCommand, lines as commandLines } from "@effect/platform/Command";
 import { FileSystem } from "@effect/platform/FileSystem";
 import { CommandExecutor } from "@effect/platform/CommandExecutor";

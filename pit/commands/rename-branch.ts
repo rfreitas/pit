@@ -14,7 +14,8 @@
  * git branch -m to pit-escape.
  */
 
-import { Effect, Option } from "effect";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

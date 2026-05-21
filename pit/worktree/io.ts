@@ -3,7 +3,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { make as makeCommand, exitCode as commandExitCode } from "@effect/platform/Command";
 import { FileSystem } from "@effect/platform/FileSystem";
 import { CommandExecutor } from "@effect/platform/CommandExecutor";
