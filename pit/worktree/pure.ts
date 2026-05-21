@@ -58,16 +58,13 @@ export function buildWorktreeMeta(repo: string, id: string, created: string): Pi
  * The flag still forwards to pi unchanged.
  */
 export function parseFlags(argv: string[]): ParsedFlags {
-  let sandbox = true;
-  let noTree = false;
-  const filteredArgv: string[] = [];
-  for (const arg of argv) {
-    if (arg === "--no-sandbox") sandbox = false;
-    else if (arg === "-nt" || arg === "--no-tree") noTree = true;
-    else {
-      if (arg === "--no-session") noTree = true;
-      filteredArgv.push(arg);
-    }
-  }
-  return { sandbox, noTree, filteredArgv };
+  return argv.reduce<ParsedFlags>(
+    ({ sandbox, noTree, filteredArgv }, arg) => {
+      if (arg === "--no-sandbox") return { sandbox: false, noTree, filteredArgv };
+      if (arg === "-nt" || arg === "--no-tree") return { sandbox, noTree: true, filteredArgv };
+      if (arg === "--no-session") return { sandbox, noTree: true, filteredArgv: [...filteredArgv, arg] };
+      return { sandbox, noTree, filteredArgv: [...filteredArgv, arg] };
+    },
+    { sandbox: true, noTree: false, filteredArgv: [] },
+  );
 }

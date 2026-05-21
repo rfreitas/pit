@@ -1,6 +1,7 @@
 // @ts-check
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
+import functional from "eslint-plugin-functional";
 import noBarrelImport from "./eslint-rules/no-barrel-import.mjs";
 
 // ── Two execution contexts, two sets of rules ─────────────────────────────────
@@ -21,10 +22,29 @@ const base = {
     parser: tsparser,
     parserOptions: { project: "./tsconfig.json" },
   },
-  plugins: { "@typescript-eslint": tseslint },
+  plugins: { 
+    "@typescript-eslint": tseslint,
+    "functional": functional
+  },
 };
 
 export default [
+  // ── global rules: purity ───────────────────────────────────────────────────
+  {
+    ...base,
+    files: ["pit/**/*.ts"],
+    ignores: ["pit/tests/**"],
+    rules: {
+      // Pushes the codebase towards functional purity.
+      // Set to "warn" so it doesn't break CI, but highlights opportunities
+      // to extract pure functions and use Effect/Array methods instead of loops.
+      "functional/no-let": "warn",               // Use const
+      "functional/immutable-data": "warn",       // No Array.push, Object mutation
+      "functional/no-loop-statements": "warn",   // Use .map, .reduce, Effect.all
+      "prefer-arrow-callback": "warn",           // No function() in callbacks — use arrows
+    }
+  },
+
   // ── core files: no barrel imports ──────────────────────────────────────────
   {
     ...base,
