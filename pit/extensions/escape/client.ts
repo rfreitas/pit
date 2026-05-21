@@ -58,7 +58,7 @@ export const sendEffect = (
 ): Effect.Effect<EscapeResult> =>
   Effect.async((resume) => {
     const sock = createConnection(socketPath);
-    // eslint-disable-next-line functional/no-let
+    // eslint-disable-next-line functional/no-let -- socket accumulator; newline-framed protocol requires stateful buffer
     let buf = "";
     sock.once("connect", () => {
       sock.write(JSON.stringify(req) + "\n");

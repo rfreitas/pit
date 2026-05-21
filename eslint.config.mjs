@@ -2,6 +2,7 @@
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
 import functional from "eslint-plugin-functional";
+import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
 import noBarrelImport from "./eslint-rules/no-barrel-import.mjs";
 
 // ── Two execution contexts, two sets of rules ─────────────────────────────────
@@ -36,29 +37,29 @@ export default [
     ignores: ["pit/tests/**"],
     rules: {
       // Pushes the codebase towards functional purity.
-      // Set to "warn" so it doesn't break CI, but highlights opportunities
+      // Set to "error" so it doesn't break CI, but highlights opportunities
       // to extract pure functions and use Effect/Array methods instead of loops.
-      "functional/no-let": "warn",               // Use const (warn: being progressively fixed)
-      "functional/immutable-data": "warn",       // No Array.push, Object mutation
-      "functional/no-loop-statements": "warn",   // Use .map, .reduce, Effect.all
-      "prefer-arrow-callback": "warn",           // No function() in callbacks — use arrows
-      "func-style": ["warn", "expression"],      // const fn = () => {} over function fn() {}
-      "functional/no-throw-statements": ["warn", { "allowToRejectPromises": true }],
-      "functional/no-class-inheritance": ["warn", {
+      "functional/no-let": "error",               // Use const (warn: being progressively fixed)
+      "functional/immutable-data": "error",       // No Array.push, Object mutation
+      "functional/no-loop-statements": "error",   // Use .map, .reduce, Effect.all
+      "prefer-arrow-callback": "error",           // No function() in callbacks — use arrows
+      "func-style": ["error", "expression"],      // const fn = () => {} over function fn() {}
+      "functional/no-throw-statements": ["error", { "allowToRejectPromises": true }],
+      "functional/no-class-inheritance": ["error", {
         // Allow Effect's Data.TaggedError pattern — the only way to define
         // typed errors in Effect. Bans all other class inheritance.
         "ignoreCodePattern": "TaggedError"
       }],
-      "functional/no-mixed-types": "warn",
-      "functional/functional-parameters": ["warn", { "enforceParameterCount": false }],
-      "functional/prefer-immutable-types": ["warn", {
+      "functional/no-mixed-types": "error",
+      "functional/functional-parameters": ["error", { "enforceParameterCount": false }],
+      "functional/prefer-immutable-types": ["error", {
         "enforcement": "None",
         "overrides": [{ "specifiers": { "from": "file" }, "options": {
           "ignoreInferredTypes": true,
           "parameters": { "enforcement": "ReadonlyShallow" }
         }}]
       }],
-      "functional/type-declaration-immutability": ["warn", {
+      "functional/type-declaration-immutability": ["error", {
         "rules": [{
           "identifiers": ["^I?Immutable.+"], "immutability": 5, "comparator": 1
         }, {
@@ -83,11 +84,18 @@ export default [
     plugins: {
       ...base.plugins,
       local: { rules: { "no-barrel-import": noBarrelImport } },
+      "@eslint-community/eslint-comments": eslintComments,
     },
     rules: {
       // Reads each package's `exports` field at lint time.
       // Any package with sub-path exports must be imported via sub-path.
       "local/no-barrel-import": "error",
+
+      // ── eslint-disable hygiene ──────────────────────────────────────────────
+      // Every disable comment must name the rule AND give a reason.
+      // Bare `eslint-disable` (silencing everything) is banned.
+      "@eslint-community/eslint-comments/require-description": ["error", { "ignore": [] }],
+      "@eslint-community/eslint-comments/no-unlimited-disable": "error",
     },
   },
 

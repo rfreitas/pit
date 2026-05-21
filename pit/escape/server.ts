@@ -316,8 +316,7 @@ const handleSubscribe = (socket: Socket): void  => {
   const mainGitDir = join(mainRepo, ".git");
   const refsHeadsDir = join(mainGitDir, "refs", "heads");
   const reftableDir = join(mainGitDir, "reftable");
-  const watchers: FSWatcher[] = [];
-  // eslint-disable-next-line functional/no-let
+  // eslint-disable-next-line functional/no-let -- mutable timer ref for debounced notify; no pure alternative for setTimeout handles
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
   const notify = () => {
@@ -328,30 +327,27 @@ const handleSubscribe = (socket: Socket): void  => {
     }, 100);
   };
 
-  const tryWatch = (target: string, filter?: (f: string | null) => boolean) => {
+  const makeWatcher = (target: string, filter?: (f: string | null) => boolean): FSWatcher[] => {
     try {
-      // eslint-disable-next-line functional/immutable-data
-      watchers.push(watch(target, (_type, filename) => {
+      return [watch(target, (_type, filename) => {
         if (!filter || filter(filename)) notify();
-      }));
-    } catch { /* target absent or unwatchable */ }
+      })];
+    } catch { return []; }
   };
 
-  tryWatch(refsHeadsDir, (f) => f === parentBranch);
   const worktreeBranch = syncReadWorktreeBranch(worktreePath);
-  if (worktreeBranch) {
-    const branchRefDir = join(refsHeadsDir, dirname(worktreeBranch));
-    const branchLeaf = basename(worktreeBranch);
-    tryWatch(branchRefDir, (f) => f === branchLeaf);
-  }
-  tryWatch(mainGitDir, (f) => f === "packed-refs");
-  if (existsSync(reftableDir)) tryWatch(reftableDir);
+  const watchers: FSWatcher[] = [
+    ...makeWatcher(refsHeadsDir, (f) => f === parentBranch),
+    ...(worktreeBranch ? makeWatcher(
+      join(refsHeadsDir, dirname(worktreeBranch)),
+      (f) => f === basename(worktreeBranch),
+    ) : []),
+    ...makeWatcher(mainGitDir, (f) => f === "packed-refs"),
+    ...(existsSync(reftableDir) ? makeWatcher(reftableDir) : []),
+  ];
 
   const cleanup = () => {
-    // eslint-disable-next-line functional/no-loop-statements
-    for (const w of watchers) { try { w.close(); } catch { /* */ } }
-    // eslint-disable-next-line functional/immutable-data
-    watchers.length = 0;
+    watchers.forEach(w => { try { w.close(); } catch { /* */ } });
     if (debounce) { clearTimeout(debounce); debounce = null; }
   };
   socket.once("close", cleanup);
@@ -369,7 +365,7 @@ process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
 
 const server = createServer((socket) => {
-  // eslint-disable-next-line functional/no-let
+  // eslint-disable-next-line functional/no-let -- socket accumulator; newline-framed protocol requires stateful buffer
   let buf = "";
 
   socket.on("data", (chunk: Buffer) => {

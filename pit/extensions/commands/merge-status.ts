@@ -59,9 +59,9 @@ export default function (pi: ExtensionAPI) {
   const socketPath = process.env.PIT_ESCAPE_SOCKET;
   if (!socketPath) return;
 
-  // eslint-disable-next-line functional/no-let
+  // eslint-disable-next-line functional/no-let -- mutable lifecycle state; must survive across session_start and session_shutdown events
   let fallbackTimer: ReturnType<typeof setInterval> | undefined;
-  // eslint-disable-next-line functional/no-let
+  // eslint-disable-next-line functional/no-let -- mutable lifecycle state; must survive across session_start and session_shutdown events
   let subSocket: Socket | undefined;
 
   const updateStatusEffect = (
@@ -80,7 +80,7 @@ export default function (pi: ExtensionAPI) {
   ): void => {
     const sock = createConnection(socketPath!);
     subSocket = sock;
-    // eslint-disable-next-line functional/no-let
+    // eslint-disable-next-line functional/no-let -- socket accumulator; newline-framed protocol requires stateful buffer
     let buf = "";
 
     sock.once("connect", () =>
@@ -88,9 +88,9 @@ export default function (pi: ExtensionAPI) {
     );
     sock.on("data", (chunk: Buffer) => {
       buf += chunk.toString("utf8");
-      // eslint-disable-next-line functional/no-let
+      // eslint-disable-next-line functional/no-let -- frame index updated each iteration of the streaming parse loop
       let nl: number;
-      // eslint-disable-next-line functional/no-loop-statements
+      // eslint-disable-next-line functional/no-loop-statements -- streaming parse: consume newline-delimited frames until buffer is exhausted
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
