@@ -430,3 +430,42 @@ describe("pit E2E — session already open", () => {
     expect(stderr).toContain("already open in another terminal");
   });
 });
+
+// ── extension loading ────────────────────────────────────────────────────────────────
+
+describe("pit E2E — extension loading", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  it("all pit extensions load without errors", () => {
+    // Extensions are the files pit passes via --extension to pi.
+    // Pi loads them at session start, before any LLM call.
+    // This test verifies no extension loading errors appear on stderr.
+    //
+    // The session header on stdout confirms pi actually started and
+    // attempted to load extensions — without it the test is vacuous
+    // (pit could have crashed before reaching pi).
+    const repo = makeGitRepo(tmpDirs);
+    const agentDir = makeAgentDir(tmpDirs);
+
+    const { stdout, stderr } = runPit(["--mode", "json", "hello"], { cwd: repo, agentDir });
+
+    // Confirm pi started — session header must be present
+    const lines = parseJsonLines(stdout);
+    const header = lines.find((l: any) => l.type === "session");
+    expect(header, `pi did not start — stdout:\n${stdout}\nstderr:\n${stderr}`).toBeDefined();
+
+    // No extension loading errors
+    const extensionErrors = stderr
+      .split("\n")
+      .filter((l) => l.includes("Failed to load extension"));
+
+    expect(
+      extensionErrors,
+      `Extension loading errors:\n${extensionErrors.join("\n")}`
+    ).toHaveLength(0);
+  });
+});
