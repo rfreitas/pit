@@ -44,9 +44,9 @@ export const probeSocketEffect = (
  *   "stale"  — socket file exists but nobody is listening (ECONNREFUSED/ENOTSOCK)
  *   "absent" — socket file does not exist (ENOENT)
  */
-export function probeSocket(
+export const probeSocket = (
   socketPath: string,
-): Promise<"alive" | "stale" | "absent"> {
+): Promise<"alive" | "stale" | "absent">  => {
   return Effect.runPromise(probeSocketEffect(socketPath));
 }
 
@@ -83,17 +83,17 @@ export const sendEffect = (
   });
 
 /** Run sendEffect as a Promise (for use in async extension handlers). */
-export function send(socketPath: string, req: object): Promise<EscapeResult> {
+export const send = (socketPath: string, req: object): Promise<EscapeResult>  => {
   return Effect.runPromise(sendEffect(socketPath, req));
 }
 
 // ── result helpers ────────────────────────────────────────────────────────────
 
-export function isOk(r: EscapeResult): r is GitResult {
+export const isOk = (r: EscapeResult): r is GitResult  => {
   return !("error" in r) && r.code === 0;
 }
 
-export function errMsg(r: EscapeResult): string {
+export const errMsg = (r: EscapeResult): string  => {
   if ("error" in r) return r.error;
   return (r.stderr || r.stdout || `exit ${r.code}`).trim();
 }

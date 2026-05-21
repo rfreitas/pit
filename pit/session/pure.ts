@@ -15,7 +15,7 @@ import { formatSandboxNote } from "../sandbox/pure.ts";
  * Matches pi's internal naming: strip leading slash, replace separators
  * with dashes, wrap with "--".
  */
-export function cwdToBucket(cwd: string): string {
+export const cwdToBucket = (cwd: string): string  => {
   return "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
 }
 
@@ -25,7 +25,7 @@ export function cwdToBucket(cwd: string): string {
  * Build the mode announcement shown to the agent at session start.
  * Pure — output depends only on the worktree metadata and sandbox mounts.
  */
-export function buildAnnouncement(meta: PitMetadata, sandboxMounts?: SandboxMounts): string {
+export const buildAnnouncement = (meta: PitMetadata, sandboxMounts?: SandboxMounts): string  => {
   const sandboxSection = sandboxMounts ? `\n\n${formatSandboxNote(sandboxMounts)}` : "";
   if (meta.mode === "worktree") {
     return `**pit — worktree mode**
@@ -58,12 +58,12 @@ No git isolation. Changes affect the current directory directly.${sandboxSection
  * Produces three lines: session header, pit CustomEntry, CustomMessageEntry (TUI banner).
  * Callers supply sessionId and isoTs so new Date() and randomUUID() stay at the IO boundary.
  */
-export function buildSessionLines(
+export const buildSessionLines = (
   result: WorktreeResult,
   sessionId: string,
   isoTs: string,
   sandboxMounts?: SandboxMounts,
-): string {
+): string  => {
   const id1 = randomBytes(4).toString("hex");
   const id2 = randomBytes(4).toString("hex");
   const { meta } = result;
@@ -82,6 +82,6 @@ export function buildSessionLines(
  * Build the --append-system-prompt args to pass to pi on every launch.
  * Delivers current pit mode and sandbox state without touching the session file.
  */
-export function systemPromptArgs(meta: PitMetadata, sandboxMounts: SandboxMounts | undefined): string[] {
+export const systemPromptArgs = (meta: PitMetadata, sandboxMounts: SandboxMounts | undefined): string[]  => {
   return ["--append-system-prompt", buildAnnouncement(meta, sandboxMounts)];
 }

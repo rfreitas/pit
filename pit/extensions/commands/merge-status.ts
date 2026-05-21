@@ -37,11 +37,11 @@ const FALLBACK_POLL_MS = 5 * 60_000;
  * Pure function: convert ahead/behind counts into footer text.
  * Exported for testing.
  */
-export function formatStatus(
+export const formatStatus = (
   aheadCount: number,
   behindCount: number,
   parentBranch: string,
-): string {
+): string  => {
   if (aheadCount === 0 && behindCount === 0) {
     return `in sync with ${parentBranch}`;
   } else if (aheadCount > 0 && behindCount === 0) {
@@ -75,9 +75,9 @@ export default function (pi: ExtensionAPI) {
       setStatus(formatStatus(r.aheadCount, r.behindCount, r.parentBranch));
     });
 
-  function openSubscription(
+  const openSubscription = (
     setStatus: (text: string | undefined) => void,
-  ): void {
+  ): void => {
     const sock = createConnection(socketPath!);
     subSocket = sock;
     // eslint-disable-next-line functional/no-let

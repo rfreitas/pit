@@ -42,6 +42,7 @@ export default [
       "functional/immutable-data": "warn",       // No Array.push, Object mutation
       "functional/no-loop-statements": "warn",   // Use .map, .reduce, Effect.all
       "prefer-arrow-callback": "warn",           // No function() in callbacks — use arrows
+      "func-style": ["warn", "expression"],      // const fn = () => {} over function fn() {}
     }
   },
 

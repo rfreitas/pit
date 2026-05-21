@@ -120,7 +120,7 @@ const worktreeGit = (
  * Detect the parent branch (master or main) in a repo.
  * Kept as a plain sync helper — only called from Effect.sync wrappers.
  */
-function detectParentBranch(mainRepo: string): string | null {
+const detectParentBranch = (mainRepo: string): string | null  => {
   return ["master", "main"].find(candidate => {
     try { execFileSync("git", ["rev-parse", "--verify", candidate], { cwd: mainRepo, stdio: "ignore" }); return true; }
     catch { return false; }
@@ -277,7 +277,7 @@ const dispatchEffect = (
  * Kept fully imperative — watch push events are callback-driven.
  * Uses sync fs calls directly (not FileSystem service) to avoid async in callbacks.
  */
-function handleSubscribe(socket: Socket): void {
+const handleSubscribe = (socket: Socket): void  => {
   // Sync helpers for use in this imperative context
   const syncReadWorktreeBranch = (cwd: string): string | null => {
     try {
@@ -360,7 +360,7 @@ function handleSubscribe(socket: Socket): void {
 
 // ── server ────────────────────────────────────────────────────────────────────
 
-function cleanup() {
+const cleanup = () => {
   server.close();
   try { unlinkSync(socketPath); } catch { /* already gone */ }
   process.exit(0);

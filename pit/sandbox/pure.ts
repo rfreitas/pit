@@ -13,7 +13,7 @@ import type { SandboxMounts, OverlayMount } from "../types.ts";
  * Entries are grouped by label (or path when no label), deduplicating repeated
  * labels (e.g. several extension paths all labelled "Pi extensions" → one entry).
  */
-export function formatSandboxNote(mounts: SandboxMounts): string {
+export const formatSandboxNote = (mounts: SandboxMounts): string  => {
   const dedup = (items: Array<{ path: string; label?: string }>) => {
     const keys = [...new Map(items.map(m => [m.label ?? m.path, true])).keys()];
     return keys.map(key => `\`${key}\``).join(", ");
@@ -35,7 +35,7 @@ export function formatSandboxNote(mounts: SandboxMounts): string {
  * All IO (resolveMainRepo, resolveUnversionedDirs, fs.statSync,
  * resolveWorktreeGitRwMounts) must be done by the caller before calling this.
  */
-export function buildSandboxMountSpec(params: {
+export const buildSandboxMountSpec = (params: {
   home: string;
   cwd: string;
   agentDirReal: string;
@@ -43,7 +43,7 @@ export function buildSandboxMountSpec(params: {
   nodeDir: string;
   gitRwMounts: Array<{ path: string; label?: string }>;
   overlayDirs: OverlayMount[];
-}): SandboxMounts {
+}): SandboxMounts  => {
   const { home, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs } = params;
   return {
     ro: [
@@ -76,10 +76,10 @@ export function buildSandboxMountSpec(params: {
  * Filter a settings object by removing denied packages.
  * Pure — returns a new object, never mutates the original.
  */
-export function applyDenylist(
+export const applyDenylist = (
   settings: Record<string, unknown>,
   denyPackages: string[],
-): Record<string, unknown> {
+): Record<string, unknown>  => {
   if (denyPackages.length === 0) return settings;
   const deny = new Set(denyPackages);
   return {

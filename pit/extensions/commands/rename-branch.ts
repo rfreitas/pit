@@ -69,7 +69,7 @@ const buildGitContextEffect = (
 type ContentBlock = { type?: string; text?: string };
 type SessionEntry = { type: string; message?: { role?: string; content?: unknown } };
 
-function extractText(content: unknown): string {
+const extractText = (content: unknown): string  => {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return (content as ContentBlock[])
@@ -78,7 +78,7 @@ function extractText(content: unknown): string {
     .join("\n");
 }
 
-function buildConversationText(entries: SessionEntry[]): string {
+const buildConversationText = (entries: SessionEntry[]): string  => {
   return entries
     .filter(e => e.type === "message" && (e.message?.role === "user" || e.message?.role === "assistant"))
     .flatMap(e => {

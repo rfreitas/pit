@@ -79,7 +79,7 @@ const PIT_DIR = join(AGENT_DIR, "pit");
 
 // ── extension args ────────────────────────────────────────────────────────────
 
-function extensionArgs(): string[] {
+const extensionArgs = (): string[]  => {
   const d = resolve(dirname(process.argv[1]));
   return [
     join(d, "extensions", "escape", "reload.ts"),
@@ -92,18 +92,18 @@ function extensionArgs(): string[] {
 
 // ── sandbox ───────────────────────────────────────────────────────────────────
 
-function findBwrap(): string | null {
+const findBwrap = (): string | null  => {
   return ["/usr/bin/bwrap", "/usr/local/bin/bwrap"].find(p => existsSync(p)) ?? null;
 }
 
-function findNodeModules(dir: string): string | null {
+const findNodeModules = (dir: string): string | null  => {
   const nm = join(dir, "node_modules");
   if (existsSync(nm)) return nm;
   const up = dirname(dir);
   return up === dir ? null : findNodeModules(up);
 }
 
-function getExtensionMounts(): string[] {
+const getExtensionMounts = (): string[]  => {
   const settingsFile = join(AGENT_DIR, "settings.json");
   if (!existsSync(settingsFile)) return [];
   const settings = (() => {
@@ -178,7 +178,7 @@ const resolveSandboxMountsEffect = (
 
 // ── launch ────────────────────────────────────────────────────────────────────
 
-function shadowAgentMountArgs(agentDirReal: string, settingsPath: string): string[] {
+const shadowAgentMountArgs = (agentDirReal: string, settingsPath: string): string[]  => {
   return [
     "--bind", agentDirReal, "/pit-agent",
     "--bind", settingsPath, "/pit-agent/settings.json",
@@ -190,12 +190,12 @@ function shadowAgentMountArgs(agentDirReal: string, settingsPath: string): strin
  * Mounts are pre-computed by the Effect pipeline and passed in.
  * Never returns — exits the process.
  */
-function bwrapLaunch(
+const bwrapLaunch = (
   cwd: string,
   piArgs: string[],
   mounts: SandboxMounts,
   settingsPath?: string,
-): never {
+): never  => {
   const bwrap = findBwrap()!;
   const nodeBin = process.execPath;
   const nodeDir = dirname(dirname(nodeBin));
@@ -307,10 +307,10 @@ const startPitEscapeEffect = (
 
 // ── resume via session picker ─────────────────────────────────────────────────
 
-async function showPicker(
+const showPicker = async (
   piArgs: string[],
   sandbox: boolean,
-): Promise<{ sessionFile: string; meta: PitMetadata } | null> {
+): Promise<{ sessionFile: string; meta: PitMetadata } | null> => {
   const { TUI, ProcessTerminal } = await import("@earendil-works/pi-tui");
   initTheme();
 
