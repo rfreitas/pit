@@ -80,7 +80,7 @@ export const readPitConfig = (
  */
 export const writeFilteredSettings = (
   agentDir: string,
-  pitConfig: PitConfig,
+  pitConfig: Readonly<PitConfig>,
   hostSettingsPath: string,
 ): Effect.Effect<void, SettingsWriteError, FileSystem> =>
   Effect.gen(function* () {
@@ -111,7 +111,7 @@ export const writeFilteredSettings = (
  */
 export const createTempSettingsFileEffect = (
   agentDir: string,
-  pitConfig: PitConfig,
+  pitConfig: Readonly<PitConfig>,
 ): Effect.Effect<string, SettingsWriteError, FileSystem> =>
   Effect.gen(function* () {
     const tmp = join(tmpdir(), `pit-settings-${process.pid}.json`);

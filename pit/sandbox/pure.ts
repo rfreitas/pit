@@ -13,7 +13,7 @@ import type { SandboxMounts, OverlayMount } from "../types.ts";
  * Entries are grouped by label (or path when no label), deduplicating repeated
  * labels (e.g. several extension paths all labelled "Pi extensions" → one entry).
  */
-export const formatSandboxNote = (mounts: SandboxMounts): string  => {
+export const formatSandboxNote = (mounts: Readonly<SandboxMounts>): string  => {
   const dedup = (items: Array<{ path: string; label?: string }>) => {
     const keys = [...new Map(items.map(m => [m.label ?? m.path, true])).keys()];
     return keys.map(key => `\`${key}\``).join(", ");
@@ -35,7 +35,7 @@ export const formatSandboxNote = (mounts: SandboxMounts): string  => {
  * All IO (resolveMainRepo, resolveUnversionedDirs, fs.statSync,
  * resolveWorktreeGitRwMounts) must be done by the caller before calling this.
  */
-export const buildSandboxMountSpec = (params: {
+export const buildSandboxMountSpec = (params: Readonly<{
   home: string;
   cwd: string;
   agentDirReal: string;
@@ -43,7 +43,7 @@ export const buildSandboxMountSpec = (params: {
   nodeDir: string;
   gitRwMounts: Array<{ path: string; label?: string }>;
   overlayDirs: OverlayMount[];
-}): SandboxMounts  => {
+}>): SandboxMounts  => {
   const { home, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs } = params;
   return {
     ro: [

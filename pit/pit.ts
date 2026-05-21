@@ -192,8 +192,8 @@ const shadowAgentMountArgs = (agentDirReal: string, settingsPath: string): strin
  */
 const bwrapLaunch = (
   cwd: string,
-  piArgs: string[],
-  mounts: SandboxMounts,
+  piArgs: Readonly<string[]>,
+  mounts: Readonly<SandboxMounts>,
   settingsPath?: string,
 ): never  => {
   const bwrap = findBwrap()!;
@@ -215,7 +215,7 @@ const bwrapLaunch = (
   const shadowArgs = settingsPath ? shadowAgentMountArgs(agentDirReal, settingsPath) : [];
   const agentDirEnv = settingsPath ? ["--setenv", "PI_CODING_AGENT_DIR", "/pit-agent"] : [];
 
-  const args: string[] = [
+  const args: Readonly<string[]> = [
     "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
     ...mountArgs, ...shadowArgs,
     "--unshare-user", "--unshare-pid", "--die-with-parent",

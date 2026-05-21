@@ -17,10 +17,10 @@ import { WorktreeCreationError, WorktreeMissingError } from "../errors.ts";
 export const createWorktreeEffect = ({
   branch,
   worktree,
-}: {
+}: Readonly<{
   branch: string;
   worktree: string;
-}): Effect.Effect<void, WorktreeCreationError, CommandExecutor> =>
+}>): Effect.Effect<void, WorktreeCreationError, CommandExecutor> =>
   Effect.gen(function* () {
     console.error("pit: creating worktree");
     console.error(`  branch:   ${branch}`);
@@ -44,11 +44,11 @@ export const recreateWorktreeEffect = ({
   repo,
   branch,
   worktree,
-}: {
+}: Readonly<{
   repo: string;
   branch: string;
   worktree: string;
-}): Effect.Effect<
+}>): Effect.Effect<
   void,
   WorktreeMissingError | WorktreeCreationError,
   CommandExecutor

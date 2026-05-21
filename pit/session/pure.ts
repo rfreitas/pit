@@ -25,7 +25,7 @@ export const cwdToBucket = (cwd: string): string  => {
  * Build the mode announcement shown to the agent at session start.
  * Pure — output depends only on the worktree metadata and sandbox mounts.
  */
-export const buildAnnouncement = (meta: PitMetadata, sandboxMounts?: SandboxMounts): string  => {
+export const buildAnnouncement = (meta: Readonly<PitMetadata>, sandboxMounts?: Readonly<SandboxMounts>): string  => {
   const sandboxSection = sandboxMounts ? `\n\n${formatSandboxNote(sandboxMounts)}` : "";
   if (meta.mode === "worktree") {
     return `**pit — worktree mode**
@@ -59,7 +59,7 @@ No git isolation. Changes affect the current directory directly.${sandboxSection
  * Callers supply sessionId and isoTs so new Date() and randomUUID() stay at the IO boundary.
  */
 export const buildSessionLines = (
-  result: WorktreeResult,
+  result: Readonly<WorktreeResult>,
   sessionId: string,
   isoTs: string,
   sandboxMounts?: SandboxMounts,
@@ -82,6 +82,6 @@ export const buildSessionLines = (
  * Build the --append-system-prompt args to pass to pi on every launch.
  * Delivers current pit mode and sandbox state without touching the session file.
  */
-export const systemPromptArgs = (meta: PitMetadata, sandboxMounts: SandboxMounts | undefined): string[]  => {
+export const systemPromptArgs = (meta: Readonly<PitMetadata>, sandboxMounts: Readonly<SandboxMounts> | undefined): string[]  => {
   return ["--append-system-prompt", buildAnnouncement(meta, sandboxMounts)];
 }

@@ -57,9 +57,9 @@ export const findPitSession = (
  * mode announcement. Returns the file path to pass as --session to pi.
  */
 export const setupNewSession = (
-  result: WorktreeResult,
+  result: Readonly<WorktreeResult>,
   agentDir: string,
-  sandboxMounts?: SandboxMounts,
+  sandboxMounts?: Readonly<SandboxMounts>,
 ): Effect.Effect<string, SessionWriteError, FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem;

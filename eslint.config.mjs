@@ -38,11 +38,33 @@ export default [
       // Pushes the codebase towards functional purity.
       // Set to "warn" so it doesn't break CI, but highlights opportunities
       // to extract pure functions and use Effect/Array methods instead of loops.
-      "functional/no-let": "warn",               // Use const
+      "functional/no-let": "warn",               // Use const (warn: being progressively fixed)
       "functional/immutable-data": "warn",       // No Array.push, Object mutation
       "functional/no-loop-statements": "warn",   // Use .map, .reduce, Effect.all
       "prefer-arrow-callback": "warn",           // No function() in callbacks — use arrows
       "func-style": ["warn", "expression"],      // const fn = () => {} over function fn() {}
+      "functional/no-throw-statements": ["warn", { "allowToRejectPromises": true }],
+      "functional/no-class-inheritance": "warn",
+      "functional/no-mixed-types": "warn",
+      "functional/functional-parameters": ["warn", { "enforceParameterCount": false }],
+      "functional/prefer-immutable-types": ["warn", {
+        "enforcement": "None",
+        "overrides": [{ "specifiers": { "from": "file" }, "options": {
+          "ignoreInferredTypes": true,
+          "parameters": { "enforcement": "ReadonlyShallow" }
+        }}]
+      }],
+      "functional/type-declaration-immutability": ["warn", {
+        "rules": [{
+          "identifiers": ["^I?Immutable.+"], "immutability": 5, "comparator": 1
+        }, {
+          "identifiers": ["^I?ReadonlyDeep.+"], "immutability": 4, "comparator": 1
+        }, {
+          "identifiers": ["^I?Readonly.+"], "immutability": 3, "comparator": 1
+        }, {
+          "identifiers": ["^I?Mutable.+"], "immutability": 2, "comparator": -1
+        }]
+      }],
     }
   },
 

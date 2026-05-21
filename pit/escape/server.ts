@@ -227,7 +227,7 @@ type Request = {
 };
 
 const dispatchEffect = (
-  req: Request,
+  req: Readonly<Request>,
 ): Effect.Effect<{ result: object; keepOpen: boolean }, never, NodeContext> =>
   Effect.gen(function* () {
     switch (req.op) {
