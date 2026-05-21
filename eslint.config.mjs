@@ -44,7 +44,11 @@ export default [
       "prefer-arrow-callback": "warn",           // No function() in callbacks — use arrows
       "func-style": ["warn", "expression"],      // const fn = () => {} over function fn() {}
       "functional/no-throw-statements": ["warn", { "allowToRejectPromises": true }],
-      "functional/no-class-inheritance": "warn",
+      "functional/no-class-inheritance": ["warn", {
+        // Allow Effect's Data.TaggedError pattern — the only way to define
+        // typed errors in Effect. Bans all other class inheritance.
+        "ignoreCodePattern": "TaggedError"
+      }],
       "functional/no-mixed-types": "warn",
       "functional/functional-parameters": ["warn", { "enforceParameterCount": false }],
       "functional/prefer-immutable-types": ["warn", {
