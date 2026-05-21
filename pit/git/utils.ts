@@ -12,9 +12,11 @@
  *     can decide whether to abort or degrade gracefully.
  */
 
-import * as path from "node:path";
+import { join, resolve } from "node:path";
 import { Effect, Option } from "effect";
-import { Command, FileSystem, type CommandExecutor } from "@effect/platform";
+import { make as makeCommand, string as commandString, exitCode as commandExitCode } from "@effect/platform/Command";
+import { FileSystem } from "@effect/platform/FileSystem";
+import { CommandExecutor } from "@effect/platform/CommandExecutor";
 import type { PlatformError } from "@effect/platform/Error";
 
 // ── linked worktree detection ─────────────────────────────────────────────────
@@ -25,10 +27,10 @@ import type { PlatformError } from "@effect/platform/Error";
  */
 export const isLinkedWorktree = (
   cwd: string,
-): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
+): Effect.Effect<boolean, never, FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const gitPath = path.join(cwd, ".git");
+    const fs = yield* FileSystem;
+    const gitPath = join(cwd, ".git");
     const exists = yield* fs.exists(gitPath).pipe(Effect.orElse(() => Effect.succeed(false)));
     if (!exists) return false;
     const info = yield* fs.stat(gitPath).pipe(Effect.orElse(() => Effect.succeed(null)));
@@ -44,10 +46,10 @@ export const isLinkedWorktree = (
  */
 export const resolveMainRepo = (
   cwd: string,
-): Effect.Effect<string | null, never, FileSystem.FileSystem> =>
+): Effect.Effect<string | null, never, FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const gitPath = path.join(cwd, ".git");
+    const fs = yield* FileSystem;
+    const gitPath = join(cwd, ".git");
     const exists = yield* fs.exists(gitPath).pipe(Effect.orElse(() => Effect.succeed(false)));
     if (!exists) return null;
     const info = yield* fs.stat(gitPath).pipe(Effect.orElse(() => Effect.succeed(null)));
@@ -55,7 +57,7 @@ export const resolveMainRepo = (
     const content = yield* fs.readFileString(gitPath).pipe(Effect.orElse(() => Effect.succeed("")));
     const gitdir = content.trim().replace(/^gitdir:\s*/, "");
     if (!gitdir.includes("/.git/worktrees/")) return null;
-    return path.resolve(gitdir, "../../..");
+    return resolve(gitdir, "../../..");
   });
 
 /**
@@ -64,10 +66,10 @@ export const resolveMainRepo = (
  */
 export const readWorktreeBranch = (
   cwd: string,
-): Effect.Effect<string | null, never, FileSystem.FileSystem> =>
+): Effect.Effect<string | null, never, FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const gitPath = path.join(cwd, ".git");
+    const fs = yield* FileSystem;
+    const gitPath = join(cwd, ".git");
     const exists = yield* fs.exists(gitPath).pipe(Effect.orElse(() => Effect.succeed(false)));
     if (!exists) return null;
     const info = yield* fs.stat(gitPath).pipe(Effect.orElse(() => Effect.succeed(null)));
@@ -75,7 +77,7 @@ export const readWorktreeBranch = (
     const content = yield* fs.readFileString(gitPath).pipe(Effect.orElse(() => Effect.succeed("")));
     const gitdir = content.trim().replace(/^gitdir:\s*/, "");
     if (!gitdir.includes("/.git/worktrees/")) return null;
-    const head = yield* fs.readFileString(path.join(gitdir, "HEAD")).pipe(
+    const head = yield* fs.readFileString(join(gitdir, "HEAD")).pipe(
       Effect.orElse(() => Effect.succeed("")),
     );
     const m = head.trim().match(/^ref: refs\/heads\/(.+)$/);
@@ -88,10 +90,10 @@ export const readWorktreeBranch = (
  */
 export const readWorktreeGitdir = (
   cwd: string,
-): Effect.Effect<string | null, never, FileSystem.FileSystem> =>
+): Effect.Effect<string | null, never, FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const gitPath = path.join(cwd, ".git");
+    const fs = yield* FileSystem;
+    const gitPath = join(cwd, ".git");
     const exists = yield* fs.exists(gitPath).pipe(Effect.orElse(() => Effect.succeed(false)));
     if (!exists) return null;
     const info = yield* fs.stat(gitPath).pipe(Effect.orElse(() => Effect.succeed(null)));
@@ -108,10 +110,10 @@ export const readWorktreeGitdir = (
  */
 export const resolveWorktreeGitRwMounts = (
   cwd: string,
-): Effect.Effect<Array<{ path: string; label?: string }>, never, FileSystem.FileSystem> =>
+): Effect.Effect<Array<{ path: string; label?: string }>, never, FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const gitPath = path.join(cwd, ".git");
+    const fs = yield* FileSystem;
+    const gitPath = join(cwd, ".git");
     const exists = yield* fs.exists(gitPath).pipe(Effect.orElse(() => Effect.succeed(false)));
     if (!exists) return [];
     const info = yield* fs.stat(gitPath).pipe(Effect.orElse(() => Effect.succeed(null)));
@@ -119,10 +121,10 @@ export const resolveWorktreeGitRwMounts = (
     const content = yield* fs.readFileString(gitPath).pipe(Effect.orElse(() => Effect.succeed("")));
     const worktreeDir = content.trim().replace(/^gitdir:\s*/, "");
     if (!worktreeDir.includes("/.git/worktrees/")) return [];
-    const mainGitDir = path.resolve(worktreeDir, "../..");
+    const mainGitDir = resolve(worktreeDir, "../..");
     return [
       { path: worktreeDir, label: "worktree git metadata" },
-      { path: path.join(mainGitDir, "objects"), label: "git objects" },
+      { path: join(mainGitDir, "objects"), label: "git objects" },
     ];
   });
 
@@ -135,9 +137,9 @@ export const resolveWorktreeGitRwMounts = (
 export const gitRepoRoot = (): Effect.Effect<
   string | null,
   never,
-  CommandExecutor.CommandExecutor
+  CommandExecutor
 > =>
-  Command.string(Command.make("git", "rev-parse", "--show-toplevel")).pipe(
+  commandString(makeCommand("git", "rev-parse", "--show-toplevel")).pipe(
     Effect.map((s) => s.trim() as string | null),
     Effect.catchAll(() => Effect.succeed(null)),
   );
@@ -149,9 +151,9 @@ export const gitRepoRoot = (): Effect.Effect<
 export const branchExists = (
   repo: string,
   branch: string,
-): Effect.Effect<boolean, never, CommandExecutor.CommandExecutor> =>
-  Command.exitCode(
-    Command.make(
+): Effect.Effect<boolean, never, CommandExecutor> =>
+  commandExitCode(
+    makeCommand(
       "git",
       "-C",
       repo,
@@ -171,10 +173,10 @@ export const branchExists = (
  */
 export const listRepoWorktrees = (
   repo: string,
-): Effect.Effect<string[], PlatformError, CommandExecutor.CommandExecutor> =>
+): Effect.Effect<string[], PlatformError, CommandExecutor> =>
   Effect.gen(function* () {
-    const out = yield* Command.string(
-      Command.make("git", "-C", repo, "worktree", "list", "--porcelain"),
+    const out = yield* commandString(
+      makeCommand("git", "-C", repo, "worktree", "list", "--porcelain"),
     );
     const paths: string[] = [];
     let currentPath = "";

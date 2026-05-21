@@ -3,7 +3,7 @@
  * No filesystem, no process spawning.
  */
 
-import * as crypto from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import type { PitMetadata, WorktreeResult, SandboxMounts } from "../types.ts";
 import { formatSandboxNote } from "../sandbox/pure.ts";
@@ -56,7 +56,7 @@ No git isolation. Changes affect the current directory directly.${sandboxSection
 /**
  * Build the JSONL content for a new session file.
  * Produces three lines: session header, pit CustomEntry, CustomMessageEntry (TUI banner).
- * Callers supply sessionId and isoTs so new Date() and crypto.randomUUID() stay at the IO boundary.
+ * Callers supply sessionId and isoTs so new Date() and randomUUID() stay at the IO boundary.
  */
 export function buildSessionLines(
   result: WorktreeResult,
@@ -64,8 +64,8 @@ export function buildSessionLines(
   isoTs: string,
   sandboxMounts?: SandboxMounts,
 ): string {
-  const id1 = crypto.randomBytes(4).toString("hex");
-  const id2 = crypto.randomBytes(4).toString("hex");
+  const id1 = randomBytes(4).toString("hex");
+  const id2 = randomBytes(4).toString("hex");
   const { meta } = result;
   return [
     { type: "session", version: CURRENT_SESSION_VERSION, id: sessionId, timestamp: isoTs, cwd: result.cwd },

@@ -3,10 +3,12 @@
  * All IO operations are Effect-based with platform services.
  */
 
-import * as os from "node:os";
-import * as path from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { Effect } from "effect";
-import { Command, FileSystem, type CommandExecutor } from "@effect/platform";
+import { make as makeCommand, lines as commandLines } from "@effect/platform/Command";
+import { FileSystem } from "@effect/platform/FileSystem";
+import { CommandExecutor } from "@effect/platform/CommandExecutor";
 import type { PlatformError } from "@effect/platform/Error";
 import type { PitConfig } from "../types.ts";
 import { applyDenylist } from "./pure.ts";
@@ -21,13 +23,13 @@ import { SettingsWriteError } from "../errors.ts";
  */
 export const resolveUnversionedDirs = (
   parentRepo: string,
-): Effect.Effect<string[], PlatformError, CommandExecutor.CommandExecutor> =>
+): Effect.Effect<string[], PlatformError, CommandExecutor> =>
   Effect.gen(function* () {
     const runLines = (
       extra: string[],
-    ): Effect.Effect<string[], PlatformError, CommandExecutor.CommandExecutor> =>
-      Command.lines(
-        Command.make(
+    ): Effect.Effect<string[], PlatformError, CommandExecutor> =>
+      commandLines(
+        makeCommand(
           "git",
           "-C",
           parentRepo,
@@ -61,10 +63,10 @@ export const resolveUnversionedDirs = (
  */
 export const readPitConfig = (
   pitDir: string,
-): Effect.Effect<PitConfig, never, FileSystem.FileSystem> =>
+): Effect.Effect<PitConfig, never, FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const configPath = path.join(pitDir, "config.json");
+    const fs = yield* FileSystem;
+    const configPath = join(pitDir, "config.json");
     const exists = yield* fs.exists(configPath).pipe(Effect.orElse(() => Effect.succeed(false)));
     if (!exists) return {};
     const raw = yield* fs.readFileString(configPath).pipe(Effect.orElse(() => Effect.succeed("")));
@@ -85,10 +87,10 @@ export const writeFilteredSettings = (
   agentDir: string,
   pitConfig: PitConfig,
   hostSettingsPath: string,
-): Effect.Effect<void, SettingsWriteError, FileSystem.FileSystem> =>
+): Effect.Effect<void, SettingsWriteError, FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const settingsPath = path.join(agentDir, "settings.json");
+    const fs = yield* FileSystem;
+    const settingsPath = join(agentDir, "settings.json");
     const exists = yield* fs.exists(settingsPath).pipe(Effect.orElse(() => Effect.succeed(false)));
     const raw = exists
       ? yield* fs.readFileString(settingsPath).pipe(Effect.orElse(() => Effect.succeed("{}")))
@@ -98,7 +100,7 @@ export const writeFilteredSettings = (
       catch { return {} as Record<string, unknown>; }
     })();
     const filtered = applyDenylist(settings, pitConfig.denyPackages ?? []);
-    yield* fs.makeDirectory(path.dirname(hostSettingsPath), { recursive: true }).pipe(
+    yield* fs.makeDirectory(dirname(hostSettingsPath), { recursive: true }).pipe(
       Effect.ignore,
     );
     yield* fs.writeFileString(hostSettingsPath, JSON.stringify(filtered, null, 2) + "\n").pipe(
@@ -109,15 +111,15 @@ export const writeFilteredSettings = (
   });
 
 /**
- * Create a temporary file in os.tmpdir(), write filtered settings into it,
+ * Create a temporary file in tmpdir(), write filtered settings into it,
  * and return the path. Caller is responsible for deleting it when done.
  */
 export const createTempSettingsFileEffect = (
   agentDir: string,
   pitConfig: PitConfig,
-): Effect.Effect<string, SettingsWriteError, FileSystem.FileSystem> =>
+): Effect.Effect<string, SettingsWriteError, FileSystem> =>
   Effect.gen(function* () {
-    const tmp = path.join(os.tmpdir(), `pit-settings-${process.pid}.json`);
+    const tmp = join(tmpdir(), `pit-settings-${process.pid}.json`);
     yield* writeFilteredSettings(agentDir, pitConfig, tmp);
     return tmp;
   });

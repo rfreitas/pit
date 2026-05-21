@@ -41,13 +41,15 @@
  *   Error response: { "error": "reason" }
  */
 
-import * as net from "node:net";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { createServer, type Server } from "node:net";
+import type { Socket } from "node:net";
+import { existsSync, readFileSync, statSync, unlinkSync, watch, type FSWatcher } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Effect, Stream, Chunk } from "effect";
-import { Command, FileSystem } from "@effect/platform";
-import { NodeContext } from "@effect/platform-node";
+import { make as makeCommand, start as startCommand, workingDirectory as commandWorkingDirectory } from "@effect/platform/Command";
+import { FileSystem } from "@effect/platform/FileSystem";
+import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
 import {
   resolveMainRepo,
   readWorktreeBranch,
@@ -81,11 +83,11 @@ type GitResult = { stdout: string; stderr: string; code: number };
 const gitEffect = (
   args: string[],
   cwd: string,
-): Effect.Effect<GitResult, never, NodeContext.NodeContext> =>
+): Effect.Effect<GitResult, never, NodeContext> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const proc = yield* Command.start(
-        Command.workingDirectory(Command.make("git", ...args), cwd),
+      const proc = yield* startCommand(
+        commandWorkingDirectory(makeCommand("git", ...args), cwd),
       );
       const decoder = new TextDecoder("utf8");
       const [stdoutChunks, stderrChunks, code] = yield* Effect.all([
@@ -109,7 +111,7 @@ const gitEffect = (
 
 const worktreeGit = (
   args: string[],
-): Effect.Effect<GitResult, never, NodeContext.NodeContext> =>
+): Effect.Effect<GitResult, never, NodeContext> =>
   gitEffect(args, worktreePath);
 
 /**
@@ -134,7 +136,7 @@ function detectParentBranch(mainRepo: string): string | null {
 const opGetState = (): Effect.Effect<
   object,
   never,
-  NodeContext.NodeContext
+  NodeContext
 > =>
   Effect.gen(function* () {
     const branch = yield* readWorktreeBranch(worktreePath);
@@ -145,7 +147,7 @@ const opGetState = (): Effect.Effect<
 
     const gitdir = yield* readWorktreeGitdir(worktreePath);
     const mergeInProgress = gitdir
-      ? fs.existsSync(path.join(gitdir, "MERGE_HEAD"))
+      ? existsSync(join(gitdir, "MERGE_HEAD"))
       : false;
 
     let conflicts: string[] = [];
@@ -165,7 +167,7 @@ const opGetState = (): Effect.Effect<
 
 const opMergeToParent = (
   parentBranch: string,
-): Effect.Effect<object, never, NodeContext.NodeContext> =>
+): Effect.Effect<object, never, NodeContext> =>
   Effect.gen(function* () {
     const mainRepo = yield* resolveMainRepo(worktreePath);
     if (!mainRepo) return { error: "Cannot resolve main repo from worktree" };
@@ -195,7 +197,7 @@ const opMergeToParent = (
 const opRefreshSettings = (): Effect.Effect<
   object,
   never,
-  FileSystem.FileSystem
+  FileSystem
 > =>
   Effect.gen(function* () {
     const config = yield* readPitConfig(pitDir);
@@ -208,7 +210,7 @@ const opRefreshSettings = (): Effect.Effect<
 const opIsMerged = (): Effect.Effect<
   object,
   never,
-  NodeContext.NodeContext
+  NodeContext
 > =>
   Effect.gen(function* () {
     const branch = yield* readWorktreeBranch(worktreePath);
@@ -241,7 +243,7 @@ type Request = {
 
 const dispatchEffect = (
   req: Request,
-): Effect.Effect<{ result: object; keepOpen: boolean }, never, NodeContext.NodeContext> =>
+): Effect.Effect<{ result: object; keepOpen: boolean }, never, NodeContext> =>
   Effect.gen(function* () {
     switch (req.op) {
       case "git": {
@@ -287,29 +289,29 @@ const dispatchEffect = (
 
 /**
  * Set up a persistent subscription on a socket for parent branch ref changes.
- * Kept fully imperative — fs.watch push events are callback-driven.
+ * Kept fully imperative — watch push events are callback-driven.
  * Uses sync fs calls directly (not FileSystem service) to avoid async in callbacks.
  */
-function handleSubscribe(socket: net.Socket): void {
+function handleSubscribe(socket: Socket): void {
   // Sync helpers for use in this imperative context
   const syncReadWorktreeBranch = (cwd: string): string | null => {
     try {
-      const gitPath = path.join(cwd, ".git");
-      if (fs.statSync(gitPath).isDirectory()) return null;
-      const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+      const gitPath = join(cwd, ".git");
+      if (statSync(gitPath).isDirectory()) return null;
+      const gitdir = readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
       if (!gitdir.includes("/.git/worktrees/")) return null;
-      const head = fs.readFileSync(path.join(gitdir, "HEAD"), "utf8").trim();
+      const head = readFileSync(join(gitdir, "HEAD"), "utf8").trim();
       const m = head.match(/^ref: refs\/heads\/(.+)$/);
       return m ? m[1] : null;
     } catch { return null; }
   };
   const syncResolveMainRepo = (cwd: string): string | null => {
     try {
-      const gitPath = path.join(cwd, ".git");
-      if (fs.statSync(gitPath).isDirectory()) return null;
-      const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+      const gitPath = join(cwd, ".git");
+      if (statSync(gitPath).isDirectory()) return null;
+      const gitdir = readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
       if (!gitdir.includes("/.git/worktrees/")) return null;
-      return path.resolve(gitdir, "../../..");
+      return resolve(gitdir, "../../..");
     } catch { return null; }
   };
 
@@ -326,10 +328,10 @@ function handleSubscribe(socket: net.Socket): void {
 
   socket.write(JSON.stringify({ ok: true, watching: parentBranch }) + "\n");
 
-  const mainGitDir = path.join(mainRepo, ".git");
-  const refsHeadsDir = path.join(mainGitDir, "refs", "heads");
-  const reftableDir = path.join(mainGitDir, "reftable");
-  const watchers: fs.FSWatcher[] = [];
+  const mainGitDir = join(mainRepo, ".git");
+  const refsHeadsDir = join(mainGitDir, "refs", "heads");
+  const reftableDir = join(mainGitDir, "reftable");
+  const watchers: FSWatcher[] = [];
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
   const notify = () => {
@@ -342,7 +344,7 @@ function handleSubscribe(socket: net.Socket): void {
 
   const tryWatch = (target: string, filter?: (f: string | null) => boolean) => {
     try {
-      watchers.push(fs.watch(target, (_type, filename) => {
+      watchers.push(watch(target, (_type, filename) => {
         if (!filter || filter(filename)) notify();
       }));
     } catch { /* target absent or unwatchable */ }
@@ -351,12 +353,12 @@ function handleSubscribe(socket: net.Socket): void {
   tryWatch(refsHeadsDir, (f) => f === parentBranch);
   const worktreeBranch = syncReadWorktreeBranch(worktreePath);
   if (worktreeBranch) {
-    const branchRefDir = path.join(refsHeadsDir, path.dirname(worktreeBranch));
-    const branchLeaf = path.basename(worktreeBranch);
+    const branchRefDir = join(refsHeadsDir, dirname(worktreeBranch));
+    const branchLeaf = basename(worktreeBranch);
     tryWatch(branchRefDir, (f) => f === branchLeaf);
   }
   tryWatch(mainGitDir, (f) => f === "packed-refs");
-  if (fs.existsSync(reftableDir)) tryWatch(reftableDir);
+  if (existsSync(reftableDir)) tryWatch(reftableDir);
 
   const cleanup = () => {
     for (const w of watchers) { try { w.close(); } catch { /* */ } }
@@ -371,13 +373,13 @@ function handleSubscribe(socket: net.Socket): void {
 
 function cleanup() {
   server.close();
-  try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
+  try { unlinkSync(socketPath); } catch { /* already gone */ }
   process.exit(0);
 }
 process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
 
-const server = net.createServer((socket) => {
+const server = createServer((socket) => {
   let buf = "";
 
   socket.on("data", (chunk: Buffer) => {
@@ -406,7 +408,7 @@ const server = net.createServer((socket) => {
     }
 
     void Effect.runPromise(
-      dispatchEffect(req).pipe(Effect.provide(NodeContext.layer)),
+      dispatchEffect(req).pipe(Effect.provide(NodeContextLayer)),
     ).then(({ result, keepOpen }) => {
       if (!keepOpen) socket.end(JSON.stringify(result) + "\n");
     });

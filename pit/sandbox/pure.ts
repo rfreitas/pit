@@ -3,7 +3,7 @@
  * No filesystem, no process spawning.
  */
 
-import * as path from "node:path";
+import { join } from "node:path";
 import type { SandboxMounts, OverlayMount } from "../types.ts";
 
 // ── sandbox announcement ──────────────────────────────────────────────────────
@@ -66,10 +66,10 @@ export function buildSandboxMountSpec(params: {
       ...gitRwMounts,
       { path: cwd },
       { path: agentDirReal,                               label: "Pi config dir" },
-      { path: path.join(home, ".npm"),                    label: "npm cache" },
-      { path: path.join(home, ".local/share/mise/shims"), label: "mise shims" },
-      { path: path.join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },
-      { path: path.join(nodeDir, "bin"),                  label: "Node.js bin" },
+      { path: join(home, ".npm"),                    label: "npm cache" },
+      { path: join(home, ".local/share/mise/shims"), label: "mise shims" },
+      { path: join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },
+      { path: join(nodeDir, "bin"),                  label: "Node.js bin" },
     ],
     overlay: overlayDirs,
   };

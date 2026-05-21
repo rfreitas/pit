@@ -12,7 +12,7 @@
 
 import { Effect } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as net from "node:net";
+import { createConnection, type Socket } from "node:net";
 import { sendEffect } from "../escape/client.ts";
 
 type IsMergedResponse =
@@ -60,7 +60,7 @@ export default function (pi: ExtensionAPI) {
   if (!socketPath) return;
 
   let fallbackTimer: ReturnType<typeof setInterval> | undefined;
-  let subSocket: net.Socket | undefined;
+  let subSocket: Socket | undefined;
 
   const updateStatusEffect = (
     setStatus: (text: string | undefined) => void,
@@ -76,7 +76,7 @@ export default function (pi: ExtensionAPI) {
   function openSubscription(
     setStatus: (text: string | undefined) => void,
   ): void {
-    const sock = net.createConnection(socketPath!);
+    const sock = createConnection(socketPath!);
     subSocket = sock;
     let buf = "";
 

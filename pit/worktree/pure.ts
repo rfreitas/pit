@@ -3,15 +3,15 @@
  * Builds PitMetadata structs and parses pit CLI flags.
  */
 
-import * as path from "node:path";
-import * as crypto from "node:crypto";
+import { join, dirname, basename } from "node:path";
+import { randomBytes } from "node:crypto";
 import type { PitMetadata, ParsedFlags } from "../types.ts";
 
 // ── id generation ─────────────────────────────────────────────────────────────
 
 /** Generate an 8-hex-character random id for worktrees and sessions. */
 export function genId(): string {
-  return crypto.randomBytes(4).toString("hex");
+  return randomBytes(4).toString("hex");
 }
 
 // ── metadata builders ─────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ export function buildWorktreeMeta(repo: string, id: string, created: string): Pi
     id,
     repo,
     created,
-    worktree: path.join(path.dirname(repo), `${path.basename(repo)}-wt-${id}`),
+    worktree: join(dirname(repo), `${basename(repo)}-wt-${id}`),
     branch: `pi/${id}`,
     mode: "worktree",
   };

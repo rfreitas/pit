@@ -3,10 +3,10 @@
  * All IO operations are Effect-based with platform services.
  */
 
-import * as path from "node:path";
-import * as crypto from "node:crypto";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
-import { FileSystem } from "@effect/platform";
+import { FileSystem } from "@effect/platform/FileSystem";
 import { SessionManager, type CustomEntry } from "@earendil-works/pi-coding-agent";
 import type {
   PitMetadata,
@@ -30,7 +30,7 @@ export const findPitSession = (
 ): Effect.Effect<{ sessionFile: string; meta: PitMetadata } | null> =>
   Effect.tryPromise({
     try: async () => {
-      const sessionDir = path.join(agentDir, "sessions", cwdToBucket(cwd));
+      const sessionDir = join(agentDir, "sessions", cwdToBucket(cwd));
       let sessions: Awaited<ReturnType<typeof SessionManager.list>>;
       try {
         sessions = await SessionManager.list(cwd, sessionDir);
@@ -63,19 +63,19 @@ export const setupNewSession = (
   result: WorktreeResult,
   agentDir: string,
   sandboxMounts?: SandboxMounts,
-): Effect.Effect<string, SessionWriteError, FileSystem.FileSystem> =>
+): Effect.Effect<string, SessionWriteError, FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
+    const fs = yield* FileSystem;
     const bucket = cwdToBucket(result.cwd);
-    const sessionDir = path.join(agentDir, "sessions", bucket);
+    const sessionDir = join(agentDir, "sessions", bucket);
     yield* fs.makeDirectory(sessionDir, { recursive: true }).pipe(
       Effect.mapError((e) => new SessionWriteError({ message: String(e) })),
     );
 
     const isoTs = new Date().toISOString();
     const fileTs = isoTs.replace(/:/g, "-").replace(".", "-");
-    const sessionId = crypto.randomUUID();
-    const sessionFile = path.join(sessionDir, `${fileTs}_${sessionId}.jsonl`);
+    const sessionId = randomUUID();
+    const sessionFile = join(sessionDir, `${fileTs}_${sessionId}.jsonl`);
 
     yield* fs.writeFileString(
       sessionFile,
@@ -94,7 +94,7 @@ export const findOrCreateLinkedSession = (
   cwd: string,
   agentDir: string,
   sandboxMounts?: SandboxMounts,
-): Effect.Effect<LinkedWorktreeSession, SessionWriteError, FileSystem.FileSystem> =>
+): Effect.Effect<LinkedWorktreeSession, SessionWriteError, FileSystem> =>
   Effect.gen(function* () {
     const existing = yield* findPitSession(cwd, agentDir);
     if (existing) {

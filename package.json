@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "typecheck": "tsc",
+    "lint": "eslint 'pit/**/*.ts' --ignore-pattern 'pit/tests/**'",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -21,6 +22,9 @@
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "@sinclair/typebox": "^0.34.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.4",
+    "@typescript-eslint/parser": "^8.59.4",
+    "eslint": "^10.4.0",
     "typescript": "^5.0.0",
     "vitest": "^4.1.6"
   },

@@ -5,8 +5,8 @@
  * send is Effect-based; commands wrap it with Effect.runPromise where needed.
  */
 
-import * as net from "node:net";
-import * as fs from "node:fs";
+import { createConnection } from "node:net";
+import { existsSync } from "node:fs";
 import { Effect } from "effect";
 
 export type GitResult = { stdout: string; stderr: string; code: number };
@@ -19,11 +19,11 @@ export const probeSocketEffect = (
   socketPath: string,
 ): Effect.Effect<"alive" | "stale" | "absent"> =>
   Effect.async((resume) => {
-    if (!fs.existsSync(socketPath)) {
+    if (!existsSync(socketPath)) {
       resume(Effect.succeed("absent" as const));
       return;
     }
-    const sock = net.createConnection(socketPath);
+    const sock = createConnection(socketPath);
     sock.once("connect", () => {
       sock.destroy();
       resume(Effect.succeed("alive" as const));
@@ -57,7 +57,7 @@ export const sendEffect = (
   req: object,
 ): Effect.Effect<EscapeResult> =>
   Effect.async((resume) => {
-    const sock = net.createConnection(socketPath);
+    const sock = createConnection(socketPath);
     let buf = "";
     sock.once("connect", () => {
       sock.write(JSON.stringify(req) + "\n");

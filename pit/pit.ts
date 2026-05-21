@@ -13,11 +13,11 @@
  *   pit install/remove/update/...     Forwarded directly to pi
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { execSync, spawnSync, spawn } from "node:child_process";
 import { Effect, Option } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
 import {
   main,
   SessionManager,
@@ -74,18 +74,18 @@ const SESSION_FLAGS = new Set([
 
 // ── pit dir ───────────────────────────────────────────────────────────────────
 
-const PIT_DIR = path.join(AGENT_DIR, "pit");
+const PIT_DIR = join(AGENT_DIR, "pit");
 
 // ── extension args ────────────────────────────────────────────────────────────
 
 function extensionArgs(): string[] {
-  const d = path.resolve(path.dirname(process.argv[1]));
+  const d = resolve(dirname(process.argv[1]));
   return [
-    path.join(d, "escape", "reload.ts"),
-    path.join(d, "tools", "git.ts"),
-    path.join(d, "commands", "merge.ts"),
-    path.join(d, "commands", "merge-status.ts"),
-    path.join(d, "commands", "rename-branch.ts"),
+    join(d, "escape", "reload.ts"),
+    join(d, "tools", "git.ts"),
+    join(d, "commands", "merge.ts"),
+    join(d, "commands", "merge-status.ts"),
+    join(d, "commands", "rename-branch.ts"),
   ].flatMap((f) => ["--extension", f]);
 }
 
@@ -93,17 +93,17 @@ function extensionArgs(): string[] {
 
 function findBwrap(): string | null {
   for (const p of ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]) {
-    if (fs.existsSync(p)) return p;
+    if (existsSync(p)) return p;
   }
   return null;
 }
 
 function getExtensionMounts(): string[] {
-  const settingsFile = path.join(AGENT_DIR, "settings.json");
-  if (!fs.existsSync(settingsFile)) return [];
+  const settingsFile = join(AGENT_DIR, "settings.json");
+  if (!existsSync(settingsFile)) return [];
   let settings: { extensions?: string[] };
   try {
-    const raw = fs.readFileSync(settingsFile, "utf8");
+    const raw = readFileSync(settingsFile, "utf8");
     if (!raw.trim()) return [];
     settings = JSON.parse(raw) as { extensions?: string[] };
   } catch {
@@ -111,13 +111,13 @@ function getExtensionMounts(): string[] {
   }
   const mounts = new Set<string>();
   for (const ext of settings.extensions ?? []) {
-    if (!fs.existsSync(ext)) continue;
+    if (!existsSync(ext)) continue;
     mounts.add(ext);
-    let parent = path.dirname(ext);
+    let parent = dirname(ext);
     while (true) {
-      const nm = path.join(parent, "node_modules");
-      if (fs.existsSync(nm)) { mounts.add(nm); break; }
-      const up = path.dirname(parent);
+      const nm = join(parent, "node_modules");
+      if (existsSync(nm)) { mounts.add(nm); break; }
+      const up = dirname(parent);
       if (up === parent) break;
       parent = up;
     }
@@ -135,7 +135,7 @@ const buildSandboxMountsEffect = (
   agentDirReal: string,
   extensionMounts: string[],
   nodeDir: string,
-): Effect.Effect<SandboxMounts, never, NodeContext.NodeContext> =>
+): Effect.Effect<SandboxMounts, never, NodeContext> =>
   Effect.gen(function* () {
     const parentRepo = yield* resolveMainRepo(cwd);
     const overlayDirs: OverlayMount[] = [];
@@ -149,10 +149,10 @@ const buildSandboxMountsEffect = (
         ),
       );
       for (const rel of unversioned) {
-        const src = path.join(parentRepo, rel);
-        const dest = path.join(cwd, rel);
+        const src = join(parentRepo, rel);
+        const dest = join(cwd, rel);
         try {
-          if (fs.statSync(src).isDirectory()) overlayDirs.push({ src, dest, label: rel });
+          if (statSync(src).isDirectory()) overlayDirs.push({ src, dest, label: rel });
         } catch { /* src disappeared */ }
       }
     }
@@ -165,12 +165,12 @@ const buildSandboxMountsEffect = (
 const resolveSandboxMountsEffect = (
   cwd: string,
   useSandbox: boolean,
-): Effect.Effect<SandboxMounts | undefined, never, NodeContext.NodeContext> =>
+): Effect.Effect<SandboxMounts | undefined, never, NodeContext> =>
   Effect.gen(function* () {
     if (!useSandbox || !findBwrap()) return undefined;
-    const nodeDir = path.dirname(path.dirname(process.execPath));
+    const nodeDir = dirname(dirname(process.execPath));
     return yield* buildSandboxMountsEffect(
-      cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir,
+      cwd, realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir,
     );
   });
 
@@ -196,8 +196,8 @@ function bwrapLaunch(
 ): never {
   const bwrap = findBwrap()!;
   const nodeBin = process.execPath;
-  const nodeDir = path.dirname(path.dirname(nodeBin));
-  const piScript = fs.realpathSync(execSync("which pi", { encoding: "utf8" }).trim());
+  const nodeDir = dirname(dirname(nodeBin));
+  const piScript = realpathSync(execSync("which pi", { encoding: "utf8" }).trim());
 
   const mountArgs: string[] = [];
   for (const m of mounts.ro) {
@@ -207,11 +207,11 @@ function bwrapLaunch(
     mountArgs.push("--bind", m.path, m.path);
   }
   for (const m of mounts.overlay ?? []) {
-    fs.mkdirSync(m.dest, { recursive: true });
+    mkdirSync(m.dest, { recursive: true });
     mountArgs.push("--overlay-src", m.src, "--tmp-overlay", m.dest);
   }
 
-  const agentDirReal = fs.realpathSync(AGENT_DIR);
+  const agentDirReal = realpathSync(AGENT_DIR);
   const shadowArgs = settingsPath ? shadowAgentMountArgs(agentDirReal, settingsPath) : [];
   const agentDirEnv = settingsPath ? ["--setenv", "PI_CODING_AGENT_DIR", "/pit-agent"] : [];
 
@@ -228,7 +228,7 @@ function bwrapLaunch(
   ];
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
-  if (settingsPath) try { fs.unlinkSync(settingsPath); } catch { /* already gone */ }
+  if (settingsPath) try { unlinkSync(settingsPath); } catch { /* already gone */ }
   process.exit(result.status ?? 1);
 }
 
@@ -238,16 +238,16 @@ const launchEffect = (
   sandbox: boolean,
   settingsPath?: string,
   mounts?: SandboxMounts,
-): Effect.Effect<void, never, NodeContext.NodeContext> =>
+): Effect.Effect<void, never, NodeContext> =>
   Effect.gen(function* () {
     if (sandbox) {
       const bwrap = findBwrap();
       if (bwrap) {
         const m = mounts ?? (yield* buildSandboxMountsEffect(
           cwd,
-          fs.realpathSync(AGENT_DIR),
+          realpathSync(AGENT_DIR),
           getExtensionMounts(),
-          path.dirname(path.dirname(process.execPath)),
+          dirname(dirname(process.execPath)),
         ));
         bwrapLaunch(cwd, piArgs, m, settingsPath); // never returns
       }
@@ -263,35 +263,35 @@ const startPitEscapeEffect = (
   worktreeCwd: string,
   sessionId: string,
   settingsPath: string,
-): Effect.Effect<Option.Option<string>, SocketAliveError, NodeContext.NodeContext> =>
+): Effect.Effect<Option.Option<string>, SocketAliveError, NodeContext> =>
   Effect.gen(function* () {
     const isMain = yield* isLinkedWorktree(worktreeCwd).pipe(
       Effect.map((linked) => !linked),
     );
     if (isMain) return Option.none();
 
-    const socketPath = path.join(AGENT_DIR, `pit-${sessionId}.sock`);
+    const socketPath = join(AGENT_DIR, `pit-${sessionId}.sock`);
     const probe = yield* probeSocketEffect(socketPath);
     if (probe === "alive") return yield* Effect.fail(new SocketAliveError({ sessionId }));
 
-    yield* Effect.sync(() => { try { fs.unlinkSync(socketPath); } catch { /* gone */ } });
+    yield* Effect.sync(() => { try { unlinkSync(socketPath); } catch { /* gone */ } });
 
-    const scriptDir = path.resolve(path.dirname(process.argv[1]));
-    const escapeScript = path.join(scriptDir, "escape", "server.ts");
+    const scriptDir = resolve(dirname(process.argv[1]));
+    const escapeScript = join(scriptDir, "escape", "server.ts");
 
     return yield* Effect.async<Option.Option<string>>((resume) => {
       const child = spawn(
         process.execPath,
         [
           "--experimental-strip-types", escapeScript,
-          socketPath, worktreeCwd, fs.realpathSync(AGENT_DIR), PIT_DIR, settingsPath,
+          socketPath, worktreeCwd, realpathSync(AGENT_DIR), PIT_DIR, settingsPath,
         ],
         { stdio: ["ignore", "pipe", "inherit"] },
       );
 
       process.on("exit", () => {
         try { child.kill("SIGTERM"); } catch { /* gone */ }
-        try { fs.unlinkSync(socketPath); } catch { /* gone */ }
+        try { unlinkSync(socketPath); } catch { /* gone */ }
       });
 
       const timer = setTimeout(() => {
@@ -321,10 +321,10 @@ async function showPicker(
     const selector = new SessionSelectorComponent(
       async (progress) => {
         const cwd = process.cwd();
-        const rawRepo = await Effect.runPromise(gitRepoRoot().pipe(Effect.provide(NodeContext.layer)));
-        const isLinked = await Effect.runPromise(isLinkedWorktree(cwd).pipe(Effect.provide(NodeContext.layer)));
+        const rawRepo = await Effect.runPromise(gitRepoRoot().pipe(Effect.provide(NodeContextLayer)));
+        const isLinked = await Effect.runPromise(isLinkedWorktree(cwd).pipe(Effect.provide(NodeContextLayer)));
         const mainRepo = isLinked
-          ? await Effect.runPromise(resolveMainRepo(cwd).pipe(Effect.provide(NodeContext.layer)))
+          ? await Effect.runPromise(resolveMainRepo(cwd).pipe(Effect.provide(NodeContextLayer)))
           : null;
         const repo = rawRepo && isLinked ? (mainRepo ?? rawRepo) : rawRepo;
 
@@ -332,7 +332,7 @@ async function showPicker(
           ? await Effect.runPromise(
               listRepoWorktrees(repo).pipe(
                 Effect.catchAll(() => Effect.succeed([] as string[])),
-                Effect.provide(NodeContext.layer),
+                Effect.provide(NodeContextLayer),
               ),
             )
           : [];
@@ -342,7 +342,7 @@ async function showPicker(
             const branch = await Effect.runPromise(
               readWorktreeBranch(wt).pipe(
                 Effect.map((b) => b ?? "deleted"),
-                Effect.provide(NodeContext.layer),
+                Effect.provide(NodeContextLayer),
               ),
             );
             return [wt, branch] as [string, string];
@@ -405,7 +405,7 @@ async function showPicker(
     if (!pitEntry?.data) {
       await Effect.runPromise(
         launchEffect(process.cwd(), ["--session", selectedPath, ...piArgs], sandbox).pipe(
-          Effect.provide(NodeContext.layer),
+          Effect.provide(NodeContextLayer),
         ),
       );
       return null;
@@ -419,7 +419,7 @@ async function showPicker(
 // ── cleanup helper ────────────────────────────────────────────────────────────
 
 const unlinkSilent = (p: string): Effect.Effect<void, never, never> =>
-  Effect.sync(() => { try { fs.unlinkSync(p); } catch { /* already gone */ } });
+  Effect.sync(() => { try { unlinkSync(p); } catch { /* already gone */ } });
 
 // ── dispatch ──────────────────────────────────────────────────────────────────
 
@@ -546,7 +546,7 @@ Effect.runPromise(
         process.exit(1);
       }),
     ),
-    Effect.provide(NodeContext.layer),
+    Effect.provide(NodeContextLayer),
   ),
 ).catch((err: unknown) => {
   console.error(`pit: ${err instanceof Error ? err.message : String(err)}`);

@@ -15,7 +15,7 @@
  */
 
 import { Effect, Option } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readWorktreeBranch } from "../git/utils.ts";
@@ -245,7 +245,7 @@ export default function (pi: ExtensionAPI) {
             `Branch renamed: ${currentBranch} -> ${newBranch}`,
             "info",
           );
-        }).pipe(Effect.provide(NodeContext.layer)),
+        }).pipe(Effect.provide(NodeContextLayer)),
       );
     },
   });

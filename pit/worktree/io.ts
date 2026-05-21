@@ -2,9 +2,11 @@
  * Worktree IO — subprocess calls to create and manage git worktrees.
  */
 
-import * as fs from "node:fs";
+import { existsSync } from "node:fs";
 import { Effect } from "effect";
-import { Command, type CommandExecutor, FileSystem } from "@effect/platform";
+import { make as makeCommand, exitCode as commandExitCode } from "@effect/platform/Command";
+import { FileSystem } from "@effect/platform/FileSystem";
+import { CommandExecutor } from "@effect/platform/CommandExecutor";
 import { gitRepoRoot, branchExists } from "../git/utils.ts";
 import { genId, buildNoTreeMeta, buildWorktreeMeta } from "./pure.ts";
 import type { PitMetadata, WorktreeResult } from "../types.ts";
@@ -18,13 +20,13 @@ export const createWorktreeEffect = ({
 }: {
   branch: string;
   worktree: string;
-}): Effect.Effect<void, WorktreeCreationError, CommandExecutor.CommandExecutor> =>
+}): Effect.Effect<void, WorktreeCreationError, CommandExecutor> =>
   Effect.gen(function* () {
     console.error("pit: creating worktree");
     console.error(`  branch:   ${branch}`);
     console.error(`  worktree: ${worktree}`);
-    yield* Command.exitCode(
-      Command.make("git", "worktree", "add", "-b", branch, worktree, "HEAD"),
+    yield* commandExitCode(
+      makeCommand("git", "worktree", "add", "-b", branch, worktree, "HEAD"),
     ).pipe(
       Effect.flatMap((code) =>
         code === 0
@@ -49,7 +51,7 @@ export const recreateWorktreeEffect = ({
 }): Effect.Effect<
   void,
   WorktreeMissingError | WorktreeCreationError,
-  CommandExecutor.CommandExecutor
+  CommandExecutor
 > =>
   Effect.gen(function* () {
     console.error("pit: worktree missing, attempting to recreate…");
@@ -58,11 +60,11 @@ export const recreateWorktreeEffect = ({
       yield* Effect.fail(new WorktreeMissingError({ branch }));
     }
     yield* Effect.all([
-      Command.exitCode(Command.make("git", "worktree", "prune", "-C", repo)).pipe(
+      commandExitCode(makeCommand("git", "worktree", "prune", "-C", repo)).pipe(
         Effect.ignore,
       ),
-      Command.exitCode(
-        Command.make("git", "-C", repo, "worktree", "add", worktree, branch),
+      commandExitCode(
+        makeCommand("git", "-C", repo, "worktree", "add", worktree, branch),
       ).pipe(
         Effect.flatMap((code) =>
           code === 0
@@ -85,14 +87,14 @@ export const worktreeCheckEffect = (
 ): Effect.Effect<
   WorktreeResult,
   WorktreeMissingError | WorktreeCreationError,
-  CommandExecutor.CommandExecutor | FileSystem.FileSystem
+  CommandExecutor | FileSystem
 > =>
   Effect.gen(function* () {
     if (existingMeta) {
       if (existingMeta.mode === "no-tree") {
         return { mode: "no-tree" as const, cwd: existingMeta.worktree, meta: existingMeta };
       }
-      if (!fs.existsSync(existingMeta.worktree)) {
+      if (!existsSync(existingMeta.worktree)) {
         yield* recreateWorktreeEffect(existingMeta);
       }
       return { mode: "worktree" as const, cwd: existingMeta.worktree, meta: existingMeta };
