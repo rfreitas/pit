@@ -59,7 +59,9 @@ export default function (pi: ExtensionAPI) {
   const socketPath = process.env.PIT_ESCAPE_SOCKET;
   if (!socketPath) return;
 
+  // eslint-disable-next-line functional/no-let
   let fallbackTimer: ReturnType<typeof setInterval> | undefined;
+  // eslint-disable-next-line functional/no-let
   let subSocket: Socket | undefined;
 
   const updateStatusEffect = (
@@ -78,6 +80,7 @@ export default function (pi: ExtensionAPI) {
   ): void {
     const sock = createConnection(socketPath!);
     subSocket = sock;
+    // eslint-disable-next-line functional/no-let
     let buf = "";
 
     sock.once("connect", () =>
@@ -85,16 +88,17 @@ export default function (pi: ExtensionAPI) {
     );
     sock.on("data", (chunk: Buffer) => {
       buf += chunk.toString("utf8");
+      // eslint-disable-next-line functional/no-let
       let nl: number;
+      // eslint-disable-next-line functional/no-loop-statements
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
-        let msg: SubscribeMessage;
-        try {
-          msg = JSON.parse(line) as SubscribeMessage;
-        } catch {
-          continue;
-        }
+        const msg = (() => {
+          try { return JSON.parse(line) as SubscribeMessage; }
+          catch { return null; }
+        })();
+        if (!msg) continue;
         if ("event" in msg && msg.event === "ref-change") {
           void Effect.runPromise(updateStatusEffect(setStatus));
         }

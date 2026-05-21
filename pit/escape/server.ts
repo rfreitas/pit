@@ -121,16 +121,10 @@ const worktreeGit = (
  * Kept as a plain sync helper — only called from Effect.sync wrappers.
  */
 function detectParentBranch(mainRepo: string): string | null {
-  for (const candidate of ["master", "main"]) {
-    try {
-      execFileSync("git", ["rev-parse", "--verify", candidate], {
-        cwd: mainRepo,
-        stdio: "ignore",
-      });
-      return candidate;
-    } catch { /* try next */ }
-  }
-  return null;
+  return ["master", "main"].find(candidate => {
+    try { execFileSync("git", ["rev-parse", "--verify", candidate], { cwd: mainRepo, stdio: "ignore" }); return true; }
+    catch { return false; }
+  }) ?? null;
 }
 
 // ── ops ───────────────────────────────────────────────────────────────────────
@@ -152,17 +146,13 @@ const opGetState = (): Effect.Effect<
       ? existsSync(join(gitdir, "MERGE_HEAD"))
       : false;
 
-    let conflicts: string[] = [];
-    if (mergeInProgress) {
-      const r = yield* worktreeGit(["diff", "--name-only", "--diff-filter=U"]);
-      conflicts = r.stdout.trim().split("\n").filter(Boolean);
-    }
+    const conflicts = mergeInProgress
+      ? (yield* worktreeGit(["diff", "--name-only", "--diff-filter=U"])).stdout.trim().split("\n").filter(Boolean)
+      : [];
 
-    let behindParent = false;
-    if (parentBranch && mainRepo) {
-      const r = yield* worktreeGit(["log", "--oneline", `HEAD..${parentBranch}`]);
-      behindParent = r.stdout.trim().length > 0;
-    }
+    const behindParent = (parentBranch && mainRepo)
+      ? (yield* worktreeGit(["log", "--oneline", `HEAD..${parentBranch}`])).stdout.trim().length > 0
+      : false;
 
     return { branch, mergeInProgress, conflicts, parentBranch, behindParent };
   });
@@ -177,20 +167,13 @@ const opMergeToParent = (
     const branch = yield* readWorktreeBranch(worktreePath);
     if (!branch) return { error: "Cannot determine current branch (detached HEAD?)" };
 
-    let checkedOut: string;
-    try {
-      checkedOut = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-        cwd: mainRepo,
-        encoding: "utf8",
-      }).trim();
-    } catch (e) {
-      return { error: `Cannot read main repo HEAD: ${(e as Error).message}` };
-    }
-
-    if (checkedOut !== parentBranch) {
-      return {
-        error: `Main repo has '${checkedOut}' checked out, not '${parentBranch}'. Check out '${parentBranch}' first.`,
-      };
+    const checkedOut = (() => {
+      try { return { ok: true as const, value: execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: mainRepo, encoding: "utf8" }).trim() }; }
+      catch (e) { return { ok: false as const, error: (e as Error).message }; }
+    })();
+    if (!checkedOut.ok) return { error: `Cannot read main repo HEAD: ${checkedOut.error}` };
+    if (checkedOut.value !== parentBranch) {
+      return { error: `Main repo has '${checkedOut.value}' checked out, not '${parentBranch}'. Check out '${parentBranch}' first.` };
     }
 
     return yield* gitEffect(["merge", "--ff-only", branch], mainRepo);
@@ -334,6 +317,7 @@ function handleSubscribe(socket: Socket): void {
   const refsHeadsDir = join(mainGitDir, "refs", "heads");
   const reftableDir = join(mainGitDir, "reftable");
   const watchers: FSWatcher[] = [];
+  // eslint-disable-next-line functional/no-let
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
   const notify = () => {
@@ -346,6 +330,7 @@ function handleSubscribe(socket: Socket): void {
 
   const tryWatch = (target: string, filter?: (f: string | null) => boolean) => {
     try {
+      // eslint-disable-next-line functional/immutable-data
       watchers.push(watch(target, (_type, filename) => {
         if (!filter || filter(filename)) notify();
       }));
@@ -363,7 +348,9 @@ function handleSubscribe(socket: Socket): void {
   if (existsSync(reftableDir)) tryWatch(reftableDir);
 
   const cleanup = () => {
+    // eslint-disable-next-line functional/no-loop-statements
     for (const w of watchers) { try { w.close(); } catch { /* */ } }
+    // eslint-disable-next-line functional/immutable-data
     watchers.length = 0;
     if (debounce) { clearTimeout(debounce); debounce = null; }
   };
@@ -382,6 +369,7 @@ process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
 
 const server = createServer((socket) => {
+  // eslint-disable-next-line functional/no-let
   let buf = "";
 
   socket.on("data", (chunk: Buffer) => {
@@ -391,13 +379,14 @@ const server = createServer((socket) => {
     const line = buf.slice(0, nl);
     buf = "";
 
-    let req: Request;
-    try {
-      req = JSON.parse(line) as Request;
-    } catch {
-      socket.end(JSON.stringify({ error: "invalid JSON" }) + "\n");
-      return;
-    }
+    const req = (() => {
+      try { return JSON.parse(line) as Request; }
+      catch {
+        socket.end(JSON.stringify({ error: "invalid JSON" }) + "\n");
+        return null;
+      }
+    })();
+    if (!req) return;
 
     if (typeof req.op !== "string") {
       socket.end(JSON.stringify({ error: "request must have op (string)" }) + "\n");

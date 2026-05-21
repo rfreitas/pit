@@ -15,13 +15,8 @@ import type { SandboxMounts, OverlayMount } from "../types.ts";
  */
 export function formatSandboxNote(mounts: SandboxMounts): string {
   const dedup = (items: Array<{ path: string; label?: string }>) => {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const m of items) {
-      const key = m.label ?? m.path;
-      if (!seen.has(key)) { seen.add(key); out.push(`\`${key}\``); }
-    }
-    return out.join(", ");
+    const keys = [...new Map(items.map(m => [m.label ?? m.path, true])).keys()];
+    return keys.map(key => `\`${key}\``).join(", ");
   };
   const overlays = mounts.overlay ?? [];
   const overlayLine = overlays.length > 0

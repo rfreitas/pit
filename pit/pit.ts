@@ -93,37 +93,35 @@ function extensionArgs(): string[] {
 // ── sandbox ───────────────────────────────────────────────────────────────────
 
 function findBwrap(): string | null {
-  for (const p of ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]) {
-    if (existsSync(p)) return p;
-  }
-  return null;
+  return ["/usr/bin/bwrap", "/usr/local/bin/bwrap"].find(p => existsSync(p)) ?? null;
+}
+
+function findNodeModules(dir: string): string | null {
+  const nm = join(dir, "node_modules");
+  if (existsSync(nm)) return nm;
+  const up = dirname(dir);
+  return up === dir ? null : findNodeModules(up);
 }
 
 function getExtensionMounts(): string[] {
   const settingsFile = join(AGENT_DIR, "settings.json");
   if (!existsSync(settingsFile)) return [];
-  let settings: { extensions?: string[] };
-  try {
-    const raw = readFileSync(settingsFile, "utf8");
-    if (!raw.trim()) return [];
-    settings = JSON.parse(raw) as { extensions?: string[] };
-  } catch {
-    return [];
-  }
-  const mounts = new Set<string>();
-  for (const ext of settings.extensions ?? []) {
-    if (!existsSync(ext)) continue;
-    mounts.add(ext);
-    let parent = dirname(ext);
-    while (true) {
-      const nm = join(parent, "node_modules");
-      if (existsSync(nm)) { mounts.add(nm); break; }
-      const up = dirname(parent);
-      if (up === parent) break;
-      parent = up;
-    }
-  }
-  return [...mounts].sort();
+  const settings = (() => {
+    try {
+      const raw = readFileSync(settingsFile, "utf8");
+      if (!raw.trim()) return null;
+      return JSON.parse(raw) as { extensions?: string[] };
+    } catch { return null; }
+  })();
+  if (!settings) return [];
+  return [...new Set(
+    (settings.extensions ?? [])
+      .filter(ext => existsSync(ext))
+      .flatMap(ext => {
+        const nm = findNodeModules(dirname(ext));
+        return nm ? [ext, nm] : [ext];
+      }),
+  )].sort();
 }
 
 /**
@@ -139,34 +137,27 @@ const buildSandboxMountsEffect = (
 ): Effect.Effect<SandboxMounts, never, NodeContext> =>
   Effect.gen(function* () {
     const parentRepo = yield* resolveMainRepo(cwd);
-    const overlayDirs: OverlayMount[] = [];
-    if (parentRepo) {
-      const unversioned = yield* resolveUnversionedDirs(parentRepo).pipe(
-        Effect.catchAll((e) =>
-          Effect.sync(() => {
-            console.warn(`pit: overlay mounts unavailable: ${String(e)}`);
-            return [] as string[];
-          }),
-        ),
-      );
-      for (const rel of unversioned) {
-        const src = join(parentRepo, rel);
-        const dest = join(cwd, rel);
-        try {
-          if (!statSync(src).isDirectory()) continue;
-
-          // Opt-out if the worktree already populated this directory.
-          // e.g. the user ran `npm install` directly in the worktree.
-          if (existsSync(dest) && statSync(dest).isDirectory()) {
-            if (readdirSync(dest).length > 0) {
-              continue; // Skip overlay, use the worktree's persistent files
-            }
-          }
-
-          overlayDirs.push({ src, dest, label: rel });
-        } catch { /* src disappeared */ }
-      }
-    }
+    const overlayDirs = parentRepo
+      ? (yield* resolveUnversionedDirs(parentRepo).pipe(
+          Effect.catchAll((e) =>
+            Effect.sync(() => {
+              console.warn(`pit: overlay mounts unavailable: ${String(e)}`);
+              return [] as string[];
+            }),
+          ),
+        )).flatMap(rel => {
+          const src = join(parentRepo, rel);
+          const dest = join(cwd, rel);
+          try {
+            if (!statSync(src).isDirectory()) return [];
+            // Opt-out: if the worktree already has this directory populated
+            // (e.g. user ran `npm install`), skip overlay and use real files.
+            if (existsSync(dest) && statSync(dest).isDirectory() && readdirSync(dest).length > 0)
+              return [];
+            return [{ src, dest, label: rel }];
+          } catch { return []; } // src disappeared
+        })
+      : [];
     const gitRwMounts = yield* resolveWorktreeGitRwMounts(cwd);
     return buildSandboxMountSpec({
       home: HOME, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs,
@@ -210,17 +201,15 @@ function bwrapLaunch(
   const nodeDir = dirname(dirname(nodeBin));
   const piScript = realpathSync(execSync("which pi", { encoding: "utf8" }).trim());
 
-  const mountArgs: string[] = [];
-  for (const m of mounts.ro) {
-    mountArgs.push(m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path);
-  }
-  for (const m of mounts.rw) {
-    mountArgs.push("--bind", m.path, m.path);
-  }
-  for (const m of mounts.overlay ?? []) {
+  const roArgs = mounts.ro.flatMap(m =>
+    [m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path],
+  );
+  const rwArgs = mounts.rw.flatMap(m => ["--bind", m.path, m.path]);
+  const overlayArgs = (mounts.overlay ?? []).flatMap(m => {
     mkdirSync(m.dest, { recursive: true });
-    mountArgs.push("--overlay-src", m.src, "--tmp-overlay", m.dest);
-  }
+    return ["--overlay-src", m.src, "--tmp-overlay", m.dest];
+  });
+  const mountArgs = [...roArgs, ...rwArgs, ...overlayArgs];
 
   const agentDirReal = realpathSync(AGENT_DIR);
   const shadowArgs = settingsPath ? shadowAgentMountArgs(agentDirReal, settingsPath) : [];
@@ -361,9 +350,10 @@ async function showPicker(
         );
         const worktreeBranch = new Map(worktreeBranchEntries);
 
-        const mainPaths = new Set<string>();
-        if (repo) mainPaths.add(repo);
-        if (!isLinked) mainPaths.add(cwd);
+        const mainPaths = new Set([
+          ...(repo ? [repo] : []),
+          ...(isLinked ? [] : [cwd]),
+        ]);
 
         const [mainGroups, wtGroups] = await Promise.all([
           Promise.all(
@@ -388,9 +378,7 @@ async function showPicker(
           }),
         );
 
-        const seen = new Set<string>();
-        return [...mainGroups.flat(), ...marked]
-          .filter((s) => { if (seen.has(s.path)) return false; seen.add(s.path); return true; })
+        return [...new Map([...mainGroups.flat(), ...marked].map(s => [s.path, s])).values()]
           .sort((a, b) => b.modified.getTime() - a.modified.getTime());
       },
       (progress) => SessionManager.listAll(progress),
@@ -459,6 +447,7 @@ const program = Effect.gen(function* () {
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
     const socketOpt = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
+    // eslint-disable-next-line functional/immutable-data
     if (Option.isSome(socketOpt)) process.env.PIT_ESCAPE_SOCKET = socketOpt.value;
 
     yield* launchEffect(
@@ -486,8 +475,9 @@ const program = Effect.gen(function* () {
       console.error("pit: already in a git worktree — no pit session found, running no-tree");
     }
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
-    const socketOpt = yield* startPitEscapeEffect(cwd, session.meta.id, settingsPath);
-    if (Option.isSome(socketOpt)) process.env.PIT_ESCAPE_SOCKET = socketOpt.value;
+    const socketOpt2 = yield* startPitEscapeEffect(cwd, session.meta.id, settingsPath);
+    // eslint-disable-next-line functional/immutable-data
+    if (Option.isSome(socketOpt2)) process.env.PIT_ESCAPE_SOCKET = socketOpt2.value;
 
     yield* launchEffect(
       cwd,
@@ -501,27 +491,22 @@ const program = Effect.gen(function* () {
   // ── new session ───────────────────────────────────────────────────────────
   const result = yield* worktreeCheckEffect(undefined, noTree);
   const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
-  const socketOpt = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
-  if (Option.isSome(socketOpt)) process.env.PIT_ESCAPE_SOCKET = socketOpt.value;
+  const socketOpt3 = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
+  // eslint-disable-next-line functional/immutable-data
+  if (Option.isSome(socketOpt3)) process.env.PIT_ESCAPE_SOCKET = socketOpt3.value;
 
-  let piArgs: string[];
   if (userManagingSession) {
-    piArgs = filteredArgv;
+    yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath);
   } else {
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const sessionFile = yield* setupNewSession(result, AGENT_DIR, sandboxMounts);
-    piArgs = [
+    yield* launchEffect(result.cwd, [
       "--session", sessionFile,
       ...extensionArgs(),
       ...systemPromptArgs(result.meta, sandboxMounts),
       ...filteredArgv,
-    ];
-    yield* launchEffect(result.cwd, piArgs, sandbox, settingsPath, sandboxMounts);
-    yield* unlinkSilent(settingsPath);
-    return;
+    ], sandbox, settingsPath, sandboxMounts);
   }
-
-  yield* launchEffect(result.cwd, piArgs, sandbox, settingsPath);
   yield* unlinkSilent(settingsPath);
 });
 

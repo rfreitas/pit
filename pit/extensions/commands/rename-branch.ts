@@ -57,9 +57,10 @@ const buildGitContextEffect = (
 
     if (!log) return Option.none();
 
-    const parts: string[] = [];
-    if (log) parts.push(`Commits:\n${log}`);
-    if (diff) parts.push(`Files changed:\n${diff}`);
+    const parts = [
+      log ? `Commits:\n${log}` : null,
+      diff ? `Files changed:\n${diff}` : null,
+    ].filter((s): s is string => s !== null);
     return Option.some(parts.join("\n\n"));
   });
 
@@ -78,15 +79,14 @@ function extractText(content: unknown): string {
 }
 
 function buildConversationText(entries: SessionEntry[]): string {
-  const lines: string[] = [];
-  for (const entry of entries) {
-    if (entry.type !== "message" || !entry.message?.role) continue;
-    const { role, content } = entry.message;
-    if (role !== "user" && role !== "assistant") continue;
-    const text = extractText(content).trim();
-    if (text) lines.push(`${role === "user" ? "User" : "Assistant"}: ${text}`);
-  }
-  return lines.join("\n\n");
+  return entries
+    .filter(e => e.type === "message" && (e.message?.role === "user" || e.message?.role === "assistant"))
+    .flatMap(e => {
+      const text = extractText(e.message!.content).trim();
+      if (!text) return [];
+      return [`${e.message!.role === "user" ? "User" : "Assistant"}: ${text}`];
+    })
+    .join("\n\n");
 }
 
 // ── prompt ─────────────────────────────────────────────────────────────────
@@ -148,13 +148,9 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("Building context...", "info");
           const gitContextOpt = yield* buildGitContextEffect(socketPath!);
 
-          let context: string;
-          if (Option.isSome(gitContextOpt)) {
-            context = gitContextOpt.value;
-          } else {
-            const entries = ctx.sessionManager.getBranch() as SessionEntry[];
-            context = buildConversationText(entries);
-          }
+          const context = Option.isSome(gitContextOpt)
+            ? gitContextOpt.value
+            : buildConversationText(ctx.sessionManager.getBranch() as SessionEntry[]);
 
           if (!context.trim()) {
             ctx.ui.notify(
@@ -200,10 +196,11 @@ export default function (pi: ExtensionAPI) {
             return;
           }
 
-          let parsed: { slug?: string };
-          try {
-            parsed = JSON.parse(match[0]);
-          } catch {
+          const parsed = (() => {
+            try { return JSON.parse(match[0]) as { slug?: string }; }
+            catch { return null; }
+          })();
+          if (!parsed) {
             ctx.ui.notify("Invalid JSON in model response", "error");
             return;
           }

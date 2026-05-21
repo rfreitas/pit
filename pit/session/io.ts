@@ -31,14 +31,11 @@ export const findPitSession = (
   Effect.tryPromise({
     try: async () => {
       const sessionDir = join(agentDir, "sessions", cwdToBucket(cwd));
-      let sessions: Awaited<ReturnType<typeof SessionManager.list>>;
-      try {
-        sessions = await SessionManager.list(cwd, sessionDir);
-      } catch {
-        return null;
-      }
-      sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-      for (const session of sessions) {
+      const sessions = await SessionManager.list(cwd, sessionDir).catch(() => null);
+      if (!sessions) return null;
+      return [...sessions].sort((a, b) => b.modified.getTime() - a.modified.getTime())
+        .reduce<{ sessionFile: string; meta: PitMetadata } | null>((found, session) => {
+        if (found) return found;
         try {
           const sm = SessionManager.open(session.path);
           const entry = sm.getEntries().find(
@@ -47,8 +44,8 @@ export const findPitSession = (
           );
           if (entry?.data) return { sessionFile: session.path, meta: entry.data };
         } catch { /* skip corrupt sessions */ }
-      }
-      return null;
+        return null;
+      }, null);
     },
     catch: () => null as never,
   });
