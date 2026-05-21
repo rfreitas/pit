@@ -90,7 +90,7 @@ export default function (pi: ExtensionAPI) {
       buf += chunk.toString("utf8");
       // eslint-disable-next-line functional/no-let -- frame index updated each iteration of the streaming parse loop
       let nl: number;
-      // eslint-disable-next-line functional/no-loop-statements -- deliberate loop: MISRA/JPL forbid recursion (unbounded stack); loop is safer (runaway catchable, stack overflow silent)
+       
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);

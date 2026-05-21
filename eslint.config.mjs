@@ -36,14 +36,10 @@ export default [
     files: ["pit/**/*.ts"],
     ignores: ["pit/tests/**"],
     rules: {
-      // Pushes the codebase towards functional purity.
-      // Set to "error" so it doesn't break CI, but highlights opportunities
-      // to extract pure functions and use Effect/Array methods instead of loops.
-      "functional/no-let": "error",               // Use const (warn: being progressively fixed)
-      "functional/immutable-data": "error",       // No Array.push, Object mutation
-      "functional/no-loop-statements": "error",   // Use .map, .reduce, Effect.all
-      "prefer-arrow-callback": "error",           // No function() in callbacks — use arrows
-      "func-style": ["error", "expression"],      // const fn = () => {} over function fn() {}
+      "functional/no-let": "error",
+      "functional/immutable-data": "error",
+      "prefer-arrow-callback": "error",
+      "func-style": ["error", "expression"],
       "functional/no-throw-statements": ["error", { "allowToRejectPromises": true }],
       "functional/no-class-inheritance": ["error", {
         // Allow Effect's Data.TaggedError pattern — the only way to define
@@ -73,6 +69,21 @@ export default [
     }
   },
 
+  // ── pure functions only: no loops ───────────────────────────────────────────────
+  //
+  // Loops in pure functions are always replaceable with .map/.reduce.
+  // Loops in IO functions (streaming, event handlers) are sometimes the
+  // safest option: MISRA/JPL forbid recursion because stack depth is
+  // unbounded and a stack overflow crashes silently.
+  // Rule scoped to */pure.ts only.
+  {
+    ...base,
+    files: ["pit/**/pure.ts"],
+    rules: {
+      "functional/no-loop-statements": "error",
+    }
+  },
+
   // ── core files: no barrel imports ──────────────────────────────────────────
   {
     ...base,
@@ -96,6 +107,7 @@ export default [
       // Bare `eslint-disable` (silencing everything) is banned.
       "@eslint-community/eslint-comments/require-description": ["error", { "ignore": [] }],
       "@eslint-community/eslint-comments/no-unlimited-disable": "error",
+      "@eslint-community/eslint-comments/no-unused-disable": "error",
     },
   },
 
