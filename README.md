@@ -169,15 +169,35 @@ Requires: Node.js ≥ 22, git. bwrap is optional but recommended for sandboxing 
 ## Repository layout
 
 ```
-pit/          pit itself (main package)
-extensions/   Pi extensions loaded globally (auto-picked up by Pi)
-packages/     Extension subprojects with tests (source of truth for extensions/)
-plans/        Design docs and notes
+pit/                 pit itself (main package)
+  pit.ts             entry point
+  errors.ts          Effect tagged error types
+  git/               filesystem + subprocess utilities (Effect + @effect/platform)
+  sandbox/           bwrap mount spec builders
+  session/           pi session JSONL read/write
+  worktree/          git worktree creation
+  escape/
+    server.ts        pit-escape subprocess (runs outside sandbox)
+  extensions/        everything loaded by pi via jiti
+    escape/          escape protocol client + reload hook
+    commands/        pi slash commands (/merge, /rename-branch, ...)
+    tools/           pi tools (git)
+extensions/          Pi extensions loaded globally (auto-picked up by Pi)
+packages/            Extension subprojects with tests
+plans/               Design docs and notes
 ```
 
-### Included extensions
+### Development
 
-| Extension | Purpose |
+```bash
+npm run typecheck   # TypeScript
+npm run lint        # ESLint — zero errors required; warnings are purity hints
+npm test            # Vitest (320 tests)
+```
+
+See `pit/AGENTS.md` for the architecture overview, Effect usage, and import rules.
+
+### Included extensions
 |---|---|
 | `/handoff` | Move the current session to a different project |
 | `/rename` | Ask the model to name the session |
