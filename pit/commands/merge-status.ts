@@ -10,7 +10,7 @@
  * Only active when PIT_ESCAPE_SOCKET is set (running under pit with a worktree session).
  */
 
-import * as Effect from "effect/Effect";
+import { Effect } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createConnection, type Socket } from "node:net";
 import { sendEffect } from "../escape/client.ts";

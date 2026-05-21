@@ -14,9 +14,8 @@
  * git branch -m to pit-escape.
  */
 
-import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
+import { Effect, Option } from "effect";
+import { NodeContext } from "@effect/platform-node";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readWorktreeBranch } from "../git/utils.ts";
@@ -246,7 +245,7 @@ export default function (pi: ExtensionAPI) {
             `Branch renamed: ${currentBranch} -> ${newBranch}`,
             "info",
           );
-        }).pipe(Effect.provide(NodeContextLayer)),
+        }).pipe(Effect.provide(NodeContext.layer)),
       );
     },
   });

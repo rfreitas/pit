@@ -10,7 +10,7 @@
  *   3. Fast-forward parent branch to worktree branch
  */
 
-import * as Effect from "effect/Effect";
+import { Effect } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sendEffect, isOk, errMsg, type EscapeResult } from "../escape/client.ts";
 

@@ -4,7 +4,7 @@
  * Only active when PIT_ESCAPE_SOCKET is set (running under pit, sandboxed).
  */
 
-import * as Effect from "effect/Effect";
+import { Effect } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sendEffect } from "./client.ts";
 
