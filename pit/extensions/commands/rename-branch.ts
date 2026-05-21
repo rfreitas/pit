@@ -18,7 +18,7 @@ import { Effect, Option } from "effect";
 import { NodeContext } from "@effect/platform-node";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readWorktreeBranch } from "../git/utils.ts";
+import { readWorktreeBranch } from "../../git/utils.ts";
 import { sendEffect, errMsg } from "../escape/client.ts";
 
 // ── git context ────────────────────────────────────────────────────────────

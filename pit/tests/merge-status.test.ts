@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatStatus } from "../commands/merge-status.ts";
+import { formatStatus } from "../extensions/commands/merge-status.ts";
 
 describe("formatStatus", () => {
   it("in sync — 0 ahead, 0 behind", () => {

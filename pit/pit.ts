@@ -41,7 +41,7 @@ import {
   readPitConfig,
   createTempSettingsFileEffect,
 } from "./sandbox/io.ts";
-import { probeSocketEffect } from "./escape/client.ts";
+import { probeSocketEffect } from "./extensions/escape/client.ts";
 import {
   isLinkedWorktree,
   resolveMainRepo,
@@ -82,11 +82,11 @@ const PIT_DIR = join(AGENT_DIR, "pit");
 function extensionArgs(): string[] {
   const d = resolve(dirname(process.argv[1]));
   return [
-    join(d, "escape", "reload.ts"),
-    join(d, "tools", "git.ts"),
-    join(d, "commands", "merge.ts"),
-    join(d, "commands", "merge-status.ts"),
-    join(d, "commands", "rename-branch.ts"),
+    join(d, "extensions", "escape", "reload.ts"),
+    join(d, "extensions", "tools", "git.ts"),
+    join(d, "extensions", "commands", "merge.ts"),
+    join(d, "extensions", "commands", "merge-status.ts"),
+    join(d, "extensions", "commands", "rename-branch.ts"),
   ].flatMap((f) => ["--extension", f]);
 }
 

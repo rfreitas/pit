@@ -42,8 +42,8 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import gitExt from "../tools/git.ts";
-import mergeExt from "../commands/merge.ts";
+import gitExt from "../extensions/tools/git.ts";
+import mergeExt from "../extensions/commands/merge.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

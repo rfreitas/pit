@@ -31,10 +31,7 @@ export default [
     files: ["pit/**/*.ts"],
     ignores: [
       "pit/tests/**",
-      "pit/commands/**",
-      "pit/tools/**",
-      "pit/escape/client.ts",
-      "pit/escape/reload.ts",
+      "pit/extensions/**",
     ],
     plugins: {
       ...base.plugins,
@@ -50,13 +47,7 @@ export default [
   // ── extension files: no sub-path imports for effect ecosystem ──────────────
   {
     ...base,
-    files: [
-      "pit/commands/**/*.ts",
-      "pit/tools/**/*.ts",
-      "pit/escape/client.ts",
-      "pit/escape/reload.ts",
-    ],
-    ignores: ["pit/tests/**"],
+    files: ["pit/extensions/**/*.ts"],
     rules: {
       // Jiti resolves sub-path imports (e.g. effect/Effect, @effect/platform/FileSystem)
       // using ["node","import"] conditions, which finds the ESM file, then tries
