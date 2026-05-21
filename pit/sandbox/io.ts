@@ -1,15 +1,13 @@
 /**
  * Sandbox IO — reads/writes pit config and settings, discovers unversioned dirs.
- *
- * Internal implementations are Effect-based.
- * Exported functions maintain their original signatures for test compatibility.
+ * All IO operations are Effect-based with platform services.
  */
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
 import { Effect } from "effect";
+import { Command, FileSystem, type CommandExecutor } from "@effect/platform";
+import type { PlatformError } from "@effect/platform/Error";
 import type { PitConfig } from "../types.ts";
 import { applyDenylist } from "./pure.ts";
 import { SettingsWriteError } from "../errors.ts";
@@ -18,15 +16,19 @@ import { SettingsWriteError } from "../errors.ts";
 
 /**
  * Return the relative paths of all unversioned directories in a git repo root.
- * Used to build overlay mounts for the bwrap sandbox.
- * Returns [] if git is unavailable or the path is not a git repo.
+ * Propagates PlatformError — a [] fallback on git failure silently breaks
+ * the sandbox's overlay mounts (parent repo's node_modules etc. would be missing).
  */
-export function resolveUnversionedDirs(parentRepo: string): string[] {
-  const run = (extra: string[]) => {
-    try {
-      return execFileSync(
-        "git",
-        [
+export const resolveUnversionedDirs = (
+  parentRepo: string,
+): Effect.Effect<string[], PlatformError, CommandExecutor.CommandExecutor> =>
+  Effect.gen(function* () {
+    const runLines = (
+      extra: string[],
+    ): Effect.Effect<string[], PlatformError, CommandExecutor.CommandExecutor> =>
+      Command.lines(
+        Command.make(
+          "git",
           "-C",
           parentRepo,
           "ls-files",
@@ -34,88 +36,88 @@ export function resolveUnversionedDirs(parentRepo: string): string[] {
           "--directory",
           "--exclude-standard",
           ...extra,
-        ],
-        { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-      )
-        .trim()
-        .split("\n")
-        .filter(Boolean);
-    } catch {
-      return [];
+        ),
+      ).pipe(Effect.catchAll(() => Effect.succeed<string[]>([])));
+
+    const [a, b] = yield* Effect.all([runLines([]), runLines(["--ignored"])]);
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const raw of [...a, ...b]) {
+      if (!raw.endsWith("/")) continue;
+      const rel = raw.replace(/\/$/, "");
+      if (rel && !seen.has(rel)) {
+        seen.add(rel);
+        result.push(rel);
+      }
     }
-  };
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const raw of [...run([]), ...run(["--ignored"])]) {
-    if (!raw.endsWith("/")) continue;
-    const rel = raw.replace(/\/$/, "");
-    if (rel && !seen.has(rel)) {
-      seen.add(rel);
-      result.push(rel);
-    }
-  }
-  return result;
-}
+    return result;
+  });
 
 // ── pit config ────────────────────────────────────────────────────────────────
 
-/** Read pit config, returning an empty object if the file doesn't exist or is malformed. */
-export function readPitConfig(pitDir: string): PitConfig {
-  const configPath = path.join(pitDir, "config.json");
-  if (!fs.existsSync(configPath)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(configPath, "utf8")) as PitConfig;
-  } catch {
-    return {};
-  }
-}
+/**
+ * Read pit config, returning an empty object if the file doesn't exist or is malformed.
+ * Absorbs all errors — absent config is a valid state.
+ */
+export const readPitConfig = (
+  pitDir: string,
+): Effect.Effect<PitConfig, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const configPath = path.join(pitDir, "config.json");
+    const exists = yield* fs.exists(configPath).pipe(Effect.orElse(() => Effect.succeed(false)));
+    if (!exists) return {};
+    const raw = yield* fs.readFileString(configPath).pipe(Effect.orElse(() => Effect.succeed("")));
+    try {
+      return JSON.parse(raw) as PitConfig;
+    } catch {
+      return {};
+    }
+  });
 
 // ── settings filtering ────────────────────────────────────────────────────────
 
-const writeFilteredSettingsEffect = (
+/**
+ * Write filtered settings to the given path.
+ * Propagates SettingsWriteError — caller decides whether to abort or continue.
+ */
+export const writeFilteredSettings = (
   agentDir: string,
   pitConfig: PitConfig,
   hostSettingsPath: string,
-): Effect.Effect<void, SettingsWriteError> =>
-  Effect.try({
-    try: () => {
-      const raw = fs.existsSync(path.join(agentDir, "settings.json"))
-        ? fs.readFileSync(path.join(agentDir, "settings.json"), "utf8")
-        : "{}";
-      const settings = JSON.parse(raw.trim() || "{}") as Record<string, unknown>;
-      const filtered = applyDenylist(settings, pitConfig.denyPackages ?? []);
-      fs.mkdirSync(path.dirname(hostSettingsPath), { recursive: true });
-      fs.writeFileSync(hostSettingsPath, JSON.stringify(filtered, null, 2) + "\n");
-    },
-    catch: (e) =>
-      new SettingsWriteError({
-        message: e instanceof Error ? e.message : String(e),
-      }),
+): Effect.Effect<void, SettingsWriteError, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const settingsPath = path.join(agentDir, "settings.json");
+    const exists = yield* fs.exists(settingsPath).pipe(Effect.orElse(() => Effect.succeed(false)));
+    const raw = exists
+      ? yield* fs.readFileString(settingsPath).pipe(Effect.orElse(() => Effect.succeed("{}")))
+      : "{}";
+    const settings = (() => {
+      try { return JSON.parse(raw.trim() || "{}") as Record<string, unknown>; }
+      catch { return {} as Record<string, unknown>; }
+    })();
+    const filtered = applyDenylist(settings, pitConfig.denyPackages ?? []);
+    yield* fs.makeDirectory(path.dirname(hostSettingsPath), { recursive: true }).pipe(
+      Effect.ignore,
+    );
+    yield* fs.writeFileString(hostSettingsPath, JSON.stringify(filtered, null, 2) + "\n").pipe(
+      Effect.mapError(
+        (e) => new SettingsWriteError({ message: String(e) }),
+      ),
+    );
   });
 
 /**
- * Write filtered settings to the given path.
- * Applies the pit denylist before writing. Creates parent dirs.
- */
-export function writeFilteredSettings(
-  agentDir: string,
-  pitConfig: PitConfig,
-  hostSettingsPath: string,
-): void {
-  Effect.runSync(writeFilteredSettingsEffect(agentDir, pitConfig, hostSettingsPath));
-}
-
-/**
  * Create a temporary file in os.tmpdir(), write filtered settings into it,
- * and return the path wrapped in an Effect.
- * The caller is responsible for deleting it when done.
+ * and return the path. Caller is responsible for deleting it when done.
  */
 export const createTempSettingsFileEffect = (
   agentDir: string,
   pitConfig: PitConfig,
-): Effect.Effect<string, SettingsWriteError> =>
+): Effect.Effect<string, SettingsWriteError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const tmp = path.join(os.tmpdir(), `pit-settings-${process.pid}.json`);
-    yield* writeFilteredSettingsEffect(agentDir, pitConfig, tmp);
+    yield* writeFilteredSettings(agentDir, pitConfig, tmp);
     return tmp;
   });

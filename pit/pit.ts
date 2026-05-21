@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync, spawnSync, spawn } from "node:child_process";
 import { Effect, Option } from "effect";
+import { NodeContext } from "@effect/platform-node";
 import {
   main,
   SessionManager,
@@ -28,9 +29,12 @@ import {
 import type { PitMetadata, SandboxMounts, OverlayMount } from "./types.ts";
 import { parseFlags } from "./worktree/pure.ts";
 import { worktreeCheckEffect } from "./worktree/io.ts";
-import { systemPromptArgs, buildAnnouncement } from "./session/pure.ts";
-import { setupNewSession, findOrCreateLinkedSessionEffect } from "./session/io.ts";
-import { buildSandboxMountSpec, applyDenylist } from "./sandbox/pure.ts";
+import { systemPromptArgs } from "./session/pure.ts";
+import {
+  setupNewSession,
+  findOrCreateLinkedSession,
+} from "./session/io.ts";
+import { buildSandboxMountSpec } from "./sandbox/pure.ts";
 import {
   resolveUnversionedDirs,
   readPitConfig,
@@ -58,38 +62,18 @@ import {
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "/";
 const AGENT_DIR = getAgentDir();
 
-/** Subcommands that have nothing to do with sessions — forward to pi directly */
 const PI_SUBCOMMANDS = new Set([
-  "install",
-  "remove",
-  "uninstall",
-  "update",
-  "list",
-  "config",
+  "install", "remove", "uninstall", "update", "list", "config",
 ]);
-
-/** Flags where pit should skip worktree creation and just pass through to pi */
 const INFO_ONLY_FLAGS = new Set([
-  "-h",
-  "--help",
-  "-v",
-  "--version",
-  "--list-models",
-  "--export",
+  "-h", "--help", "-v", "--version", "--list-models", "--export",
 ]);
-
-/** Flags indicating the user is explicitly managing their own session */
 const SESSION_FLAGS = new Set([
-  "-c",
-  "--continue",
-  "--session",
-  "--no-session",
-  "--fork",
+  "-c", "--continue", "--session", "--no-session", "--fork",
 ]);
 
 // ── pit dir ───────────────────────────────────────────────────────────────────
 
-/** ~/.pi/agent/pit — inside the repo-tracked agent config dir */
 const PIT_DIR = path.join(AGENT_DIR, "pit");
 
 // ── extension args ────────────────────────────────────────────────────────────
@@ -132,10 +116,7 @@ function getExtensionMounts(): string[] {
     let parent = path.dirname(ext);
     while (true) {
       const nm = path.join(parent, "node_modules");
-      if (fs.existsSync(nm)) {
-        mounts.add(nm);
-        break;
-      }
+      if (fs.existsSync(nm)) { mounts.add(nm); break; }
       const up = path.dirname(parent);
       if (up === parent) break;
       parent = up;
@@ -144,97 +125,83 @@ function getExtensionMounts(): string[] {
   return [...mounts].sort();
 }
 
-function buildSandboxMounts(
+/**
+ * Build sandbox mounts.
+ * resolveUnversionedDirs failure → warns + skips overlays (graceful degradation).
+ * resolveWorktreeGitRwMounts failure → empty mounts (caller sees typed error).
+ */
+const buildSandboxMountsEffect = (
   cwd: string,
   agentDirReal: string,
   extensionMounts: string[],
   nodeDir: string,
-): SandboxMounts {
-  const overlayDirs: OverlayMount[] = [];
-  const parentRepo = resolveMainRepo(cwd);
-  if (parentRepo) {
-    for (const rel of resolveUnversionedDirs(parentRepo)) {
-      const src = path.join(parentRepo, rel);
-      const dest = path.join(cwd, rel);
-      try {
-        if (fs.statSync(src).isDirectory())
-          overlayDirs.push({ src, dest, label: rel });
-      } catch {
-        /* src disappeared — skip */
+): Effect.Effect<SandboxMounts, never, NodeContext.NodeContext> =>
+  Effect.gen(function* () {
+    const parentRepo = yield* resolveMainRepo(cwd);
+    const overlayDirs: OverlayMount[] = [];
+    if (parentRepo) {
+      const unversioned = yield* resolveUnversionedDirs(parentRepo).pipe(
+        Effect.catchAll((e) =>
+          Effect.sync(() => {
+            console.warn(`pit: overlay mounts unavailable: ${String(e)}`);
+            return [] as string[];
+          }),
+        ),
+      );
+      for (const rel of unversioned) {
+        const src = path.join(parentRepo, rel);
+        const dest = path.join(cwd, rel);
+        try {
+          if (fs.statSync(src).isDirectory()) overlayDirs.push({ src, dest, label: rel });
+        } catch { /* src disappeared */ }
       }
     }
-  }
-  return buildSandboxMountSpec({
-    home: HOME,
-    cwd,
-    agentDirReal,
-    extensionMounts,
-    nodeDir,
-    gitRwMounts: resolveWorktreeGitRwMounts(cwd),
-    overlayDirs,
+    const gitRwMounts = yield* resolveWorktreeGitRwMounts(cwd);
+    return buildSandboxMountSpec({
+      home: HOME, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs,
+    });
   });
-}
 
-function resolveSandboxMounts(
+const resolveSandboxMountsEffect = (
   cwd: string,
   useSandbox: boolean,
-): SandboxMounts | undefined {
-  if (!useSandbox) return undefined;
-  if (!findBwrap()) return undefined;
-  const nodeDir = path.dirname(path.dirname(process.execPath));
-  return buildSandboxMounts(
-    cwd,
-    fs.realpathSync(AGENT_DIR),
-    getExtensionMounts(),
-    nodeDir,
-  );
-}
-
-function shadowAgentMountArgs(
-  agentDirReal: string,
-  settingsPath: string,
-): string[] {
-  return [
-    "--bind",
-    agentDirReal,
-    "/pit-agent",
-    "--bind",
-    settingsPath,
-    "/pit-agent/settings.json",
-  ];
-}
+): Effect.Effect<SandboxMounts | undefined, never, NodeContext.NodeContext> =>
+  Effect.gen(function* () {
+    if (!useSandbox || !findBwrap()) return undefined;
+    const nodeDir = path.dirname(path.dirname(process.execPath));
+    return yield* buildSandboxMountsEffect(
+      cwd, fs.realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir,
+    );
+  });
 
 // ── launch ────────────────────────────────────────────────────────────────────
 
+function shadowAgentMountArgs(agentDirReal: string, settingsPath: string): string[] {
+  return [
+    "--bind", agentDirReal, "/pit-agent",
+    "--bind", settingsPath, "/pit-agent/settings.json",
+  ];
+}
+
 /**
- * Spawn the sandboxed pi session via bwrap. Never returns — exits the process.
+ * Spawn the sandboxed pi session via bwrap.
+ * Mounts are pre-computed by the Effect pipeline and passed in.
+ * Never returns — exits the process.
  */
 function bwrapLaunch(
   cwd: string,
   piArgs: string[],
+  mounts: SandboxMounts,
   settingsPath?: string,
 ): never {
   const bwrap = findBwrap()!;
   const nodeBin = process.execPath;
   const nodeDir = path.dirname(path.dirname(nodeBin));
-  const piScript = fs.realpathSync(
-    execSync("which pi", { encoding: "utf8" }).trim(),
-  );
+  const piScript = fs.realpathSync(execSync("which pi", { encoding: "utf8" }).trim());
 
-  const agentDirReal = fs.realpathSync(AGENT_DIR);
-  const mounts = buildSandboxMounts(
-    cwd,
-    agentDirReal,
-    getExtensionMounts(),
-    nodeDir,
-  );
   const mountArgs: string[] = [];
   for (const m of mounts.ro) {
-    mountArgs.push(
-      m.optional ? "--ro-bind-try" : "--ro-bind",
-      m.path,
-      m.path,
-    );
+    mountArgs.push(m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path);
   }
   for (const m of mounts.rw) {
     mountArgs.push("--bind", m.path, m.path);
@@ -244,50 +211,24 @@ function bwrapLaunch(
     mountArgs.push("--overlay-src", m.src, "--tmp-overlay", m.dest);
   }
 
-  const shadowArgs = settingsPath
-    ? shadowAgentMountArgs(agentDirReal, settingsPath)
-    : [];
-  const agentDirEnv = settingsPath
-    ? ["--setenv", "PI_CODING_AGENT_DIR", "/pit-agent"]
-    : [];
+  const agentDirReal = fs.realpathSync(AGENT_DIR);
+  const shadowArgs = settingsPath ? shadowAgentMountArgs(agentDirReal, settingsPath) : [];
+  const agentDirEnv = settingsPath ? ["--setenv", "PI_CODING_AGENT_DIR", "/pit-agent"] : [];
 
   const args: string[] = [
-    "--tmpfs",
-    "/",
-    "--dev",
-    "/dev",
-    "--proc",
-    "/proc",
-    ...mountArgs,
-    ...shadowArgs,
-    "--unshare-user",
-    "--unshare-pid",
-    "--die-with-parent",
-    "--setenv",
-    "HOME",
-    HOME,
-    "--setenv",
-    "PATH",
-    `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
-    "--setenv",
-    "PI_CODING_AGENT",
-    "true",
+    "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
+    ...mountArgs, ...shadowArgs,
+    "--unshare-user", "--unshare-pid", "--die-with-parent",
+    "--setenv", "HOME", HOME,
+    "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
+    "--setenv", "PI_CODING_AGENT", "true",
     ...agentDirEnv,
-    "--chdir",
-    cwd,
-    "--",
-    nodeBin,
-    piScript,
-    ...piArgs,
+    "--chdir", cwd,
+    "--", nodeBin, piScript, ...piArgs,
   ];
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
-  if (settingsPath)
-    try {
-      fs.unlinkSync(settingsPath);
-    } catch {
-      /* already gone */
-    }
+  if (settingsPath) try { fs.unlinkSync(settingsPath); } catch { /* already gone */ }
   process.exit(result.status ?? 1);
 }
 
@@ -296,18 +237,23 @@ const launchEffect = (
   piArgs: string[],
   sandbox: boolean,
   settingsPath?: string,
-): Effect.Effect<void, never, never> =>
+  mounts?: SandboxMounts,
+): Effect.Effect<void, never, NodeContext.NodeContext> =>
   Effect.gen(function* () {
     if (sandbox) {
       const bwrap = findBwrap();
       if (bwrap) {
-        bwrapLaunch(cwd, piArgs, settingsPath); // never returns
+        const m = mounts ?? (yield* buildSandboxMountsEffect(
+          cwd,
+          fs.realpathSync(AGENT_DIR),
+          getExtensionMounts(),
+          path.dirname(path.dirname(process.execPath)),
+        ));
+        bwrapLaunch(cwd, piArgs, m, settingsPath); // never returns
       }
       console.warn("pit: bwrap not found — running without sandbox");
     }
     process.chdir(cwd);
-    // main() handles its own errors; absorb any rejection so it doesn't
-    // surface as an unhandled error in the Effect pipeline.
     yield* Effect.promise(() => main(piArgs).catch(() => {}));
   });
 
@@ -317,74 +263,46 @@ const startPitEscapeEffect = (
   worktreeCwd: string,
   sessionId: string,
   settingsPath: string,
-): Effect.Effect<Option.Option<string>, SocketAliveError> =>
+): Effect.Effect<Option.Option<string>, SocketAliveError, NodeContext.NodeContext> =>
   Effect.gen(function* () {
-    // Only start pit-escape for linked worktrees (.git is a file, not a dir)
-    const gitFile = path.join(worktreeCwd, ".git");
-    const isMainWorktree = yield* Effect.sync((): boolean => {
-      try { return fs.statSync(gitFile).isDirectory(); }
-      catch { return true; } // not a git repo — skip
-    });
-    if (isMainWorktree) return Option.none();
+    const isMain = yield* isLinkedWorktree(worktreeCwd).pipe(
+      Effect.map((linked) => !linked),
+    );
+    if (isMain) return Option.none();
 
     const socketPath = path.join(AGENT_DIR, `pit-${sessionId}.sock`);
-
     const probe = yield* probeSocketEffect(socketPath);
-    if (probe === "alive") {
-      return yield* Effect.fail(new SocketAliveError({ sessionId }));
-    }
+    if (probe === "alive") return yield* Effect.fail(new SocketAliveError({ sessionId }));
 
-    // Remove stale socket if present
-    yield* Effect.sync(() => { try { fs.unlinkSync(socketPath); } catch { /* already gone */ } });
+    yield* Effect.sync(() => { try { fs.unlinkSync(socketPath); } catch { /* gone */ } });
 
     const scriptDir = path.resolve(path.dirname(process.argv[1]));
     const escapeScript = path.join(scriptDir, "escape", "server.ts");
 
-    const result = yield* Effect.async<Option.Option<string>>((resume) => {
+    return yield* Effect.async<Option.Option<string>>((resume) => {
       const child = spawn(
         process.execPath,
         [
-          "--experimental-strip-types",
-          escapeScript,
-          socketPath,
-          worktreeCwd,
-          fs.realpathSync(AGENT_DIR),
-          PIT_DIR,
-          settingsPath,
+          "--experimental-strip-types", escapeScript,
+          socketPath, worktreeCwd, fs.realpathSync(AGENT_DIR), PIT_DIR, settingsPath,
         ],
         { stdio: ["ignore", "pipe", "inherit"] },
       );
 
       process.on("exit", () => {
-        try { child.kill("SIGTERM"); } catch { /* already gone */ }
-        try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
+        try { child.kill("SIGTERM"); } catch { /* gone */ }
+        try { fs.unlinkSync(socketPath); } catch { /* gone */ }
       });
 
       const timer = setTimeout(() => {
-        console.warn(
-          "pit: pit-escape timed out — git tool and settings refresh unavailable",
-        );
+        console.warn("pit: pit-escape timed out — git tool and settings refresh unavailable");
         resume(Effect.succeed(Option.none()));
       }, 3000);
 
-      child.stdout!.once("data", () => {
-        clearTimeout(timer);
-        resume(Effect.succeed(Option.some(socketPath)));
-      });
-      child.once("error", (err) => {
-        clearTimeout(timer);
-        console.warn(`pit: pit-escape: ${err.message}`);
-        resume(Effect.succeed(Option.none()));
-      });
-      child.once("exit", (code) => {
-        if (code !== 0) {
-          clearTimeout(timer);
-          resume(Effect.succeed(Option.none()));
-        }
-      });
+      child.stdout!.once("data", () => { clearTimeout(timer); resume(Effect.succeed(Option.some(socketPath))); });
+      child.once("error", (err) => { clearTimeout(timer); console.warn(`pit: pit-escape: ${err.message}`); resume(Effect.succeed(Option.none())); });
+      child.once("exit", (code) => { if (code !== 0) { clearTimeout(timer); resume(Effect.succeed(Option.none())); } });
     });
-
-    return result;
   });
 
 // ── resume via session picker ─────────────────────────────────────────────────
@@ -403,34 +321,48 @@ async function showPicker(
     const selector = new SessionSelectorComponent(
       async (progress) => {
         const cwd = process.cwd();
-        const rawRepo = gitRepoRoot();
-        const repo =
-          rawRepo && isLinkedWorktree(cwd)
-            ? (resolveMainRepo(cwd) ?? rawRepo)
-            : rawRepo;
-        const worktrees = repo ? listRepoWorktrees(repo) : [];
+        const rawRepo = await Effect.runPromise(gitRepoRoot().pipe(Effect.provide(NodeContext.layer)));
+        const isLinked = await Effect.runPromise(isLinkedWorktree(cwd).pipe(Effect.provide(NodeContext.layer)));
+        const mainRepo = isLinked
+          ? await Effect.runPromise(resolveMainRepo(cwd).pipe(Effect.provide(NodeContext.layer)))
+          : null;
+        const repo = rawRepo && isLinked ? (mainRepo ?? rawRepo) : rawRepo;
 
-        const worktreeBranch = new Map(
-          worktrees.map((wt) => [wt, readWorktreeBranch(wt) ?? "deleted"]),
+        const worktrees = repo
+          ? await Effect.runPromise(
+              listRepoWorktrees(repo).pipe(
+                Effect.catchAll(() => Effect.succeed([] as string[])),
+                Effect.provide(NodeContext.layer),
+              ),
+            )
+          : [];
+
+        const worktreeBranchEntries: Array<[string, string]> = await Promise.all(
+          worktrees.map(async (wt) => {
+            const branch = await Effect.runPromise(
+              readWorktreeBranch(wt).pipe(
+                Effect.map((b) => b ?? "deleted"),
+                Effect.provide(NodeContext.layer),
+              ),
+            );
+            return [wt, branch] as [string, string];
+          }),
         );
+        const worktreeBranch = new Map(worktreeBranchEntries);
 
         const mainPaths = new Set<string>();
         if (repo) mainPaths.add(repo);
-        if (!isLinkedWorktree(cwd)) mainPaths.add(cwd);
+        if (!isLinked) mainPaths.add(cwd);
 
         const [mainGroups, wtGroups] = await Promise.all([
           Promise.all(
             [...mainPaths].map((p) =>
-              SessionManager.list(p, undefined, progress).catch(
-                () => [] as Awaited<ReturnType<typeof SessionManager.list>>,
-              ),
+              SessionManager.list(p, undefined, progress).catch(() => [] as Awaited<ReturnType<typeof SessionManager.list>>),
             ),
           ),
           Promise.all(
             worktrees.map((wt) =>
-              SessionManager.list(wt, undefined, progress).catch(
-                () => [] as Awaited<ReturnType<typeof SessionManager.list>>,
-              ),
+              SessionManager.list(wt, undefined, progress).catch(() => [] as Awaited<ReturnType<typeof SessionManager.list>>),
             ),
           ),
         ]);
@@ -447,11 +379,7 @@ async function showPicker(
 
         const seen = new Set<string>();
         return [...mainGroups.flat(), ...marked]
-          .filter((s) => {
-            if (seen.has(s.path)) return false;
-            seen.add(s.path);
-            return true;
-          })
+          .filter((s) => { if (seen.has(s.path)) return false; seen.add(s.path); return true; })
           .sort((a, b) => b.modified.getTime() - a.modified.getTime());
       },
       (progress) => SessionManager.listAll(progress),
@@ -475,7 +403,11 @@ async function showPicker(
         e.type === "custom" && (e as CustomEntry).customType === "pit",
     );
     if (!pitEntry?.data) {
-      await Effect.runPromise(launchEffect(process.cwd(), ["--session", selectedPath, ...piArgs], sandbox));
+      await Effect.runPromise(
+        launchEffect(process.cwd(), ["--session", selectedPath, ...piArgs], sandbox).pipe(
+          Effect.provide(NodeContext.layer),
+        ),
+      );
       return null;
     }
     return { sessionFile: selectedPath, meta: pitEntry.data };
@@ -496,36 +428,32 @@ const argv = process.argv.slice(2);
 const program = Effect.gen(function* () {
   const { sandbox, noTree, filteredArgv } = parseFlags(argv);
 
-  // ── pi subcommands: forward directly ───────────────────────────────────
   if (filteredArgv.length > 0 && PI_SUBCOMMANDS.has(filteredArgv[0])) {
     const r = spawnSync("pi", filteredArgv, { stdio: "inherit", shell: false });
     process.exit(r.status ?? 0);
   }
 
-  // ── info-only flags: skip worktree, pass straight to pi ────────────────
   if (filteredArgv.some((f) => INFO_ONLY_FLAGS.has(f))) {
     yield* launchEffect(process.cwd(), filteredArgv, false);
     return;
   }
 
-  // ── pit -r [id]: worktree-aware resume picker ───────────────────────────
+  // ── pit -r: worktree-aware resume picker ─────────────────────────────────
   if (filteredArgv[0] === "-r" || filteredArgv[0] === "--resume") {
     const piArgs = filteredArgv.slice(1);
     const picked = yield* Effect.promise(() => showPicker(piArgs, sandbox));
     if (!picked) return;
 
     const result = yield* worktreeCheckEffect(picked.meta);
-    const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
-    const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, readPitConfig(PIT_DIR));
-
+    const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
+    const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
     const socketOpt = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
     if (Option.isSome(socketOpt)) process.env.PIT_ESCAPE_SOCKET = socketOpt.value;
 
     yield* launchEffect(
       result.cwd,
       ["--session", picked.sessionFile, ...extensionArgs(), ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs],
-      sandbox,
-      settingsPath,
+      sandbox, settingsPath, sandboxMounts,
     );
     yield* unlinkSilent(settingsPath);
     return;
@@ -533,36 +461,35 @@ const program = Effect.gen(function* () {
 
   const userManagingSession = filteredArgv.some((f) => SESSION_FLAGS.has(f));
 
-  // ── already inside a linked worktree ───────────────────────────────────
-  if (!noTree && isLinkedWorktree(process.cwd())) {
+  // ── already inside a linked worktree ─────────────────────────────────────
+  const inLinkedWorktree = yield* isLinkedWorktree(process.cwd());
+  if (!noTree && inLinkedWorktree) {
     const cwd = process.cwd();
     if (userManagingSession) {
       yield* launchEffect(cwd, filteredArgv, sandbox);
       return;
     }
-    const sandboxMounts = resolveSandboxMounts(cwd, sandbox);
-    const session = yield* findOrCreateLinkedSessionEffect(cwd, AGENT_DIR, sandboxMounts);
+    const sandboxMounts = yield* resolveSandboxMountsEffect(cwd, sandbox);
+    const session = yield* findOrCreateLinkedSession(cwd, AGENT_DIR, sandboxMounts);
     if (session.kind === "new") {
       console.error("pit: already in a git worktree — no pit session found, running no-tree");
     }
-    const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, readPitConfig(PIT_DIR));
+    const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
     const socketOpt = yield* startPitEscapeEffect(cwd, session.meta.id, settingsPath);
     if (Option.isSome(socketOpt)) process.env.PIT_ESCAPE_SOCKET = socketOpt.value;
 
     yield* launchEffect(
       cwd,
       ["--session", session.sessionFile, ...extensionArgs(), ...systemPromptArgs(session.meta, sandboxMounts), ...filteredArgv],
-      sandbox,
-      settingsPath,
+      sandbox, settingsPath, sandboxMounts,
     );
     yield* unlinkSilent(settingsPath);
     return;
   }
 
-  // ── new session (or user-managed session) ───────────────────────────────
+  // ── new session ───────────────────────────────────────────────────────────
   const result = yield* worktreeCheckEffect(undefined, noTree);
-  const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, readPitConfig(PIT_DIR));
-
+  const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
   const socketOpt = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
   if (Option.isSome(socketOpt)) process.env.PIT_ESCAPE_SOCKET = socketOpt.value;
 
@@ -570,14 +497,17 @@ const program = Effect.gen(function* () {
   if (userManagingSession) {
     piArgs = filteredArgv;
   } else {
-    const sandboxMounts = resolveSandboxMounts(result.cwd, sandbox);
-    const sessionFile = setupNewSession(result, AGENT_DIR, sandboxMounts);
+    const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
+    const sessionFile = yield* setupNewSession(result, AGENT_DIR, sandboxMounts);
     piArgs = [
       "--session", sessionFile,
       ...extensionArgs(),
       ...systemPromptArgs(result.meta, sandboxMounts),
       ...filteredArgv,
     ];
+    yield* launchEffect(result.cwd, piArgs, sandbox, settingsPath, sandboxMounts);
+    yield* unlinkSilent(settingsPath);
+    return;
   }
 
   yield* launchEffect(result.cwd, piArgs, sandbox, settingsPath);
@@ -616,6 +546,7 @@ Effect.runPromise(
         process.exit(1);
       }),
     ),
+    Effect.provide(NodeContext.layer),
   ),
 ).catch((err: unknown) => {
   console.error(`pit: ${err instanceof Error ? err.message : String(err)}`);

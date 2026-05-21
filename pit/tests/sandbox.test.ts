@@ -20,10 +20,15 @@
  *                 pi reported "No models available" on startup.
  */
 import { describe, it, expect, afterEach } from "vitest";
+import { Effect } from "effect";
+import { NodeContext } from "@effect/platform-node";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { writeFilteredSettings } from "../sandbox/io.ts";
+
+const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -114,7 +119,7 @@ describe("pit bwrap sandbox", () => {
     for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
     tmpDirs.length = 0;
   });
-  it.skipIf(!hasBwrap)("resolves DNS inside bwrap", () => {
+  it.skipIf(!hasBwrap)("resolves DNS inside bwrap", async () => {
     // Bug: /etc/resolv.conf is a symlink to /mnt/wsl/resolv.conf on WSL.
     // Without --ro-bind-try /mnt/wsl /mnt/wsl the symlink is dangling and
     // all DNS queries fail. Fix: mount /mnt/wsl inside the sandbox.
@@ -128,7 +133,7 @@ describe("pit bwrap sandbox", () => {
     expect(addrs.length).toBeGreaterThan(0);
   });
 
-  it.skipIf(!hasBwrap)("reaches api.anthropic.com over HTTPS inside bwrap", () => {
+  it.skipIf(!hasBwrap)("reaches api.anthropic.com over HTTPS inside bwrap", async () => {
     // Verifies that fixing DNS also unblocks outbound HTTPS to Anthropic's API.
     const result = runInBwrap(`
       import { request } from "node:https";
@@ -147,7 +152,7 @@ describe("pit bwrap sandbox", () => {
     expect(result.stdout).toBe("ok");
   });
 
-  it.skipIf(!hasBwrap)("reaches api.githubcopilot.com over HTTPS inside bwrap", () => {
+  it.skipIf(!hasBwrap)("reaches api.githubcopilot.com over HTTPS inside bwrap", async () => {
     // Verifies connectivity to the GitHub Copilot API (default provider).
     const result = runInBwrap(`
       import { request } from "node:https";
@@ -166,7 +171,7 @@ describe("pit bwrap sandbox", () => {
     expect(result.stdout).toBe("ok");
   });
 
-  it.skipIf(!hasBwrap)("agent dir is readable and writable inside bwrap", () => {
+  it.skipIf(!hasBwrap)("agent dir is readable and writable inside bwrap", async () => {
     // Bug: when the agent dir was --ro-bind'd, proper-lockfile could not create
     // auth.json.lock (EROFS). AuthStorage caught the error silently and left
     // this.data={}, so getApiKey() returned null for every provider.
@@ -197,7 +202,7 @@ describe("pit bwrap sandbox", () => {
     expect(providers.length).toBeGreaterThan(0);
   });
 
-  it.skipIf(!hasBwrap)("models are available via SDK inside bwrap", () => {
+  it.skipIf(!hasBwrap)("models are available via SDK inside bwrap", async () => {
     // End-to-end check: if either the DNS fix or the auth fix regresses,
     // getAvailable() returns [] and this test fails before the user even
     // tries to send a message.
@@ -304,11 +309,11 @@ describe("shadow agent dir bwrap wiring", () => {
 
   it.skipIf(!hasBwrap)(
     "PI_CODING_AGENT_DIR is set to /pit-agent inside the sandbox",
-    () => {
+    async () => {
       const agentDir = makeAgentDir();
       fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
       const filteredPath = path.join(makeTmpDir(), "settings.json");
-      writeFilteredSettings(agentDir, {}, filteredPath);
+      await run(writeFilteredSettings(agentDir, {}, filteredPath));
 
       const result = runWithShadowAgent(
         agentDir, filteredPath,
@@ -321,14 +326,14 @@ describe("shadow agent dir bwrap wiring", () => {
 
   it.skipIf(!hasBwrap)(
     "settings.json at PI_CODING_AGENT_DIR is the filtered version: denied packages absent, allowed present",
-    () => {
+    async () => {
       const agentDir = makeAgentDir();
       fs.writeFileSync(
         path.join(agentDir, "settings.json"),
         JSON.stringify({ packages: [...denylist, allowedPkg] })
       );
       const filteredPath = path.join(makeTmpDir(), "settings.json");
-      writeFilteredSettings(agentDir, { denyPackages: denylist }, filteredPath);
+      await run(writeFilteredSettings(agentDir, { denyPackages: denylist }, filteredPath));
 
       const result = runWithShadowAgent(agentDir, filteredPath, `
         import { readFileSync } from "node:fs";
@@ -346,11 +351,11 @@ describe("shadow agent dir bwrap wiring", () => {
 
   it.skipIf(!hasBwrap)(
     "writes to PI_CODING_AGENT_DIR/auth.json are visible on the host (rw bind, not lost in tmpfs)",
-    () => {
+    async () => {
       const agentDir = makeAgentDir();
       fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
       const filteredPath = path.join(makeTmpDir(), "settings.json");
-      writeFilteredSettings(agentDir, {}, filteredPath);
+      await run(writeFilteredSettings(agentDir, {}, filteredPath));
 
       runWithShadowAgent(agentDir, filteredPath, `
         import { writeFileSync } from "node:fs";
@@ -364,11 +369,11 @@ describe("shadow agent dir bwrap wiring", () => {
 
   it.skipIf(!hasBwrap)(
     "writes to PI_CODING_AGENT_DIR/sessions are visible on the host (rw bind, not lost in tmpfs)",
-    () => {
+    async () => {
       const agentDir = makeAgentDir();
       fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
       const filteredPath = path.join(makeTmpDir(), "settings.json");
-      writeFilteredSettings(agentDir, {}, filteredPath);
+      await run(writeFilteredSettings(agentDir, {}, filteredPath));
 
       runWithShadowAgent(agentDir, filteredPath, `
         import { writeFileSync } from "node:fs";
@@ -381,7 +386,7 @@ describe("shadow agent dir bwrap wiring", () => {
 
   it.skipIf(!hasBwrap)(
     "writes to PI_CODING_AGENT_DIR/settings.json go to the filtered file, not the real settings",
-    () => {
+    async () => {
       // The later bind on settings.json must win over the base rw bind, so
       // writing to settings.json inside the sandbox updates the filtered host
       // file (pit-escape's refresh target) and leaves ~/.pi/agent/settings.json
@@ -389,7 +394,7 @@ describe("shadow agent dir bwrap wiring", () => {
       const agentDir = makeAgentDir();
       fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: ["real"] }));
       const filteredPath = path.join(makeTmpDir(), "settings.json");
-      writeFilteredSettings(agentDir, {}, filteredPath);
+      await run(writeFilteredSettings(agentDir, {}, filteredPath));
 
       runWithShadowAgent(agentDir, filteredPath, `
         import { writeFileSync } from "node:fs";
@@ -476,7 +481,7 @@ describe("tmp-overlay sandbox mounts", () => {
     }
   }
 
-  it.skipIf(!hasBwrap)("file from src is readable at dest inside the sandbox", () => {
+  it.skipIf(!hasBwrap)("file from src is readable at dest inside the sandbox", async () => {
     const src  = makeTmpDir(); // lower layer (parent repo dir)
     const dest = makeTmpDir(); // mount point (worktree dir, must pre-exist)
     fs.writeFileSync(path.join(src, "sentinel.txt"), "hello-from-parent");
@@ -490,7 +495,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(result.stdout).toBe("hello-from-parent");
   });
 
-  it.skipIf(!hasBwrap)("writes inside the sandbox succeed (no EROFS)", () => {
+  it.skipIf(!hasBwrap)("writes inside the sandbox succeed (no EROFS)", async () => {
     const src  = makeTmpDir();
     const dest = makeTmpDir();
 
@@ -503,7 +508,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(result.stdout).toBe("ok");
   });
 
-  it.skipIf(!hasBwrap)("writes inside the sandbox do NOT persist to the host src", () => {
+  it.skipIf(!hasBwrap)("writes inside the sandbox do NOT persist to the host src", async () => {
     const src  = makeTmpDir();
     const dest = makeTmpDir();
 
@@ -517,7 +522,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(fs.existsSync(path.join(dest, "ephemeral.txt"))).toBe(false);
   });
 
-  it.skipIf(!hasBwrap)("host src file is unchanged after overwrite inside the sandbox", () => {
+  it.skipIf(!hasBwrap)("host src file is unchanged after overwrite inside the sandbox", async () => {
     const src  = makeTmpDir();
     const dest = makeTmpDir();
     fs.writeFileSync(path.join(src, "original.txt"), "original-content");
@@ -530,7 +535,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(fs.readFileSync(path.join(src, "original.txt"), "utf8")).toBe("original-content");
   });
 
-  it.skipIf(!hasBwrap)("nested subdirectory inside src is accessible at dest", () => {
+  it.skipIf(!hasBwrap)("nested subdirectory inside src is accessible at dest", async () => {
     // Verifies the overlay covers the whole subtree, not just the top level.
     const src  = makeTmpDir();
     const dest = makeTmpDir();
@@ -546,7 +551,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(result.stdout).toBe("nested-content");
   });
 
-  it.skipIf(!hasBwrap)("write then read within the same session sees the written content", () => {
+  it.skipIf(!hasBwrap)("write then read within the same session sees the written content", async () => {
     // The tmpfs upper layer must be coherent within a session: a file written
     // to the overlay must be immediately readable back with the new content.
     const src  = makeTmpDir();

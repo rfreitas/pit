@@ -15,6 +15,7 @@
  */
 
 import { Effect, Option } from "effect";
+import { NodeContext } from "@effect/platform-node";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readWorktreeBranch } from "../git/utils.ts";
@@ -120,7 +121,7 @@ export default function (pi: ExtensionAPI) {
       await Effect.runPromise(
         Effect.gen(function* () {
           const cwd = process.cwd();
-          const currentBranch = readWorktreeBranch(cwd);
+          const currentBranch = yield* readWorktreeBranch(cwd);
           if (!currentBranch) {
             ctx.ui.notify(
               "Could not read current branch — are you in a pit worktree?",
@@ -244,7 +245,7 @@ export default function (pi: ExtensionAPI) {
             `Branch renamed: ${currentBranch} -> ${newBranch}`,
             "info",
           );
-        }),
+        }).pipe(Effect.provide(NodeContext.layer)),
       );
     },
   });

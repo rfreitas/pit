@@ -12,6 +12,8 @@
  * Both use os.tmpdir() for scratch space so these tests work from any cwd.
  */
 import { describe, it, expect, afterEach } from "vitest";
+import { Effect } from "effect";
+import { NodeContext } from "@effect/platform-node";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -19,6 +21,9 @@ import { execFileSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { setupNewSession, findPitSession } from "../session/io.ts";
 import { listRepoWorktrees } from "../git/utils.ts";
+
+const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
 import { cwdToBucket } from "../session/pure.ts";
 import type { WorktreeResult, PitMetadata } from "../types.ts";
 
@@ -84,7 +89,7 @@ describe("findPitSession", () => {
   it("returns null when no sessions exist for the cwd", async () => {
     const agentDir = makeTmpDir("pit-agent-");
     const cwd = "/tmp/fake-worktree-that-has-no-sessions";
-    expect(await findPitSession(cwd, agentDir)).toBeNull();
+    expect(await run(findPitSession(cwd, agentDir))).toBeNull();
   });
 
   it("returns null when sessions exist but none are pit sessions", async () => {
@@ -100,7 +105,7 @@ describe("findPitSession", () => {
     const line = JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: crypto.randomUUID(), timestamp: new Date().toISOString(), cwd });
     fs.writeFileSync(sessionFile, line + "\n");
 
-    expect(await findPitSession(cwd, agentDir)).toBeNull();
+    expect(await run(findPitSession(cwd, agentDir))).toBeNull();
   });
 
   it("returns the session file and metadata when a pit session exists", async () => {
@@ -108,9 +113,9 @@ describe("findPitSession", () => {
     const cwd = "/tmp/fake-worktree-with-pit";
     const result = makeWorktreeResult(cwd, "deadbeef");
 
-    const sessionFile = setupNewSession(result, agentDir);
+    const sessionFile = await run(setupNewSession(result, agentDir));
 
-    const found = await findPitSession(cwd, agentDir);
+    const found = await run(findPitSession(cwd, agentDir));
     expect(found).not.toBeNull();
     expect(found!.sessionFile).toBe(sessionFile);
     expect(found!.meta.id).toBe("deadbeef");
@@ -124,15 +129,15 @@ describe("findPitSession", () => {
 
     // Create two sessions with a small delay to get distinct modified times
     const result1 = makeWorktreeResult(cwd, "11111111");
-    setupNewSession(result1, agentDir);
+    await run(setupNewSession(result1, agentDir));
 
     // Small sleep to ensure different modified timestamps
     await new Promise((r) => setTimeout(r, 10));
 
     const result2 = makeWorktreeResult(cwd, "22222222");
-    const newer = setupNewSession(result2, agentDir);
+    const newer = await run(setupNewSession(result2, agentDir));
 
-    const found = await findPitSession(cwd, agentDir);
+    const found = await run(findPitSession(cwd, agentDir));
     expect(found).not.toBeNull();
     expect(found!.sessionFile).toBe(newer);
     expect(found!.meta.id).toBe("22222222");
@@ -141,9 +146,9 @@ describe("findPitSession", () => {
   it("the returned session can be opened by SessionManager (pi compatibility)", async () => {
     const agentDir = makeTmpDir("pit-agent-");
     const cwd = "/tmp/fake-worktree-compat";
-    setupNewSession(makeWorktreeResult(cwd), agentDir);
+    await run(setupNewSession(makeWorktreeResult(cwd), agentDir));
 
-    const found = await findPitSession(cwd, agentDir);
+    const found = await run(findPitSession(cwd, agentDir));
     expect(() => SessionManager.open(found!.sessionFile)).not.toThrow();
   });
 });
@@ -155,45 +160,45 @@ describe("findPitSession", () => {
 // showPicker so all pit sessions for a repo appear on the current-tab.
 
 describe("listRepoWorktrees", () => {
-  it("returns an empty array for a non-git directory", () => {
+  it("returns an empty array for a non-git directory", async () => {
     const dir = makeTmpDir("pit-nongit-");
-    expect(listRepoWorktrees(dir)).toEqual([]);
+    expect(await run(listRepoWorktrees(dir))).toEqual([]);
   });
 
-  it("returns an empty array for a git repo with no linked worktrees", () => {
+  it("returns an empty array for a git repo with no linked worktrees", async () => {
     const repo = makeGitRepo();
-    expect(listRepoWorktrees(repo)).toEqual([]);
+    expect(await run(listRepoWorktrees(repo))).toEqual([]);
   });
 
-  it("returns the linked worktree path for a repo with one worktree", () => {
+  it("returns the linked worktree path for a repo with one worktree", async () => {
     const repo = makeGitRepo();
     const wt = addWorktree(repo, "pi/test1");
-    const result = listRepoWorktrees(repo);
+    const result = await run(listRepoWorktrees(repo));
     expect(result).toHaveLength(1);
     expect(result[0]).toBe(wt);
   });
 
-  it("returns all linked worktrees for a repo with multiple worktrees", () => {
+  it("returns all linked worktrees for a repo with multiple worktrees", async () => {
     const repo = makeGitRepo();
     const wt1 = addWorktree(repo, "pi/test1");
     const wt2 = addWorktree(repo, "pi/test2");
-    const result = listRepoWorktrees(repo);
+    const result = await run(listRepoWorktrees(repo));
     expect(result).toHaveLength(2);
     expect(result).toContain(wt1);
     expect(result).toContain(wt2);
   });
 
-  it("does not include the main repo in the result", () => {
+  it("does not include the main repo in the result", async () => {
     const repo = makeGitRepo();
     addWorktree(repo, "pi/test1");
-    const result = listRepoWorktrees(repo);
+    const result = await run(listRepoWorktrees(repo));
     expect(result).not.toContain(repo);
   });
 
-  it("works for worktrees on any branch name, not just pi/", () => {
+  it("works for worktrees on any branch name, not just pi/", async () => {
     const repo = makeGitRepo();
     const wt = addWorktree(repo, "feature/my-feature");
-    const result = listRepoWorktrees(repo);
+    const result = await run(listRepoWorktrees(repo));
     expect(result).toContain(wt);
   });
 });

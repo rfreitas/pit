@@ -3,15 +3,12 @@
  */
 
 import * as fs from "node:fs";
-import { execFileSync } from "node:child_process";
 import { Effect } from "effect";
+import { Command, type CommandExecutor, FileSystem } from "@effect/platform";
 import { gitRepoRoot, branchExists } from "../git/utils.ts";
 import { genId, buildNoTreeMeta, buildWorktreeMeta } from "./pure.ts";
 import type { PitMetadata, WorktreeResult } from "../types.ts";
-import {
-  WorktreeCreationError,
-  WorktreeMissingError,
-} from "../errors.ts";
+import { WorktreeCreationError, WorktreeMissingError } from "../errors.ts";
 
 // ── worktree creation / recreation ────────────────────────────────────────────
 
@@ -21,20 +18,24 @@ export const createWorktreeEffect = ({
 }: {
   branch: string;
   worktree: string;
-}): Effect.Effect<void, WorktreeCreationError> =>
-  Effect.try({
-    try: () => {
-      console.error("pit: creating worktree");
-      console.error(`  branch:   ${branch}`);
-      console.error(`  worktree: ${worktree}`);
-      execFileSync("git", ["worktree", "add", "-b", branch, worktree, "HEAD"], {
-        stdio: ["ignore", process.stderr, process.stderr],
-      });
-    },
-    catch: (e) =>
-      new WorktreeCreationError({
-        message: e instanceof Error ? e.message : String(e),
-      }),
+}): Effect.Effect<void, WorktreeCreationError, CommandExecutor.CommandExecutor> =>
+  Effect.gen(function* () {
+    console.error("pit: creating worktree");
+    console.error(`  branch:   ${branch}`);
+    console.error(`  worktree: ${worktree}`);
+    yield* Command.exitCode(
+      Command.make("git", "worktree", "add", "-b", branch, worktree, "HEAD"),
+    ).pipe(
+      Effect.flatMap((code) =>
+        code === 0
+          ? Effect.void
+          : Effect.fail(new WorktreeCreationError({ message: `git worktree add exited ${code}` })),
+      ),
+      Effect.catchTag("WorktreeCreationError", (e) => Effect.fail(e)),
+      Effect.catchAll((e) =>
+        Effect.fail(new WorktreeCreationError({ message: String(e) })),
+      ),
+    );
   });
 
 export const recreateWorktreeEffect = ({
@@ -45,44 +46,47 @@ export const recreateWorktreeEffect = ({
   repo: string;
   branch: string;
   worktree: string;
-}): Effect.Effect<void, WorktreeMissingError | WorktreeCreationError> =>
+}): Effect.Effect<
+  void,
+  WorktreeMissingError | WorktreeCreationError,
+  CommandExecutor.CommandExecutor
+> =>
   Effect.gen(function* () {
     console.error("pit: worktree missing, attempting to recreate…");
-    if (!branchExists(repo, branch)) {
+    const exists = yield* branchExists(repo, branch);
+    if (!exists) {
       yield* Effect.fail(new WorktreeMissingError({ branch }));
     }
-    yield* Effect.try({
-      try: () => {
-        execFileSync("git", ["-C", repo, "worktree", "prune"], {
-          stdio: "ignore",
-        });
-        execFileSync(
-          "git",
-          ["-C", repo, "worktree", "add", worktree, branch],
-          { stdio: ["ignore", process.stderr, process.stderr] },
-        );
-        console.error(`pit: worktree recreated at ${worktree}`);
-      },
-      catch: (e) =>
-        new WorktreeCreationError({
-          message: e instanceof Error ? e.message : String(e),
-        }),
-    });
+    yield* Effect.all([
+      Command.exitCode(Command.make("git", "worktree", "prune", "-C", repo)).pipe(
+        Effect.ignore,
+      ),
+      Command.exitCode(
+        Command.make("git", "-C", repo, "worktree", "add", worktree, branch),
+      ).pipe(
+        Effect.flatMap((code) =>
+          code === 0
+            ? Effect.sync(() => console.error(`pit: worktree recreated at ${worktree}`))
+            : Effect.fail(new WorktreeCreationError({ message: `git worktree add exited ${code}` })),
+        ),
+        Effect.catchTag("WorktreeCreationError", (e) => Effect.fail(e)),
+        Effect.catchAll((e) =>
+          Effect.fail(new WorktreeCreationError({ message: String(e) })),
+        ),
+      ),
+    ]);
   });
 
 // ── worktree check ────────────────────────────────────────────────────────────
 
-/**
- * Determine launch mode and cwd.
- *
- * - Resume (existingMeta provided): verify/recreate the existing worktree.
- * - New session: check for git, create a worktree if possible, else no-tree.
- *   Pass forceNoTree=true to skip worktree creation even inside a git repo.
- */
 export const worktreeCheckEffect = (
   existingMeta?: PitMetadata,
   forceNoTree = false,
-): Effect.Effect<WorktreeResult, WorktreeMissingError | WorktreeCreationError> =>
+): Effect.Effect<
+  WorktreeResult,
+  WorktreeMissingError | WorktreeCreationError,
+  CommandExecutor.CommandExecutor | FileSystem.FileSystem
+> =>
   Effect.gen(function* () {
     if (existingMeta) {
       if (existingMeta.mode === "no-tree") {
@@ -94,7 +98,7 @@ export const worktreeCheckEffect = (
       return { mode: "worktree" as const, cwd: existingMeta.worktree, meta: existingMeta };
     }
 
-    const repo = gitRepoRoot();
+    const repo = yield* gitRepoRoot();
     const cwd = process.cwd();
     const id = genId();
     const created = new Date().toISOString();

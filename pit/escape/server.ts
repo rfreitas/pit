@@ -26,15 +26,15 @@
  *
  *   Subscribe to parent branch ref changes (persistent connection):
  *     Request:  { "op": "subscribe" }
- *     Response: { "ok": true, "watching": "master" }   (ack, connection stays open)
- *     Push:     { "event": "ref-change" }              (on every parent branch update)
- *     Error:    { "error": "..." }                     (closes connection)
+ *     Response: { "ok": true, "watching": "master" }
+ *     Push:     { "event": "ref-change" }
+ *     Error:    { "error": "..." }
  *
  *   Check if worktree branch is merged to parent:
  *     Request:  { "op": "is-merged" }
  *     Response: { "merged": true, "branch": "pi/abc", "parentBranch": "master", "aheadCount": 0, "behindCount": 0 }
  *
- *   Refresh filtered settings (re-read host settings + apply pit denylist):
+ *   Refresh filtered settings:
  *     Request:  { "op": "refresh-settings" }
  *     Response: { "ok": true } | { "error": "reason" }
  *
@@ -44,8 +44,10 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFile, execFileSync } from "node:child_process";
-import { Effect } from "effect";
+import { execFileSync } from "node:child_process";
+import { Effect, Stream, Chunk } from "effect";
+import { Command, FileSystem } from "@effect/platform";
+import { NodeContext } from "@effect/platform-node";
 import {
   resolveMainRepo,
   readWorktreeBranch,
@@ -63,39 +65,57 @@ if (!socketPath || !worktreePath || !agentDir || !pitDir || !hostSettingsPath) {
 }
 
 const GIT_ALLOWED = new Set([
-  "add",
-  "commit",
-  "diff",
-  "log",
-  "merge",
-  "rebase",
-  "reset",
-  "show",
-  "stash",
-  "status",
+  "add", "commit", "diff", "log", "merge",
+  "rebase", "reset", "show", "stash", "status",
 ]);
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 type GitResult = { stdout: string; stderr: string; code: number };
 
+/**
+ * Run a git command and capture stdout, stderr, and exit code.
+ * R = NodeContext (CommandExecutor for the subprocess, FileSystem for Process streams).
+ * Absorbs all failures into { code: 1 } so op handlers always succeed.
+ */
 const gitEffect = (
   args: string[],
   cwd: string,
-): Effect.Effect<GitResult> =>
-  Effect.async((resume) => {
-    execFile("git", args, { cwd }, (err, stdout, stderr) => {
-      const code = err
-        ? Number((err as NodeJS.ErrnoException).code) || 1
-        : 0;
-      resume(Effect.succeed({ stdout, stderr, code }));
-    });
-  });
+): Effect.Effect<GitResult, never, NodeContext.NodeContext> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const proc = yield* Command.start(
+        Command.workingDirectory(Command.make("git", ...args), cwd),
+      );
+      const decoder = new TextDecoder("utf8");
+      const [stdoutChunks, stderrChunks, code] = yield* Effect.all([
+        Stream.runCollect(proc.stdout),
+        Stream.runCollect(proc.stderr),
+        proc.exitCode,
+      ]);
+      return {
+        stdout: Chunk.toReadonlyArray(stdoutChunks)
+          .map((c) => decoder.decode(c))
+          .join(""),
+        stderr: Chunk.toReadonlyArray(stderrChunks)
+          .map((c) => decoder.decode(c))
+          .join(""),
+        code: Number(code),
+      };
+    }),
+  ).pipe(
+    Effect.catchAll(() => Effect.succeed({ stdout: "", stderr: "", code: 1 })),
+  );
 
-// All agent-facing git operations run in the worktree — bound once here.
-const worktreeGit = (args: string[]): Effect.Effect<GitResult> =>
+const worktreeGit = (
+  args: string[],
+): Effect.Effect<GitResult, never, NodeContext.NodeContext> =>
   gitEffect(args, worktreePath);
 
+/**
+ * Detect the parent branch (master or main) in a repo.
+ * Kept as a plain sync helper — only called from Effect.sync wrappers.
+ */
 function detectParentBranch(mainRepo: string): string | null {
   for (const candidate of ["master", "main"]) {
     try {
@@ -104,60 +124,55 @@ function detectParentBranch(mainRepo: string): string | null {
         stdio: "ignore",
       });
       return candidate;
-    } catch {
-      /* try next */
-    }
+    } catch { /* try next */ }
   }
   return null;
 }
 
 // ── ops ───────────────────────────────────────────────────────────────────────
 
-const opGetState = (): Effect.Effect<object> =>
+const opGetState = (): Effect.Effect<
+  object,
+  never,
+  NodeContext.NodeContext
+> =>
   Effect.gen(function* () {
-    const branch = readWorktreeBranch(worktreePath);
-    const mainRepo = resolveMainRepo(worktreePath);
-    const parentBranch = mainRepo ? detectParentBranch(mainRepo) : null;
+    const branch = yield* readWorktreeBranch(worktreePath);
+    const mainRepo = yield* resolveMainRepo(worktreePath);
+    const parentBranch = mainRepo
+      ? yield* Effect.sync(() => detectParentBranch(mainRepo))
+      : null;
 
-    const gitdir = readWorktreeGitdir(worktreePath);
+    const gitdir = yield* readWorktreeGitdir(worktreePath);
     const mergeInProgress = gitdir
       ? fs.existsSync(path.join(gitdir, "MERGE_HEAD"))
       : false;
 
     let conflicts: string[] = [];
     if (mergeInProgress) {
-      const r = yield* worktreeGit([
-        "diff",
-        "--name-only",
-        "--diff-filter=U",
-      ]);
+      const r = yield* worktreeGit(["diff", "--name-only", "--diff-filter=U"]);
       conflicts = r.stdout.trim().split("\n").filter(Boolean);
     }
 
     let behindParent = false;
     if (parentBranch && mainRepo) {
-      const r = yield* worktreeGit([
-        "log",
-        "--oneline",
-        `HEAD..${parentBranch}`,
-      ]);
+      const r = yield* worktreeGit(["log", "--oneline", `HEAD..${parentBranch}`]);
       behindParent = r.stdout.trim().length > 0;
     }
 
     return { branch, mergeInProgress, conflicts, parentBranch, behindParent };
   });
 
-const opMergeToParent = (parentBranch: string): Effect.Effect<object, never, never> =>
+const opMergeToParent = (
+  parentBranch: string,
+): Effect.Effect<object, never, NodeContext.NodeContext> =>
   Effect.gen(function* () {
-    const mainRepo = resolveMainRepo(worktreePath);
-    if (!mainRepo)
-      return { error: "Cannot resolve main repo from worktree" };
+    const mainRepo = yield* resolveMainRepo(worktreePath);
+    if (!mainRepo) return { error: "Cannot resolve main repo from worktree" };
 
-    const branch = readWorktreeBranch(worktreePath);
-    if (!branch)
-      return { error: "Cannot determine current branch (detached HEAD?)" };
+    const branch = yield* readWorktreeBranch(worktreePath);
+    if (!branch) return { error: "Cannot determine current branch (detached HEAD?)" };
 
-    // Read main repo HEAD — catch synchronously, return as error object
     let checkedOut: string;
     try {
       checkedOut = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
@@ -177,62 +192,42 @@ const opMergeToParent = (parentBranch: string): Effect.Effect<object, never, nev
     return yield* gitEffect(["merge", "--ff-only", branch], mainRepo);
   });
 
-const opRefreshSettings = (): Effect.Effect<object, never, never> =>
-  Effect.sync((): object => {
-    try {
-      writeFilteredSettings(agentDir, readPitConfig(pitDir), hostSettingsPath);
-      return { ok: true };
-    } catch (e) {
-      return { error: (e as Error).message };
-    }
+const opRefreshSettings = (): Effect.Effect<
+  object,
+  never,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const config = yield* readPitConfig(pitDir);
+    return yield* writeFilteredSettings(agentDir, config, hostSettingsPath).pipe(
+      Effect.map(() => ({ ok: true }) as object),
+      Effect.catchAll((e) => Effect.succeed({ error: e.message })),
+    );
   });
 
-const opIsMerged = (): Effect.Effect<object> =>
+const opIsMerged = (): Effect.Effect<
+  object,
+  never,
+  NodeContext.NodeContext
+> =>
   Effect.gen(function* () {
-    const branch = readWorktreeBranch(worktreePath);
-    const mainRepo = resolveMainRepo(worktreePath);
+    const branch = yield* readWorktreeBranch(worktreePath);
+    const mainRepo = yield* resolveMainRepo(worktreePath);
     if (!branch || !mainRepo) {
-      return {
-        merged: false,
-        branch: branch ?? null,
-        parentBranch: null,
-        aheadCount: 0,
-        behindCount: 0,
-      };
+      return { merged: false, branch: branch ?? null, parentBranch: null, aheadCount: 0, behindCount: 0 };
     }
-    const parentBranch = detectParentBranch(mainRepo);
+    const parentBranch = yield* Effect.sync(() => detectParentBranch(mainRepo));
     if (!parentBranch) {
-      return {
-        merged: false,
-        branch,
-        parentBranch: null,
-        aheadCount: 0,
-        behindCount: 0,
-      };
+      return { merged: false, branch, parentBranch: null, aheadCount: 0, behindCount: 0 };
     }
-    const mr = yield* gitEffect(
-      ["merge-base", "--is-ancestor", branch, parentBranch],
-      mainRepo,
-    );
-    const countR = yield* worktreeGit([
-      "rev-list",
-      "--count",
-      `${parentBranch}..HEAD`,
+    const [mr, countR, behindR] = yield* Effect.all([
+      gitEffect(["merge-base", "--is-ancestor", branch, parentBranch], mainRepo),
+      worktreeGit(["rev-list", "--count", `${parentBranch}..HEAD`]),
+      worktreeGit(["rev-list", "--count", `HEAD..${parentBranch}`]),
     ]);
     const aheadCount = parseInt(countR.stdout.trim(), 10) || 0;
-    const behindR = yield* worktreeGit([
-      "rev-list",
-      "--count",
-      `HEAD..${parentBranch}`,
-    ]);
     const behindCount = parseInt(behindR.stdout.trim(), 10) || 0;
-    return {
-      merged: mr.code === 0,
-      branch,
-      parentBranch,
-      aheadCount,
-      behindCount,
-    };
+    return { merged: mr.code === 0, branch, parentBranch, aheadCount, behindCount };
   });
 
 // ── request dispatch ──────────────────────────────────────────────────────────
@@ -244,51 +239,36 @@ type Request = {
   newBranch?: string;
 };
 
-/**
- * Dispatch a parsed request to the appropriate op Effect.
- * Returns [result, keepOpen] — keepOpen=true for the subscribe op.
- */
 const dispatchEffect = (
   req: Request,
-): Effect.Effect<{ result: object; keepOpen: boolean }> =>
+): Effect.Effect<{ result: object; keepOpen: boolean }, never, NodeContext.NodeContext> =>
   Effect.gen(function* () {
     switch (req.op) {
       case "git": {
         const args = req.args;
-        if (
-          !Array.isArray(args) ||
-          args.length === 0 ||
-          typeof args[0] !== "string"
-        ) {
+        if (!Array.isArray(args) || args.length === 0 || typeof args[0] !== "string") {
           return { result: { error: "git op requires args (string[])" }, keepOpen: false };
         }
         const [sub, ...rest] = args as string[];
         if (!GIT_ALLOWED.has(sub)) {
           return {
-            result: {
-              error: `git ${sub}: not permitted. Allowed: ${[...GIT_ALLOWED].join(", ")}`,
-            },
+            result: { error: `git ${sub}: not permitted. Allowed: ${[...GIT_ALLOWED].join(", ")}` },
             keepOpen: false,
           };
         }
         return { result: yield* worktreeGit([sub, ...rest]), keepOpen: false };
       }
-
       case "get-state":
         return { result: yield* opGetState(), keepOpen: false };
-
       case "merge-to-parent":
         if (!req.parentBranch) {
           return { result: { error: "merge-to-parent requires parentBranch" }, keepOpen: false };
         }
         return { result: yield* opMergeToParent(req.parentBranch), keepOpen: false };
-
       case "is-merged":
         return { result: yield* opIsMerged(), keepOpen: false };
-
       case "refresh-settings":
         return { result: yield* opRefreshSettings(), keepOpen: false };
-
       case "rename-branch": {
         const { newBranch } = req;
         if (!newBranch || typeof newBranch !== "string") {
@@ -296,11 +276,8 @@ const dispatchEffect = (
         }
         return { result: yield* worktreeGit(["branch", "-m", newBranch]), keepOpen: false };
       }
-
-      // subscribe is handled outside Effect (imperative fs.watch + socket push)
       case "subscribe":
         return { result: {}, keepOpen: true };
-
       default:
         return { result: { error: `Unknown op: ${req.op}` }, keepOpen: false };
     }
@@ -310,24 +287,40 @@ const dispatchEffect = (
 
 /**
  * Set up a persistent subscription on a socket for parent branch ref changes.
- * Calls notify() on every detected ref change, cleans up when socket closes.
- * This is intentionally kept as imperative Node.js — fs.watch events are
- * inherently callback-driven and don't benefit from Effect wrapping here.
+ * Kept fully imperative — fs.watch push events are callback-driven.
+ * Uses sync fs calls directly (not FileSystem service) to avoid async in callbacks.
  */
 function handleSubscribe(socket: net.Socket): void {
-  const mainRepo = resolveMainRepo(worktreePath);
+  // Sync helpers for use in this imperative context
+  const syncReadWorktreeBranch = (cwd: string): string | null => {
+    try {
+      const gitPath = path.join(cwd, ".git");
+      if (fs.statSync(gitPath).isDirectory()) return null;
+      const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+      if (!gitdir.includes("/.git/worktrees/")) return null;
+      const head = fs.readFileSync(path.join(gitdir, "HEAD"), "utf8").trim();
+      const m = head.match(/^ref: refs\/heads\/(.+)$/);
+      return m ? m[1] : null;
+    } catch { return null; }
+  };
+  const syncResolveMainRepo = (cwd: string): string | null => {
+    try {
+      const gitPath = path.join(cwd, ".git");
+      if (fs.statSync(gitPath).isDirectory()) return null;
+      const gitdir = fs.readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+      if (!gitdir.includes("/.git/worktrees/")) return null;
+      return path.resolve(gitdir, "../../..");
+    } catch { return null; }
+  };
+
+  const mainRepo = syncResolveMainRepo(worktreePath);
   if (!mainRepo) {
-    socket.end(
-      JSON.stringify({ error: "cannot resolve main repo from worktree" }) +
-        "\n",
-    );
+    socket.end(JSON.stringify({ error: "cannot resolve main repo from worktree" }) + "\n");
     return;
   }
   const parentBranch = detectParentBranch(mainRepo);
   if (!parentBranch) {
-    socket.end(
-      JSON.stringify({ error: "no master/main branch found" }) + "\n",
-    );
+    socket.end(JSON.stringify({ error: "no master/main branch found" }) + "\n");
     return;
   }
 
@@ -343,28 +336,20 @@ function handleSubscribe(socket: net.Socket): void {
     if (debounce) return;
     debounce = setTimeout(() => {
       debounce = null;
-      if (!socket.destroyed)
-        socket.write(JSON.stringify({ event: "ref-change" }) + "\n");
+      if (!socket.destroyed) socket.write(JSON.stringify({ event: "ref-change" }) + "\n");
     }, 100);
   };
 
-  const tryWatch = (
-    target: string,
-    filter?: (f: string | null) => boolean,
-  ) => {
+  const tryWatch = (target: string, filter?: (f: string | null) => boolean) => {
     try {
-      watchers.push(
-        fs.watch(target, (_type, filename) => {
-          if (!filter || filter(filename)) notify();
-        }),
-      );
-    } catch {
-      /* target absent or unwatchable */
-    }
+      watchers.push(fs.watch(target, (_type, filename) => {
+        if (!filter || filter(filename)) notify();
+      }));
+    } catch { /* target absent or unwatchable */ }
   };
 
   tryWatch(refsHeadsDir, (f) => f === parentBranch);
-  const worktreeBranch = readWorktreeBranch(worktreePath);
+  const worktreeBranch = syncReadWorktreeBranch(worktreePath);
   if (worktreeBranch) {
     const branchRefDir = path.join(refsHeadsDir, path.dirname(worktreeBranch));
     const branchLeaf = path.basename(worktreeBranch);
@@ -374,20 +359,10 @@ function handleSubscribe(socket: net.Socket): void {
   if (fs.existsSync(reftableDir)) tryWatch(reftableDir);
 
   const cleanup = () => {
-    for (const w of watchers) {
-      try {
-        w.close();
-      } catch {
-        /* */
-      }
-    }
+    for (const w of watchers) { try { w.close(); } catch { /* */ } }
     watchers.length = 0;
-    if (debounce) {
-      clearTimeout(debounce);
-      debounce = null;
-    }
+    if (debounce) { clearTimeout(debounce); debounce = null; }
   };
-
   socket.once("close", cleanup);
   socket.once("error", cleanup);
 }
@@ -396,11 +371,7 @@ function handleSubscribe(socket: net.Socket): void {
 
 function cleanup() {
   server.close();
-  try {
-    fs.unlinkSync(socketPath);
-  } catch {
-    /* already gone */
-  }
+  try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
   process.exit(0);
 }
 process.on("SIGTERM", cleanup);
@@ -425,9 +396,7 @@ const server = net.createServer((socket) => {
     }
 
     if (typeof req.op !== "string") {
-      socket.end(
-        JSON.stringify({ error: "request must have op (string)" }) + "\n",
-      );
+      socket.end(JSON.stringify({ error: "request must have op (string)" }) + "\n");
       return;
     }
 
@@ -436,14 +405,14 @@ const server = net.createServer((socket) => {
       return;
     }
 
-    void Effect.runPromise(dispatchEffect(req)).then(({ result, keepOpen }) => {
+    void Effect.runPromise(
+      dispatchEffect(req).pipe(Effect.provide(NodeContext.layer)),
+    ).then(({ result, keepOpen }) => {
       if (!keepOpen) socket.end(JSON.stringify(result) + "\n");
     });
   });
 
-  socket.on("error", () => {
-    /* ignore client disconnect errors */
-  });
+  socket.on("error", () => { /* ignore client disconnect errors */ });
 });
 
 server.listen(socketPath, () => {

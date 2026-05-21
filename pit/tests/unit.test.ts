@@ -20,6 +20,8 @@
  */
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
+import { Effect } from "effect";
+import { NodeContext } from "@effect/platform-node";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -32,6 +34,9 @@ import { readPitConfig, writeFilteredSettings, resolveUnversionedDirs } from "..
 import { isLinkedWorktree, resolveMainRepo, readWorktreeBranch } from "../git/utils.ts";
 import { parseFlags, buildNoTreeMeta, buildWorktreeMeta } from "../worktree/pure.ts";
 import type { WorktreeResult, SandboxMounts, OverlayMount, PitMetadata } from "../types.ts";
+
+const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -313,52 +318,52 @@ describe("resolveMainRepo", () => {
     return d;
   }
 
-  it("returns null for a non-existent directory", () => {
-    expect(resolveMainRepo("/nonexistent/path/pit-test-should-not-exist")).toBeNull();
+  it("returns null for a non-existent directory", async () => {
+    expect((await run(resolveMainRepo("/nonexistent/path/pit-test-should-not-exist")))).toBeNull();
   });
 
-  it("returns null when there is no .git entry (non-git dir)", () => {
+  it("returns null when there is no .git entry (non-git dir)", async () => {
     const d = makeTmpDir();
-    expect(resolveMainRepo(d)).toBeNull();
+    expect((await run(resolveMainRepo(d)))).toBeNull();
   });
 
-  it("returns null when .git is a directory (main checkout)", () => {
+  it("returns null when .git is a directory (main checkout)", async () => {
     const d = makeTmpDir();
     fs.mkdirSync(path.join(d, ".git"));
-    expect(resolveMainRepo(d)).toBeNull();
+    expect((await run(resolveMainRepo(d)))).toBeNull();
   });
 
-  it("returns null for a submodule (.git file with /modules/ not /worktrees/)", () => {
+  it("returns null for a submodule (.git file with /modules/ not /worktrees/)", async () => {
     const d = makeTmpDir();
     fs.writeFileSync(path.join(d, ".git"), "gitdir: ../.git/modules/sub\n");
-    expect(resolveMainRepo(d)).toBeNull();
+    expect((await run(resolveMainRepo(d)))).toBeNull();
   });
 
-  it("returns the parent repo root for a linked worktree", () => {
+  it("returns the parent repo root for a linked worktree", async () => {
     const parentRepo = makeTmpDir();
     const worktreeDir = path.join(parentRepo, ".git", "worktrees", "wt-abc");
     fs.mkdirSync(worktreeDir, { recursive: true });
     const wt = makeTmpDir();
     fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${worktreeDir}\n`);
-    expect(resolveMainRepo(wt)).toBe(parentRepo);
+    expect((await run(resolveMainRepo(wt)))).toBe(parentRepo);
   });
 
-  it("works regardless of the worktree name in the gitdir path", () => {
+  it("works regardless of the worktree name in the gitdir path", async () => {
     const parentRepo = makeTmpDir();
     const worktreeDir = path.join(parentRepo, ".git", "worktrees", "feature-my-branch");
     fs.mkdirSync(worktreeDir, { recursive: true });
     const wt = makeTmpDir();
     fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${worktreeDir}\n`);
-    expect(resolveMainRepo(wt)).toBe(parentRepo);
+    expect((await run(resolveMainRepo(wt)))).toBe(parentRepo);
   });
 
-  it("handles gitdir without trailing newline", () => {
+  it("handles gitdir without trailing newline", async () => {
     const parentRepo = makeTmpDir();
     const worktreeDir = path.join(parentRepo, ".git", "worktrees", "wt-x");
     fs.mkdirSync(worktreeDir, { recursive: true });
     const wt = makeTmpDir();
     fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${worktreeDir}`);
-    expect(resolveMainRepo(wt)).toBe(parentRepo);
+    expect((await run(resolveMainRepo(wt)))).toBe(parentRepo);
   });
 });
 
@@ -511,44 +516,44 @@ describe("isLinkedWorktree", () => {
     return d;
   }
 
-  it("returns false when .git does not exist (non-git dir)", () => {
+  it("returns false when .git does not exist (non-git dir)", async () => {
     const d = makeDir();
-    expect(isLinkedWorktree(d)).toBe(false);
+    expect((await run(isLinkedWorktree(d)))).toBe(false);
   });
 
-  it("returns false when .git is a directory (main checkout)", () => {
+  it("returns false when .git is a directory (main checkout)", async () => {
     const d = makeDir();
     fs.mkdirSync(path.join(d, ".git"));
-    expect(isLinkedWorktree(d)).toBe(false);
+    expect((await run(isLinkedWorktree(d)))).toBe(false);
   });
 
-  it("returns true when .git file contains a /worktrees/ gitdir (linked worktree)", () => {
+  it("returns true when .git file contains a /worktrees/ gitdir (linked worktree)", async () => {
     const d = makeDir();
     fs.writeFileSync(path.join(d, ".git"), "gitdir: /home/user/repo/.git/worktrees/wt-abc\n");
-    expect(isLinkedWorktree(d)).toBe(true);
+    expect((await run(isLinkedWorktree(d)))).toBe(true);
   });
 
-  it("returns false when .git file contains a /modules/ gitdir (submodule)", () => {
+  it("returns false when .git file contains a /modules/ gitdir (submodule)", async () => {
     const d = makeDir();
     fs.writeFileSync(path.join(d, ".git"), "gitdir: ../.git/modules/sub\n");
-    expect(isLinkedWorktree(d)).toBe(false);
+    expect((await run(isLinkedWorktree(d)))).toBe(false);
   });
 
-  it("returns false for a non-existent directory", () => {
-    expect(isLinkedWorktree("/nonexistent/path/pit-test-should-not-exist")).toBe(false);
+  it("returns false for a non-existent directory", async () => {
+    expect((await run(isLinkedWorktree("/nonexistent/path/pit-test-should-not-exist")))).toBe(false);
   });
 
-  it("handles gitdir value without trailing newline", () => {
+  it("handles gitdir value without trailing newline", async () => {
     const d = makeDir();
     fs.writeFileSync(path.join(d, ".git"), "gitdir: /repo/.git/worktrees/abc");
-    expect(isLinkedWorktree(d)).toBe(true);
+    expect((await run(isLinkedWorktree(d)))).toBe(true);
   });
 
-  it("is insensitive to the branch name — any /worktrees/ path returns true", () => {
+  it("is insensitive to the branch name — any /worktrees/ path returns true", async () => {
     const d = makeDir();
     // Renamed branch, no pi/ prefix — still a linked worktree
     fs.writeFileSync(path.join(d, ".git"), "gitdir: /repo/.git/worktrees/my-custom-name\n");
-    expect(isLinkedWorktree(d)).toBe(true);
+    expect((await run(isLinkedWorktree(d)))).toBe(true);
   });
 });
 
@@ -572,34 +577,34 @@ describe("resolveMainRepo", () => {
     return d;
   }
 
-  it("resolves the main repo from a standard linked worktree .git file", () => {
+  it("resolves the main repo from a standard linked worktree .git file", async () => {
     const d = makeDir();
     const mainRepo = "/home/user/repo";
     fs.writeFileSync(path.join(d, ".git"), `gitdir: ${mainRepo}/.git/worktrees/wt-abc
 `);
-    expect(resolveMainRepo(d)).toBe(mainRepo);
+    expect((await run(resolveMainRepo(d)))).toBe(mainRepo);
   });
 
-  it("returns null when .git is a directory (main checkout)", () => {
+  it("returns null when .git is a directory (main checkout)", async () => {
     const d = makeDir();
     fs.mkdirSync(path.join(d, ".git"));
-    expect(resolveMainRepo(d)).toBeNull();
+    expect((await run(resolveMainRepo(d)))).toBeNull();
   });
 
-  it("returns null when .git file is a submodule", () => {
+  it("returns null when .git file is a submodule", async () => {
     const d = makeDir();
     fs.writeFileSync(path.join(d, ".git"), "gitdir: ../.git/modules/sub\n");
-    expect(resolveMainRepo(d)).toBeNull();
+    expect((await run(resolveMainRepo(d)))).toBeNull();
   });
 
-  it("returns null for a non-existent directory", () => {
-    expect(resolveMainRepo("/nonexistent/pit-test-should-not-exist")).toBeNull();
+  it("returns null for a non-existent directory", async () => {
+    expect((await run(resolveMainRepo("/nonexistent/pit-test-should-not-exist")))).toBeNull();
   });
 
-  it("handles absolute gitdir paths without trailing newline", () => {
+  it("handles absolute gitdir paths without trailing newline", async () => {
     const d = makeDir();
     fs.writeFileSync(path.join(d, ".git"), "gitdir: /absolute/repo/.git/worktrees/wt-xyz");
-    expect(resolveMainRepo(d)).toBe("/absolute/repo");
+    expect((await run(resolveMainRepo(d)))).toBe("/absolute/repo");
   });
 });
 
@@ -633,49 +638,49 @@ describe("readWorktreeBranch", () => {
     return gitdir;
   }
 
-  it("returns null for a directory with no .git", () => {
+  it("returns null for a directory with no .git", async () => {
     const d = makeDir();
-    expect(readWorktreeBranch(d)).toBeNull();
+    expect((await run(readWorktreeBranch(d)))).toBeNull();
   });
 
-  it("returns null when .git is a directory (main checkout)", () => {
+  it("returns null when .git is a directory (main checkout)", async () => {
     const d = makeDir();
     fs.mkdirSync(path.join(d, ".git"));
-    expect(readWorktreeBranch(d)).toBeNull();
+    expect((await run(readWorktreeBranch(d)))).toBeNull();
   });
 
-  it("returns null for a submodule (.git file with /modules/ path)", () => {
+  it("returns null for a submodule (.git file with /modules/ path)", async () => {
     const d = makeDir();
     fs.writeFileSync(path.join(d, ".git"), "gitdir: ../.git/modules/sub\n");
-    expect(readWorktreeBranch(d)).toBeNull();
+    expect((await run(readWorktreeBranch(d)))).toBeNull();
   });
 
-  it("returns the branch name for a linked worktree", () => {
+  it("returns the branch name for a linked worktree", async () => {
     const d = makeDir();
     const gitdir = makeGitdir(d, "pi/abc1234");
     fs.writeFileSync(path.join(d, ".git"), `gitdir: ${gitdir}\n`);
-    expect(readWorktreeBranch(d)).toBe("pi/abc1234");
+    expect((await run(readWorktreeBranch(d)))).toBe("pi/abc1234");
   });
 
-  it("returns the branch name for non-pit branch names", () => {
+  it("returns the branch name for non-pit branch names", async () => {
     const d = makeDir();
     const gitdir = makeGitdir(d, "feature/my-renamed-branch");
     fs.writeFileSync(path.join(d, ".git"), `gitdir: ${gitdir}\n`);
-    expect(readWorktreeBranch(d)).toBe("feature/my-renamed-branch");
+    expect((await run(readWorktreeBranch(d)))).toBe("feature/my-renamed-branch");
   });
 
-  it("returns null for detached HEAD", () => {
+  it("returns null for detached HEAD", async () => {
     const d = makeDir();
     const gitdir = path.join(d + "-repo", ".git", "worktrees", "wt");
     fs.mkdirSync(gitdir, { recursive: true });
     fs.writeFileSync(path.join(gitdir, "HEAD"), "abc1234def5678\n"); // detached
     fs.writeFileSync(path.join(d, ".git"), `gitdir: ${gitdir}\n`);
     tmpDirs.push(d + "-repo");
-    expect(readWorktreeBranch(d)).toBeNull();
+    expect((await run(readWorktreeBranch(d)))).toBeNull();
   });
 
-  it("returns null when the worktree directory does not exist", () => {
-    expect(readWorktreeBranch("/nonexistent/path/pit-test-wt")).toBeNull();
+  it("returns null when the worktree directory does not exist", async () => {
+    expect((await run(readWorktreeBranch("/nonexistent/path/pit-test-wt")))).toBeNull();
   });
 });
 
@@ -721,31 +726,31 @@ describe("setupNewSession", () => {
     };
   }
 
-  it("actually writes the file to disk (guards against SessionManager buffering regression)", () => {
+  it("actually writes the file to disk (guards against SessionManager buffering regression)", async () => {
     const agentDir = makeTmpAgentDir();
-    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
+    const sessionFile = await run(setupNewSession(makeWorktreeResult(), agentDir));
     expect(fs.existsSync(sessionFile)).toBe(true);
   });
 
-  it("places the file under the correct bucket for the cwd", () => {
+  it("places the file under the correct bucket for the cwd", async () => {
     const agentDir = makeTmpAgentDir();
     const result = makeWorktreeResult();
-    const sessionFile = setupNewSession(result, agentDir);
+    const sessionFile = await run(setupNewSession(result, agentDir));
     const bucket = cwdToBucket(result.cwd);
     expect(sessionFile).toContain(path.join(agentDir, "sessions", bucket));
   });
 
-  it("file has exactly 3 lines (header + custom metadata + custom_message)", () => {
+  it("file has exactly 3 lines (header + custom metadata + custom_message)", async () => {
     const agentDir = makeTmpAgentDir();
-    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
+    const sessionFile = await run(setupNewSession(makeWorktreeResult(), agentDir));
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
     expect(lines).toHaveLength(3);
   });
 
-  it("line 1 is a valid session header with correct version and cwd", () => {
+  it("line 1 is a valid session header with correct version and cwd", async () => {
     const agentDir = makeTmpAgentDir();
     const result = makeWorktreeResult();
-    const sessionFile = setupNewSession(result, agentDir);
+    const sessionFile = await run(setupNewSession(result, agentDir));
     const header = JSON.parse(fs.readFileSync(sessionFile, "utf8").split("\n")[0]);
     expect(header.type).toBe("session");
     expect(header.version).toBe(CURRENT_SESSION_VERSION);
@@ -754,10 +759,10 @@ describe("setupNewSession", () => {
     expect(typeof header.timestamp).toBe("string");
   });
 
-  it("line 2 is a pit CustomEntry carrying the worktree metadata", () => {
+  it("line 2 is a pit CustomEntry carrying the worktree metadata", async () => {
     const agentDir = makeTmpAgentDir();
     const result = makeWorktreeResult();
-    const sessionFile = setupNewSession(result, agentDir);
+    const sessionFile = await run(setupNewSession(result, agentDir));
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
     const entry = JSON.parse(lines[1]);
     expect(entry.type).toBe("custom");
@@ -769,19 +774,19 @@ describe("setupNewSession", () => {
     expect(entry.data.mode).toBe("worktree");
   });
 
-  it("session file can be opened by SessionManager (pi compatibility check)", () => {
+  it("session file can be opened by SessionManager (pi compatibility check)", async () => {
     const agentDir = makeTmpAgentDir();
-    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
+    const sessionFile = await run(setupNewSession(makeWorktreeResult(), agentDir));
     expect(() => SessionManager.open(sessionFile)).not.toThrow();
     const sm = SessionManager.open(sessionFile);
     // header excluded; custom metadata + custom_message = 2
     expect(sm.getEntries().length).toBe(2);
   });
 
-  it("SessionManager can locate the pit CustomEntry for pit -r", () => {
+  it("SessionManager can locate the pit CustomEntry for pit -r", async () => {
     const agentDir = makeTmpAgentDir();
     const result = makeWorktreeResult();
-    const sessionFile = setupNewSession(result, agentDir);
+    const sessionFile = await run(setupNewSession(result, agentDir));
     const sm = SessionManager.open(sessionFile);
     const pitEntry = sm
       .getEntries()
@@ -790,9 +795,9 @@ describe("setupNewSession", () => {
     expect((pitEntry as any).data.id).toBe(result.meta.id);
   });
 
-  it("line 3 is a CustomMessageEntry with display: true (TUI banner)", () => {
+  it("line 3 is a CustomMessageEntry with display: true (TUI banner)", async () => {
     const agentDir = makeTmpAgentDir();
-    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
+    const sessionFile = await run(setupNewSession(makeWorktreeResult(), agentDir));
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
     const msg = JSON.parse(lines[2]);
     expect(msg.type).toBe("custom_message");
@@ -800,35 +805,35 @@ describe("setupNewSession", () => {
     expect(msg.display).toBe(true);
   });
 
-  it("CustomMessageEntry parentId chains to CustomEntry id", () => {
+  it("CustomMessageEntry parentId chains to CustomEntry id", async () => {
     const agentDir = makeTmpAgentDir();
-    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
+    const sessionFile = await run(setupNewSession(makeWorktreeResult(), agentDir));
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
     const custom = JSON.parse(lines[1]);
     const message = JSON.parse(lines[2]);
     expect(message.parentId).toBe(custom.id);
   });
 
-  it("announcement includes sandbox section when mounts provided", () => {
+  it("announcement includes sandbox section when mounts provided", async () => {
     const agentDir = makeTmpAgentDir();
     const result = makeWorktreeResult();
     const mounts: SandboxMounts = {
       ro: [{ path: "/home/user", label: "home directory" }],
       rw: [{ path: result.cwd }],
     };
-    const sessionFile = setupNewSession(result, agentDir, mounts);
+    const sessionFile = await run(setupNewSession(result, agentDir, mounts));
     const msg = JSON.parse(fs.readFileSync(sessionFile, "utf8").trim().split("\n")[2]);
     expect(msg.content).toContain("Sandbox (bwrap)");
   });
 
-  it("announcement omits sandbox section when no mounts provided", () => {
+  it("announcement omits sandbox section when no mounts provided", async () => {
     const agentDir = makeTmpAgentDir();
-    const sessionFile = setupNewSession(makeWorktreeResult(), agentDir);
+    const sessionFile = await run(setupNewSession(makeWorktreeResult(), agentDir));
     const msg = JSON.parse(fs.readFileSync(sessionFile, "utf8").trim().split("\n")[2]);
     expect(msg.content).not.toContain("Sandbox (bwrap)");
   });
 
-  it("no-tree mode announcement tells user there is no git repo", () => {
+  it("no-tree mode announcement tells user there is no git repo", async () => {
     const agentDir = makeTmpAgentDir();
     const result: WorktreeResult = {
       mode: "no-tree",
@@ -842,7 +847,7 @@ describe("setupNewSession", () => {
         mode: "no-tree",
       },
     };
-    const sessionFile = setupNewSession(result, agentDir);
+    const sessionFile = await run(setupNewSession(result, agentDir));
     const lines = fs.readFileSync(sessionFile, "utf8").trim().split("\n");
     const msg = JSON.parse(lines[2]);
     expect(msg.content).toContain("no-tree mode");
@@ -883,86 +888,86 @@ describe("resolveUnversionedDirs", () => {
     return repo;
   }
 
-  it("returns empty array for a non-git directory", () => {
+  it("returns empty array for a non-git directory", async () => {
     const dir = makeTmpDir();
-    expect(resolveUnversionedDirs(dir)).toEqual([]);
+    expect((await run(resolveUnversionedDirs(dir)))).toEqual([]);
   });
 
-  it("returns empty array for a non-existent path", () => {
-    expect(resolveUnversionedDirs("/nonexistent/path/pit-test-unversioned")).toEqual([]);
+  it("returns empty array for a non-existent path", async () => {
+    expect((await run(resolveUnversionedDirs("/nonexistent/path/pit-test-unversioned")))).toEqual([]);
   });
 
-  it("returns empty array when no untracked or ignored dirs exist", () => {
+  it("returns empty array when no untracked or ignored dirs exist", async () => {
     const repo = makeGitRepo();
-    expect(resolveUnversionedDirs(repo)).toEqual([]);
+    expect((await run(resolveUnversionedDirs(repo)))).toEqual([]);
   });
 
-  it("does not return untracked files — only directories", () => {
+  it("does not return untracked files — only directories", async () => {
     // git ls-files marks dirs with a trailing slash; files have none.
     // resolveUnversionedDirs must filter to dirs only so callers don't
     // accidentally try to --tmp-overlay a regular file.
     const repo = makeGitRepo();
     fs.writeFileSync(path.join(repo, "untracked-file.txt"), "hello");
     fs.mkdirSync(path.join(repo, "untracked-dir"));
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     expect(result).toContain("untracked-dir");
     expect(result).not.toContain("untracked-file.txt");
   });
 
-  it("does not return ignored files listed in .gitignore — only ignored dirs", () => {
+  it("does not return ignored files listed in .gitignore — only ignored dirs", async () => {
     const repo = makeGitRepo();
     fs.writeFileSync(path.join(repo, ".gitignore"), "*.log\nnode_modules/\n");
     fs.writeFileSync(path.join(repo, "debug.log"), "log content"); // ignored file
     fs.mkdirSync(path.join(repo, "node_modules"));
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     expect(result).toContain("node_modules");
     expect(result).not.toContain("debug.log");
   });
 
-  it("returns an untracked directory (no .gitignore needed)", () => {
+  it("returns an untracked directory (no .gitignore needed)", async () => {
     const repo = makeGitRepo();
     fs.mkdirSync(path.join(repo, "new-dir"));
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     expect(result).toContain("new-dir");
   });
 
-  it("returns an ignored directory listed in .gitignore", () => {
+  it("returns an ignored directory listed in .gitignore", async () => {
     const repo = makeGitRepo();
     fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\n");
     fs.mkdirSync(path.join(repo, "node_modules"));
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     expect(result).toContain("node_modules");
   });
 
-  it("does not return tracked directories", () => {
+  it("does not return tracked directories", async () => {
     const repo = makeGitRepo();
     // Create a tracked subdir
     fs.mkdirSync(path.join(repo, "src"));
     fs.writeFileSync(path.join(repo, "src", "index.ts"), "");
     execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
     execFileSync("git", ["-C", repo, "commit", "-m", "add src"], { stdio: "ignore" });
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     expect(result).not.toContain("src");
   });
 
-  it("strips trailing slashes from git output", () => {
+  it("strips trailing slashes from git output", async () => {
     const repo = makeGitRepo();
     fs.mkdirSync(path.join(repo, "some-dir"));
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     expect(result.every((r) => !r.endsWith("/"))).toBe(true);
   });
 
-  it("deduplicates when git would otherwise double-report", () => {
+  it("deduplicates when git would otherwise double-report", async () => {
     // Both commands run against the same repo; an untracked (non-ignored) dir
     // should appear exactly once even if somehow reported by both.
     const repo = makeGitRepo();
     fs.mkdirSync(path.join(repo, "build"));
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     const count = result.filter((r) => r === "build").length;
     expect(count).toBe(1);
   });
 
-  it("finds nested unversioned dirs inside tracked directories", () => {
+  it("finds nested unversioned dirs inside tracked directories", async () => {
     // packages/ is tracked; packages/foo/node_modules is ignored.
     // git recurses into packages/ and reports packages/foo/node_modules as a unit.
     const repo = makeGitRepo();
@@ -973,13 +978,13 @@ describe("resolveUnversionedDirs", () => {
     execFileSync("git", ["-C", repo, "commit", "-m", "add packages"], { stdio: "ignore" });
     // Now create the ignored nested dir
     fs.mkdirSync(path.join(repo, "packages", "foo", "node_modules"));
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     expect(result).toContain("packages/foo/node_modules");
     // The tracked packages/ dir itself must NOT appear
     expect(result).not.toContain("packages");
   });
 
-  it("reports multiple unversioned dirs at different depths", () => {
+  it("reports multiple unversioned dirs at different depths", async () => {
     const repo = makeGitRepo();
     fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\ndist/\n");
     // Root-level ignored
@@ -991,7 +996,7 @@ describe("resolveUnversionedDirs", () => {
     execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
     execFileSync("git", ["-C", repo, "commit", "-m", "add packages"], { stdio: "ignore" });
     fs.mkdirSync(path.join(repo, "packages", "bar", "node_modules"));
-    const result = resolveUnversionedDirs(repo);
+    const result = (await run(resolveUnversionedDirs(repo)));
     expect(result).toContain("node_modules");
     expect(result).toContain("dist");
     expect(result).toContain("packages/bar/node_modules");
@@ -1080,30 +1085,30 @@ describe("readPitConfig", () => {
     return d;
   }
 
-  it("returns empty object when config.json does not exist", () => {
+  it("returns empty object when config.json does not exist", async () => {
     const pitDir = makePitDir();
-    expect(readPitConfig(pitDir)).toEqual({});
+    expect((await run(readPitConfig(pitDir)))).toEqual({});
   });
 
-  it("parses denyPackages from config.json", () => {
+  it("parses denyPackages from config.json", async () => {
     const pitDir = makePitDir();
     fs.writeFileSync(
       path.join(pitDir, "config.json"),
       JSON.stringify({ denyPackages: ["npm:@casualjim/pi-heimdall"] })
     );
-    expect(readPitConfig(pitDir).denyPackages).toEqual(["npm:@casualjim/pi-heimdall"]);
+    expect((await run(readPitConfig(pitDir))).denyPackages).toEqual(["npm:@casualjim/pi-heimdall"]);
   });
 
-  it("returns empty object for malformed JSON (does not throw)", () => {
+  it("returns empty object for malformed JSON (does not throw)", async () => {
     const pitDir = makePitDir();
     fs.writeFileSync(path.join(pitDir, "config.json"), "{ invalid json }");
-    expect(readPitConfig(pitDir)).toEqual({});
+    expect((await run(readPitConfig(pitDir)))).toEqual({});
   });
 
-  it("returns empty object when denyPackages is absent from valid JSON", () => {
+  it("returns empty object when denyPackages is absent from valid JSON", async () => {
     const pitDir = makePitDir();
     fs.writeFileSync(path.join(pitDir, "config.json"), JSON.stringify({}));
-    expect(readPitConfig(pitDir).denyPackages).toBeUndefined();
+    expect((await run(readPitConfig(pitDir))).denyPackages).toBeUndefined();
   });
 });
 
@@ -1135,69 +1140,70 @@ describe("writeFilteredSettings", () => {
     ],
   };
 
-  it("writes a file at the given path", () => {
+  it("writes a file at the given path", async () => {
     const agentDir = makeDir();
     const outDir = makeDir();
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "settings.json");
-    writeFilteredSettings(agentDir, {}, outPath);
+    await run(writeFilteredSettings(agentDir, {}, outPath));
     expect(fs.existsSync(outPath)).toBe(true);
   });
 
-  it("output is valid JSON", () => {
+  it("output is valid JSON", async () => {
     const agentDir = makeDir();
     const outDir = makeDir();
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "settings.json");
-    writeFilteredSettings(agentDir, {}, outPath);
+    await run(writeFilteredSettings(agentDir, {}, outPath));
     expect(() => JSON.parse(fs.readFileSync(outPath, "utf8"))).not.toThrow();
   });
 
-  it("removes denied packages from the output", () => {
+  it("removes denied packages from the output", async () => {
     const agentDir = makeDir();
     const outDir = makeDir();
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "settings.json");
-    writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath);
+    await run(writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath));
     const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
     expect(result.packages).not.toContain("npm:@casualjim/pi-heimdall");
     expect(result.packages).toContain("npm:pi-agent-browser-native");
   });
 
-  it("with empty denylist, output packages match input exactly", () => {
+  it("with empty denylist, output packages match input exactly", async () => {
     const agentDir = makeDir();
     const outDir = makeDir();
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "settings.json");
-    writeFilteredSettings(agentDir, {}, outPath);
+    await run(writeFilteredSettings(agentDir, {}, outPath));
     const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
     expect(result.packages).toEqual(rawSettings.packages);
   });
 
-  it("creates parent directories if they don't exist", () => {
+  it("creates parent directories if they don't exist", async () => {
     const agentDir = makeDir();
     const outDir = makeDir();
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "nested", "deep", "settings.json");
-    writeFilteredSettings(agentDir, {}, outPath);
+    await run(writeFilteredSettings(agentDir, {}, outPath));
     expect(fs.existsSync(outPath)).toBe(true);
   });
 
-  it("preserves non-packages keys in the output", () => {
+  it("preserves non-packages keys in the output", async () => {
     const agentDir = makeDir();
     const outDir = makeDir();
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "settings.json");
-    writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath);
+    await run(writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath));
     const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
     expect(result.defaultModel).toBe("claude-sonnet");
   });
 
-  it("absent settings.json produces an empty object (no throw)", () => {
+  it("absent settings.json produces an empty object (no throw)", async () => {
     const agentDir = makeDir(); // no settings.json written
     const outDir = makeDir();
     const outPath = path.join(outDir, "settings.json");
-    expect(() => writeFilteredSettings(agentDir, {}, outPath)).not.toThrow();
+    await run(writeFilteredSettings(agentDir, {}, outPath));
+    expect(fs.existsSync(outPath)).toBe(true);
     const result = JSON.parse(fs.readFileSync(outPath, "utf8"));
     expect(result).toEqual({});
   });

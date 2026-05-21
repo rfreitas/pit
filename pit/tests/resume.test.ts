@@ -16,12 +16,17 @@
  */
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
+import { Effect } from "effect";
+import { NodeContext } from "@effect/platform-node";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { setupNewSession } from "../session/io.ts";
 import { cwdToBucket } from "../session/pure.ts";
+
+const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
 import type { WorktreeResult } from "../types.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -56,7 +61,7 @@ function makeTmpDir(): string {
   return d;
 }
 
-function makePitSession(worktree: string, agentDir: string) {
+async function makePitSession(worktree: string, agentDir: string) {
   const result: WorktreeResult = {
     mode: "worktree",
     cwd: worktree,
@@ -69,7 +74,8 @@ function makePitSession(worktree: string, agentDir: string) {
       mode: "worktree",
     },
   };
-  return { sessionFile: setupNewSession(result, agentDir), meta: result.meta };
+  const sessionFile = await run(setupNewSession(result, agentDir));
+  return { sessionFile, meta: result.meta };
 }
 
 // ── session metadata extraction ───────────────────────────────────────────────
@@ -86,10 +92,10 @@ function readPitMeta(sessionFile: string) {
 }
 
 describe("session metadata extraction for pit -r", () => {
-  it("reads the worktree path from a pit session's CustomEntry", () => {
+  it("reads the worktree path from a pit session's CustomEntry", async () => {
     const agentDir = makeTmpDir();
     const worktree = makeTmpDir();
-    const { sessionFile, meta } = makePitSession(worktree, agentDir);
+    const { sessionFile, meta } = await makePitSession(worktree, agentDir);
 
     const extracted = readPitMeta(sessionFile);
 
@@ -115,12 +121,12 @@ describe("session metadata extraction for pit -r", () => {
     expect(extracted).toBeNull();
   });
 
-  it("worktree path from metadata matches the session file's bucket cwd", () => {
+  it("worktree path from metadata matches the session file's bucket cwd", async () => {
     // The session bucket is derived from the worktree path. If metadata and
     // bucket disagree, pit -r would sandbox to the wrong directory.
     const agentDir = makeTmpDir();
     const worktree = makeTmpDir();
-    const { sessionFile, meta } = makePitSession(worktree, agentDir);
+    const { sessionFile, meta } = await makePitSession(worktree, agentDir);
 
     const extracted = readPitMeta(sessionFile);
     const expectedBucket = cwdToBucket(meta.worktree);
