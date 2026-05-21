@@ -13,7 +13,7 @@
  *   pit install/remove/update/...     Forwarded directly to pi
  */
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { execSync, spawnSync, spawn } from "node:child_process";
 import * as Effect from "effect/Effect";
@@ -153,7 +153,17 @@ const buildSandboxMountsEffect = (
         const src = join(parentRepo, rel);
         const dest = join(cwd, rel);
         try {
-          if (statSync(src).isDirectory()) overlayDirs.push({ src, dest, label: rel });
+          if (!statSync(src).isDirectory()) continue;
+
+          // Opt-out if the worktree already populated this directory.
+          // e.g. the user ran `npm install` directly in the worktree.
+          if (existsSync(dest) && statSync(dest).isDirectory()) {
+            if (readdirSync(dest).length > 0) {
+              continue; // Skip overlay, use the worktree's persistent files
+            }
+          }
+
+          overlayDirs.push({ src, dest, label: rel });
         } catch { /* src disappeared */ }
       }
     }

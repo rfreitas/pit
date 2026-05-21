@@ -442,7 +442,11 @@ describe("pit E2E — extension loading", () => {
 
   it("all pit extensions load without errors", () => {
     // Covers the real extension files pit registers via --extension.
-    // Pi loads them at session start, before any LLM call.
+    // Pi loads them at session start via Jiti (which uses CJS require under the hood).
+    //
+    // CRITICAL: Jiti crashes on sub-path imports (like "effect/Effect") because it 
+    // resolves them to ESM files and fails to require() them. This test guarantees
+    // our extensions stick to safe barrel imports ("effect") and load cleanly.
     //
     // The session header on stdout confirms pi started and attempted
     // to load extensions (without it the test is vacuous).
