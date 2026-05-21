@@ -209,6 +209,33 @@ const opRefreshSettings = (): Effect.Effect<
     );
   });
 
+const opLocDiff = (): Effect.Effect<
+  object,
+  never,
+  NodeContext
+> =>
+  Effect.gen(function* () {
+    const branch = yield* readWorktreeBranch(worktreePath);
+    const mainRepo = yield* resolveMainRepo(worktreePath);
+    if (!branch || !mainRepo) {
+      return { insertions: 0, deletions: 0, parentBranch: null };
+    }
+    const parentBranch = yield* Effect.sync(() => detectParentBranch(mainRepo));
+    if (!parentBranch) {
+      return { insertions: 0, deletions: 0, parentBranch: null };
+    }
+    const baseR = yield* worktreeGit(["merge-base", "HEAD", parentBranch]);
+    const base = baseR.stdout.trim();
+    if (!base) return { insertions: 0, deletions: 0, parentBranch };
+    const diffR = yield* worktreeGit(["diff", "--shortstat", base]);
+    const text = diffR.stdout.trim();
+    const insMatch = text.match(/(\d+) insertion/);
+    const delMatch = text.match(/(\d+) deletion/);
+    const insertions = insMatch ? parseInt(insMatch[1], 10) : 0;
+    const deletions = delMatch ? parseInt(delMatch[1], 10) : 0;
+    return { insertions, deletions, parentBranch };
+  });
+
 const opIsMerged = (): Effect.Effect<
   object,
   never,
@@ -269,6 +296,8 @@ const dispatchEffect = (
           return { result: { error: "merge-to-parent requires parentBranch" }, keepOpen: false };
         }
         return { result: yield* opMergeToParent(req.parentBranch), keepOpen: false };
+      case "loc-diff":
+        return { result: yield* opLocDiff(), keepOpen: false };
       case "is-merged":
         return { result: yield* opIsMerged(), keepOpen: false };
       case "refresh-settings":

@@ -85,6 +85,7 @@ function extensionArgs(): string[] {
     join(d, "extensions", "escape", "reload.ts"),
     join(d, "extensions", "tools", "git.ts"),
     join(d, "extensions", "commands", "merge.ts"),
+    join(d, "extensions", "commands", "loc-diff.ts"),
     join(d, "extensions", "commands", "merge-status.ts"),
     join(d, "extensions", "commands", "rename-branch.ts"),
   ].flatMap((f) => ["--extension", f]);
