@@ -18,9 +18,10 @@ export default [
     rules: {
       // Reads each package's `exports` field at lint time — no hardcoded list.
       // Any package that declares sub-path exports is caught automatically.
-      // `import * as X` from a sub-path is the correct pattern for namespace
-      // APIs (Effect, Option, Stream) where named imports would require verbose
-      // renaming and lose the documented call style.
+      //
+      // `effect` sub-paths export raw functions without a namespace wrapper,
+      // so `import * as Effect from "effect/Effect"` is the correct form.
+      // No exception needed — the barrel "effect" is flagged correctly.
       "local/no-barrel-import": "error",
     },
   },
