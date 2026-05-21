@@ -441,24 +441,20 @@ describe("pit E2E — extension loading", () => {
   });
 
   it("all pit extensions load without errors", () => {
-    // Extensions are the files pit passes via --extension to pi.
+    // Covers the real extension files pit registers via --extension.
     // Pi loads them at session start, before any LLM call.
-    // This test verifies no extension loading errors appear on stderr.
     //
-    // The session header on stdout confirms pi actually started and
-    // attempted to load extensions — without it the test is vacuous
-    // (pit could have crashed before reaching pi).
+    // The session header on stdout confirms pi started and attempted
+    // to load extensions (without it the test is vacuous).
     const repo = makeGitRepo(tmpDirs);
     const agentDir = makeAgentDir(tmpDirs);
 
     const { stdout, stderr } = runPit(["--mode", "json", "hello"], { cwd: repo, agentDir });
 
-    // Confirm pi started — session header must be present
     const lines = parseJsonLines(stdout);
     const header = lines.find((l: any) => l.type === "session");
     expect(header, `pi did not start — stdout:\n${stdout}\nstderr:\n${stderr}`).toBeDefined();
 
-    // No extension loading errors
     const extensionErrors = stderr
       .split("\n")
       .filter((l) => l.includes("Failed to load extension"));
