@@ -1,4 +1,4 @@
-# pit/core
+# pit/src/core
 
 Domain logic for the pit launcher. No display logic here.
 

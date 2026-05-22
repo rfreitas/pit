@@ -1,4 +1,4 @@
-# pit/extensions
+# pit/src/extensions
 
 Loaded by Pi via jiti. All files here run inside the Pi process.
 

@@ -8,11 +8,11 @@ import noSideEffectsInPureFn from "./eslint-rules/no-side-effects-in-pure-fn.ts"
 
 // ── Two execution contexts, two sets of rules ─────────────────────────────────
 //
-// Core files (pit.ts, io modules, server.ts, git/utils.ts):
+// Core files (pit/src/**/*.ts, not extensions):
 //   Loaded directly by Node.js with full ESM resolution.
 //   MUST use sub-path imports — no barrel imports.
 //
-// Extension files (commands/, tools/, escape/client.ts, escape/reload.ts):
+// Extension files (pit/src/extensions/**):
 //   Loaded by pi via jiti (createJiti). Jiti resolves sub-path imports with
 //   ["node","import"] conditions first, which finds the ESM file, then tries
 //   to require() it — that fails. Barrels work because they go through native
@@ -193,7 +193,7 @@ export default [
         {
           selector: "CallExpression[callee.object.name='console']",
           message:
-            "core/ is domain logic — console.* belongs at a boundary (pit.ts or escape/server.ts).",
+            "core/ is domain logic — console.* belongs at a boundary (pit/src/pit.ts or pit/src/escape/server.ts).",
         },
         {
           selector:

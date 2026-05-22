@@ -1,4 +1,4 @@
-# pit/escape
+# pit/src/escape
 
 The out-of-sandbox helper process. Communicates with the sandboxed Pi session over a Unix socket.
 
@@ -6,7 +6,7 @@ The out-of-sandbox helper process. Communicates with the sandboxed Pi session ov
 
 **`server.ts`** — boundary. Socket setup, request routing via `dispatchEffect`, single `.catch` converts unhandled op errors to `{ error: "..." }` responses. No op logic here.
 
-**`core/ops/`** — domain logic. Op implementations. No display logic — errors propagate to `server.ts`. Same rule as `pit/core/`: no `console.*`, no `process.exit`.
+**`core/ops/`** — domain logic. Op implementations. No display logic — errors propagate to `server.ts`. Same rule as `pit/src/core/`: no `console.*`, no `process.exit`.
 
 | File | Ops handled |
 |---|---|

@@ -6,9 +6,9 @@ Read the pit-dev skill before making changes: `.pi/skills/pit-dev/SKILL.md`
 
 | Area | Read first |
 |---|---|
-| `core/` | `pit/core/README.md` |
-| `escape/` | `pit/escape/README.md` |
-| `extensions/` | `pit/extensions/README.md` |
+| `core/` | `pit/src/core/README.md` |
+| `escape/` | `pit/src/escape/README.md` |
+| `extensions/` | `pit/src/extensions/README.md` |
 | `eslint-rules/` | `eslint-rules/README.md` |
 
 ## After any change
