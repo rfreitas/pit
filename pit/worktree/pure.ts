@@ -10,7 +10,7 @@ import type { PitMetadata, ParsedFlags } from "../types.ts";
 // ── id generation ─────────────────────────────────────────────────────────────
 
 /** Generate an 8-hex-character random id for worktrees and sessions. */
-export function genId(): string {
+export const genId = (): string  => {
   return randomBytes(4).toString("hex");
 }
 
@@ -20,13 +20,13 @@ export function genId(): string {
  * Build a no-tree PitMetadata struct.
  * Callers supply id + created so the IO boundary (genId, new Date) stays outside.
  */
-export function buildNoTreeMeta(
+export const buildNoTreeMeta = (
   cwd: string,
   repo: string,
   reason: PitMetadata["noTreeReason"],
   id: string,
   created: string,
-): PitMetadata {
+): PitMetadata  => {
   return { id, repo, created, worktree: cwd, branch: "", mode: "no-tree", noTreeReason: reason };
 }
 
@@ -35,7 +35,7 @@ export function buildNoTreeMeta(
  * Derives the worktree path and branch name from repo + id.
  * Callers supply id + created so the IO boundary stays outside.
  */
-export function buildWorktreeMeta(repo: string, id: string, created: string): PitMetadata {
+export const buildWorktreeMeta = (repo: string, id: string, created: string): PitMetadata  => {
   return {
     id,
     repo,
@@ -57,17 +57,14 @@ export function buildWorktreeMeta(repo: string, id: string, created: string): Pi
  * worktree against, so creating one would leave an orphan branch.
  * The flag still forwards to pi unchanged.
  */
-export function parseFlags(argv: string[]): ParsedFlags {
-  let sandbox = true;
-  let noTree = false;
-  const filteredArgv: string[] = [];
-  for (const arg of argv) {
-    if (arg === "--no-sandbox") sandbox = false;
-    else if (arg === "-nt" || arg === "--no-tree") noTree = true;
-    else {
-      if (arg === "--no-session") noTree = true;
-      filteredArgv.push(arg);
-    }
-  }
-  return { sandbox, noTree, filteredArgv };
+export const parseFlags = (argv: string[]): ParsedFlags  => {
+  return argv.reduce<ParsedFlags>(
+    ({ sandbox, noTree, filteredArgv }, arg) => {
+      if (arg === "--no-sandbox") return { sandbox: false, noTree, filteredArgv };
+      if (arg === "-nt" || arg === "--no-tree") return { sandbox, noTree: true, filteredArgv };
+      if (arg === "--no-session") return { sandbox, noTree: true, filteredArgv: [...filteredArgv, arg] };
+      return { sandbox, noTree, filteredArgv: [...filteredArgv, arg] };
+    },
+    { sandbox: true, noTree: false, filteredArgv: [] },
+  );
 }

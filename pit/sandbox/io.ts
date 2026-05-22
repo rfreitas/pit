@@ -42,17 +42,12 @@ export const resolveUnversionedDirs = (
       ).pipe(Effect.catchAll(() => Effect.succeed<string[]>([])));
 
     const [a, b] = yield* Effect.all([runLines([]), runLines(["--ignored"])]);
-    const seen = new Set<string>();
-    const result: string[] = [];
-    for (const raw of [...a, ...b]) {
-      if (!raw.endsWith("/")) continue;
-      const rel = raw.replace(/\/$/, "");
-      if (rel && !seen.has(rel)) {
-        seen.add(rel);
-        result.push(rel);
-      }
-    }
-    return result;
+    return [...new Set(
+      [...a, ...b]
+        .filter(raw => raw.endsWith("/"))
+        .map(raw => raw.replace(/\/$/, ""))
+        .filter(Boolean),
+    )];
   });
 
 // ── pit config ────────────────────────────────────────────────────────────────
@@ -85,7 +80,7 @@ export const readPitConfig = (
  */
 export const writeFilteredSettings = (
   agentDir: string,
-  pitConfig: PitConfig,
+  pitConfig: Readonly<PitConfig>,
   hostSettingsPath: string,
 ): Effect.Effect<void, SettingsWriteError, FileSystem> =>
   Effect.gen(function* () {
@@ -116,7 +111,7 @@ export const writeFilteredSettings = (
  */
 export const createTempSettingsFileEffect = (
   agentDir: string,
-  pitConfig: PitConfig,
+  pitConfig: Readonly<PitConfig>,
 ): Effect.Effect<string, SettingsWriteError, FileSystem> =>
   Effect.gen(function* () {
     const tmp = join(tmpdir(), `pit-settings-${process.pid}.json`);

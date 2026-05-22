@@ -21,10 +21,12 @@
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
+    "@eslint-community/eslint-plugin-eslint-comments": "^4.7.1",
     "@sinclair/typebox": "^0.34.0",
     "@typescript-eslint/eslint-plugin": "^8.59.4",
     "@typescript-eslint/parser": "^8.59.4",
     "eslint": "^10.4.0",
+    "eslint-plugin-functional": "^9.0.5",
     "eslint-plugin-import-x": "^4.16.2",
     "typescript": "^5.0.0",
     "vitest": "^4.1.6"

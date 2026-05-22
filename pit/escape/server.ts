@@ -46,9 +46,11 @@ import type { Socket } from "node:net";
 import { existsSync, readFileSync, statSync, unlinkSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { Readable } from "node:stream";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Chunk from "effect/Chunk";
+import * as Option from "effect/Option";
 import { make as makeCommand, start as startCommand, workingDirectory as commandWorkingDirectory } from "@effect/platform/Command";
 import { FileSystem } from "@effect/platform/FileSystem";
 import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
@@ -120,17 +122,11 @@ const worktreeGit = (
  * Detect the parent branch (master or main) in a repo.
  * Kept as a plain sync helper — only called from Effect.sync wrappers.
  */
-function detectParentBranch(mainRepo: string): string | null {
-  for (const candidate of ["master", "main"]) {
-    try {
-      execFileSync("git", ["rev-parse", "--verify", candidate], {
-        cwd: mainRepo,
-        stdio: "ignore",
-      });
-      return candidate;
-    } catch { /* try next */ }
-  }
-  return null;
+const detectParentBranch = (mainRepo: string): string | null  => {
+  return ["master", "main"].find(candidate => {
+    try { execFileSync("git", ["rev-parse", "--verify", candidate], { cwd: mainRepo, stdio: "ignore" }); return true; }
+    catch { return false; }
+  }) ?? null;
 }
 
 // ── ops ───────────────────────────────────────────────────────────────────────
@@ -152,17 +148,13 @@ const opGetState = (): Effect.Effect<
       ? existsSync(join(gitdir, "MERGE_HEAD"))
       : false;
 
-    let conflicts: string[] = [];
-    if (mergeInProgress) {
-      const r = yield* worktreeGit(["diff", "--name-only", "--diff-filter=U"]);
-      conflicts = r.stdout.trim().split("\n").filter(Boolean);
-    }
+    const conflicts = mergeInProgress
+      ? (yield* worktreeGit(["diff", "--name-only", "--diff-filter=U"])).stdout.trim().split("\n").filter(Boolean)
+      : [];
 
-    let behindParent = false;
-    if (parentBranch && mainRepo) {
-      const r = yield* worktreeGit(["log", "--oneline", `HEAD..${parentBranch}`]);
-      behindParent = r.stdout.trim().length > 0;
-    }
+    const behindParent = (parentBranch && mainRepo)
+      ? (yield* worktreeGit(["log", "--oneline", `HEAD..${parentBranch}`])).stdout.trim().length > 0
+      : false;
 
     return { branch, mergeInProgress, conflicts, parentBranch, behindParent };
   });
@@ -177,20 +169,13 @@ const opMergeToParent = (
     const branch = yield* readWorktreeBranch(worktreePath);
     if (!branch) return { error: "Cannot determine current branch (detached HEAD?)" };
 
-    let checkedOut: string;
-    try {
-      checkedOut = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-        cwd: mainRepo,
-        encoding: "utf8",
-      }).trim();
-    } catch (e) {
-      return { error: `Cannot read main repo HEAD: ${(e as Error).message}` };
-    }
-
-    if (checkedOut !== parentBranch) {
-      return {
-        error: `Main repo has '${checkedOut}' checked out, not '${parentBranch}'. Check out '${parentBranch}' first.`,
-      };
+    const checkedOut = (() => {
+      try { return { ok: true as const, value: execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: mainRepo, encoding: "utf8" }).trim() }; }
+      catch (e) { return { ok: false as const, error: (e as Error).message }; }
+    })();
+    if (!checkedOut.ok) return { error: `Cannot read main repo HEAD: ${checkedOut.error}` };
+    if (checkedOut.value !== parentBranch) {
+      return { error: `Main repo has '${checkedOut.value}' checked out, not '${parentBranch}'. Check out '${parentBranch}' first.` };
     }
 
     return yield* gitEffect(["merge", "--ff-only", branch], mainRepo);
@@ -271,7 +256,7 @@ type Request = {
 };
 
 const dispatchEffect = (
-  req: Request,
+  req: Readonly<Request>,
 ): Effect.Effect<{ result: object; keepOpen: boolean }, never, NodeContext> =>
   Effect.gen(function* () {
     switch (req.op) {
@@ -323,7 +308,7 @@ const dispatchEffect = (
  * Kept fully imperative — watch push events are callback-driven.
  * Uses sync fs calls directly (not FileSystem service) to avoid async in callbacks.
  */
-function handleSubscribe(socket: Socket): void {
+const handleSubscribe = (socket: Socket): void  => {
   // Sync helpers for use in this imperative context
   const syncReadWorktreeBranch = (cwd: string): string | null => {
     try {
@@ -362,7 +347,7 @@ function handleSubscribe(socket: Socket): void {
   const mainGitDir = join(mainRepo, ".git");
   const refsHeadsDir = join(mainGitDir, "refs", "heads");
   const reftableDir = join(mainGitDir, "reftable");
-  const watchers: FSWatcher[] = [];
+  // eslint-disable-next-line functional/no-let -- mutable timer ref for debounced notify; no pure alternative for setTimeout handles
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
   const notify = () => {
@@ -373,27 +358,27 @@ function handleSubscribe(socket: Socket): void {
     }, 100);
   };
 
-  const tryWatch = (target: string, filter?: (f: string | null) => boolean) => {
+  const makeWatcher = (target: string, filter?: (f: string | null) => boolean): FSWatcher[] => {
     try {
-      watchers.push(watch(target, (_type, filename) => {
+      return [watch(target, (_type, filename) => {
         if (!filter || filter(filename)) notify();
-      }));
-    } catch { /* target absent or unwatchable */ }
+      })];
+    } catch { return []; }
   };
 
-  tryWatch(refsHeadsDir, (f) => f === parentBranch);
   const worktreeBranch = syncReadWorktreeBranch(worktreePath);
-  if (worktreeBranch) {
-    const branchRefDir = join(refsHeadsDir, dirname(worktreeBranch));
-    const branchLeaf = basename(worktreeBranch);
-    tryWatch(branchRefDir, (f) => f === branchLeaf);
-  }
-  tryWatch(mainGitDir, (f) => f === "packed-refs");
-  if (existsSync(reftableDir)) tryWatch(reftableDir);
+  const watchers: FSWatcher[] = [
+    ...makeWatcher(refsHeadsDir, (f) => f === parentBranch),
+    ...(worktreeBranch ? makeWatcher(
+      join(refsHeadsDir, dirname(worktreeBranch)),
+      (f) => f === basename(worktreeBranch),
+    ) : []),
+    ...makeWatcher(mainGitDir, (f) => f === "packed-refs"),
+    ...(existsSync(reftableDir) ? makeWatcher(reftableDir) : []),
+  ];
 
   const cleanup = () => {
-    for (const w of watchers) { try { w.close(); } catch { /* */ } }
-    watchers.length = 0;
+    watchers.forEach(w => { try { w.close(); } catch { /* */ } });
     if (debounce) { clearTimeout(debounce); debounce = null; }
   };
   socket.once("close", cleanup);
@@ -402,7 +387,7 @@ function handleSubscribe(socket: Socket): void {
 
 // ── server ────────────────────────────────────────────────────────────────────
 
-function cleanup() {
+const cleanup = () => {
   server.close();
   try { unlinkSync(socketPath); } catch { /* already gone */ }
   process.exit(0);
@@ -411,6 +396,7 @@ process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
 
 const server = createServer((socket) => {
+  // eslint-disable-next-line functional/no-let -- bidirectional socket: Readable.toWeb transfers read ownership which prevents writing the response back. Manual buffer required here.
   let buf = "";
 
   socket.on("data", (chunk: Buffer) => {
@@ -420,13 +406,14 @@ const server = createServer((socket) => {
     const line = buf.slice(0, nl);
     buf = "";
 
-    let req: Request;
-    try {
-      req = JSON.parse(line) as Request;
-    } catch {
-      socket.end(JSON.stringify({ error: "invalid JSON" }) + "\n");
-      return;
-    }
+    const req = (() => {
+      try { return JSON.parse(line) as Request; }
+      catch {
+        socket.end(JSON.stringify({ error: "invalid JSON" }) + "\n");
+        return null;
+      }
+    })();
+    if (!req) return;
 
     if (typeof req.op !== "string") {
       socket.end(JSON.stringify({ error: "request must have op (string)" }) + "\n");

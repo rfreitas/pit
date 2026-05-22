@@ -13,6 +13,7 @@ This repo contains personal Pi agent extensions and tooling. Read `README.md` fo
 Each package in `packages/` has its own `AGENTS.md`. Read it before making changes:
 
 - `packages/handoff/AGENTS.md` — `/handoff` extension
+- `pit/AGENTS.md` — pit worktree sandbox (read before touching anything in `pit/`)
 
 ## Extension dependencies
 
@@ -28,7 +29,7 @@ Node.js built-ins (`node:fs`, `node:path`, `node:crypto`, etc.) are always avail
 For anything else:
 
 ```bash
-cd C:/Users/ricfr/Repos/agent   # always install here, not globally
+cd /home/ricfr/repos/agent   # always install here, not globally
 npm install <package>
 ```
 
@@ -38,6 +39,7 @@ npm install <package>
 
 ```bash
 npm run typecheck   # must pass
+npm run lint        # must pass (zero errors; warnings are purity hints, fix them)
 npm test            # must pass if tests exist for the changed code
 ```
 

@@ -7,7 +7,8 @@
 
 import { createConnection } from "node:net";
 import { existsSync } from "node:fs";
-import { Effect } from "effect";
+import { Effect, Stream, Option } from "effect";
+import { socketLines } from "./frames.ts";
 
 export type GitResult = { stdout: string; stderr: string; code: number };
 export type ErrorResult = { error: string };
@@ -44,55 +45,63 @@ export const probeSocketEffect = (
  *   "stale"  — socket file exists but nobody is listening (ECONNREFUSED/ENOTSOCK)
  *   "absent" — socket file does not exist (ENOENT)
  */
-export function probeSocket(
+export const probeSocket = (
   socketPath: string,
-): Promise<"alive" | "stale" | "absent"> {
+): Promise<"alive" | "stale" | "absent"> => {
   return Effect.runPromise(probeSocketEffect(socketPath));
-}
+};
 
 // ── send ──────────────────────────────────────────────────────────────────────
 
+/**
+ * Send a request and read one newline-delimited JSON response.
+ * Uses Stream.fromReadableStream + Stream.splitLines — no manual buffer accumulation.
+ */
 export const sendEffect = (
   socketPath: string,
   req: object,
 ): Effect.Effect<EscapeResult> =>
-  Effect.async((resume) => {
-    const sock = createConnection(socketPath);
-    let buf = "";
-    sock.once("connect", () => {
-      sock.write(JSON.stringify(req) + "\n");
-    });
-    sock.on("data", (chunk: Buffer) => {
-      buf += chunk.toString("utf8");
-    });
-    sock.once("end", () => {
-      try {
-        resume(Effect.succeed(JSON.parse(buf.trim()) as EscapeResult));
-      } catch {
-        resume(
-          Effect.succeed({ error: "Failed to parse pit-escape response" }),
-        );
-      }
-    });
-    sock.once("error", (err: Error) => {
-      resume(
-        Effect.succeed({ error: `pit-escape unavailable: ${err.message}` }),
-      );
-    });
+  Effect.gen(function* () {
+    // Connect
+    const sock = yield* Effect.async<ReturnType<typeof createConnection> | null>(
+      (resume) => {
+        const s = createConnection(socketPath);
+        s.once("connect", () => resume(Effect.succeed(s)));
+        s.once("error", () => resume(Effect.succeed(null)));
+      },
+    );
+    if (!sock) return { error: "pit-escape unavailable: connection refused" } as EscapeResult;
+
+    // Write request
+    sock.write(JSON.stringify(req) + "\n");
+
+    // Read one newline-delimited response — no manual buffer needed
+    const line = yield* socketLines(sock).pipe(
+      Stream.take(1),
+      Stream.runHead,
+      Effect.orElse(() => Effect.succeed(Option.none<string>())),
+    );
+
+    sock.destroy();
+
+    if (Option.isNone(line))
+      return { error: "pit-escape unavailable: no response" } as EscapeResult;
+    try { return JSON.parse(line.value) as EscapeResult; }
+    catch { return { error: "Failed to parse pit-escape response" } as EscapeResult; }
   });
 
 /** Run sendEffect as a Promise (for use in async extension handlers). */
-export function send(socketPath: string, req: object): Promise<EscapeResult> {
+export const send = (socketPath: string, req: object): Promise<EscapeResult> => {
   return Effect.runPromise(sendEffect(socketPath, req));
-}
+};
 
 // ── result helpers ────────────────────────────────────────────────────────────
 
-export function isOk(r: EscapeResult): r is GitResult {
+export const isOk = (r: EscapeResult): r is GitResult => {
   return !("error" in r) && r.code === 0;
-}
+};
 
-export function errMsg(r: EscapeResult): string {
+export const errMsg = (r: EscapeResult): string => {
   if ("error" in r) return r.error;
   return (r.stderr || r.stdout || `exit ${r.code}`).trim();
-}
+};

@@ -1,6 +1,8 @@
 // @ts-check
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
+import functional from "eslint-plugin-functional";
+import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
 import noBarrelImport from "./eslint-rules/no-barrel-import.mjs";
 
 // ── Two execution contexts, two sets of rules ─────────────────────────────────
@@ -21,10 +23,67 @@ const base = {
     parser: tsparser,
     parserOptions: { project: "./tsconfig.json" },
   },
-  plugins: { "@typescript-eslint": tseslint },
+  plugins: { 
+    "@typescript-eslint": tseslint,
+    "functional": functional
+  },
 };
 
 export default [
+  // ── global rules: purity ───────────────────────────────────────────────────
+  {
+    ...base,
+    files: ["pit/**/*.ts"],
+    ignores: ["pit/tests/**"],
+    rules: {
+      "functional/no-let": "error",
+      "functional/immutable-data": "error",
+      "prefer-arrow-callback": "error",
+      "func-style": ["error", "expression"],
+      "functional/no-throw-statements": ["error", { "allowToRejectPromises": true }],
+      "functional/no-class-inheritance": ["error", {
+        // Allow Effect's Data.TaggedError pattern — the only way to define
+        // typed errors in Effect. Bans all other class inheritance.
+        "ignoreCodePattern": "TaggedError"
+      }],
+      "functional/no-mixed-types": "error",
+      "functional/functional-parameters": ["error", { "enforceParameterCount": false }],
+      "functional/prefer-immutable-types": ["error", {
+        "enforcement": "None",
+        "overrides": [{ "specifiers": { "from": "file" }, "options": {
+          "ignoreInferredTypes": true,
+          "parameters": { "enforcement": "ReadonlyShallow" }
+        }}]
+      }],
+      "functional/type-declaration-immutability": ["error", {
+        "rules": [{
+          "identifiers": ["^I?Immutable.+"], "immutability": 5, "comparator": 1
+        }, {
+          "identifiers": ["^I?ReadonlyDeep.+"], "immutability": 4, "comparator": 1
+        }, {
+          "identifiers": ["^I?Readonly.+"], "immutability": 3, "comparator": 1
+        }, {
+          "identifiers": ["^I?Mutable.+"], "immutability": 2, "comparator": -1
+        }]
+      }],
+    }
+  },
+
+  // ── pure functions only: no loops ───────────────────────────────────────────────
+  //
+  // Loops in pure functions are always replaceable with .map/.reduce.
+  // Loops in IO functions (streaming, event handlers) are sometimes the
+  // safest option: MISRA/JPL forbid recursion because stack depth is
+  // unbounded and a stack overflow crashes silently.
+  // Rule scoped to */pure.ts only.
+  {
+    ...base,
+    files: ["pit/**/pure.ts"],
+    rules: {
+      "functional/no-loop-statements": "error",
+    }
+  },
+
   // ── core files: no barrel imports ──────────────────────────────────────────
   {
     ...base,
@@ -36,11 +95,19 @@ export default [
     plugins: {
       ...base.plugins,
       local: { rules: { "no-barrel-import": noBarrelImport } },
+      "@eslint-community/eslint-comments": eslintComments,
     },
     rules: {
       // Reads each package's `exports` field at lint time.
       // Any package with sub-path exports must be imported via sub-path.
       "local/no-barrel-import": "error",
+
+      // ── eslint-disable hygiene ──────────────────────────────────────────────
+      // Every disable comment must name the rule AND give a reason.
+      // Bare `eslint-disable` (silencing everything) is banned.
+      "@eslint-community/eslint-comments/require-description": ["error", { "ignore": [] }],
+      "@eslint-community/eslint-comments/no-unlimited-disable": "error",
+      "@eslint-community/eslint-comments/no-unused-disable": "error",
     },
   },
 

@@ -179,15 +179,15 @@ export const listRepoWorktrees = (
     const out = yield* commandString(
       makeCommand("git", "-C", repo, "worktree", "list", "--porcelain"),
     );
-    const paths: string[] = [];
-    let currentPath = "";
-    for (const line of out.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        currentPath = line.slice(9).trim();
-      } else if (line === "" && currentPath) {
-        if (currentPath !== repo) paths.push(currentPath);
-        currentPath = "";
-      }
-    }
-    return paths;
+    return out.split("\n")
+      .reduce<{ paths: string[]; current: string }>(
+        ({ paths, current }, line) => {
+          if (line.startsWith("worktree "))
+            return { paths, current: line.slice(9).trim() };
+          if (line === "" && current)
+            return { paths: current !== repo ? [...paths, current] : paths, current: "" };
+          return { paths, current };
+        },
+        { paths: [], current: "" },
+      ).paths;
   });

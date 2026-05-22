@@ -14,15 +14,11 @@
  * Only registers handlers when PIT_ESCAPE_SOCKET is set.
  */
 
-import { Effect } from "effect";
+import { Effect, Stream } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createConnection, type Socket } from "node:net";
 import { sendEffect } from "./client.ts";
-
-type SubscribeMessage =
-  | { ok: true; watching: string }
-  | { event: "ref-change" }
-  | { error: string };
+import { socketLines } from "./frames.ts";
 
 const FALLBACK_POLL_MS = 5 * 60_000;
 
@@ -49,34 +45,29 @@ export function useEscapeStatus(
   ): void {
     const sock = createConnection(socketPath);
     subSocket = sock;
-    let buf = "";
 
     sock.once("connect", () =>
       sock.write(JSON.stringify({ op: "subscribe" }) + "\n"),
     );
-    sock.on("data", (chunk: Buffer) => {
-      buf += chunk.toString("utf8");
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) !== -1) {
-        const line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        let msg: SubscribeMessage;
-        try {
-          msg = JSON.parse(line) as SubscribeMessage;
-        } catch {
-          continue;
-        }
-        if ("event" in msg && msg.event === "ref-change") {
-          void Effect.runPromise(updateStatusEffect(setStatus));
-        }
-      }
-    });
-    sock.once("error", () => {
-      subSocket = undefined;
-    });
-    sock.once("close", () => {
-      subSocket = undefined;
-    });
+
+    void Effect.runPromise(
+      socketLines(sock).pipe(
+        Stream.runForEach((line) =>
+          Effect.sync(() => {
+            const msg = (() => {
+              try { return JSON.parse(line) as { event?: string }; }
+              catch { return null; }
+            })();
+            if (msg?.event === "ref-change") {
+              void Effect.runPromise(updateStatusEffect(setStatus));
+            }
+          }),
+        ),
+      ),
+    ).catch(() => { /* socket closed — expected on session end */ });
+
+    sock.once("error", () => { subSocket = undefined; });
+    sock.once("close", () => { subSocket = undefined; });
   }
 
   pi.on("session_start", async (_event, ctx) => {

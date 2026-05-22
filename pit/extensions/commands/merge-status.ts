@@ -24,11 +24,11 @@ type IsMergedResponse =
  * Pure function: convert ahead/behind counts into footer text.
  * Exported for testing.
  */
-export function formatStatus(
+export const formatStatus = (
   aheadCount: number,
   behindCount: number,
   parentBranch: string,
-): string {
+): string => {
   if (aheadCount === 0 && behindCount === 0) {
     return `in sync with ${parentBranch}`;
   } else if (aheadCount > 0 && behindCount === 0) {
@@ -40,7 +40,7 @@ export function formatStatus(
   } else {
     return `${aheadCount} ahead \u00b7 ${behindCount} behind ${parentBranch}`;
   }
-}
+};
 
 export default function (pi: ExtensionAPI) {
   const socketPath = process.env.PIT_ESCAPE_SOCKET;
