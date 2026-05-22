@@ -71,10 +71,11 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
   const worktreeBranch = syncReadWorktreeBranch(worktreePath);
   const rawWatchers = [
     makeWatcher(refsHeadsDir, (f) => f === parentBranch),
-    ...(worktreeBranch ? [makeWatcher(
-      join(refsHeadsDir, dirname(worktreeBranch)),
-      (f) => f === basename(worktreeBranch),
-    )] : []),
+  ...(worktreeBranch ? [
+      // Watch without filename filter — the branch name changes after /rename-branch,
+      // so a filter on the original name would miss all subsequent commits.
+      makeWatcher(join(refsHeadsDir, dirname(worktreeBranch))),
+    ] : []),
     makeWatcher(mainGitDir, (f) => f === "packed-refs"),
     ...(existsSync(reftableDir) ? [makeWatcher(reftableDir)] : []),
   ];
