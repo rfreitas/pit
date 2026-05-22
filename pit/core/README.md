@@ -13,8 +13,6 @@ Errors propagate to callers — display happens at `pit.ts` (CLI boundary).
 | File/folder | Purpose |
 |---|---|
 | `constants.ts` | `HOME`, `AGENT_DIR`, `PIT_DIR` — resolved once at startup |
-| `launcher.ts` | bwrap setup, `launchEffect`, `startPitEscapeEffect` |
-| `program.ts` | main `program` Effect, `showPicker` |
 | `git/utils.ts` | filesystem + subprocess git utilities |
 | `sandbox/pure.ts` | bwrap mount spec builder (pure) |
 | `sandbox/io.ts` | pit config read, settings filtering |

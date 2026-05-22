@@ -9,7 +9,7 @@
 
 import * as Effect from "effect/Effect";
 import { layer as NodeContextLayer } from "@effect/platform-node/NodeContext";
-import { program } from "./core/program.ts";
+import { program } from "./program.ts";
 import {
   WorktreeCreationError,
   WorktreeMissingError,

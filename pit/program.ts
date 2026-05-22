@@ -1,8 +1,5 @@
 /**
  * Main program Effect for pit — worktree routing and session management.
- *
- * No error display here; errors propagate as typed failures to the caller.
- * The CLI boundary (pit.ts) owns all console.error / process.exit calls.
  */
 
 import * as Effect from "effect/Effect";
@@ -16,20 +13,20 @@ import {
   type CustomEntry,
 } from "@earendil-works/pi-coding-agent";
 import { unlinkSync } from "node:fs";
-import type { PitMetadata, SandboxMounts } from "../types.ts";
-import { AGENT_DIR, PIT_DIR } from "./constants.ts";
-import { parseFlags } from "./worktree/pure.ts";
-import { worktreeCheckEffect } from "./worktree/io.ts";
-import { systemPromptArgs } from "./session/pure.ts";
-import { setupNewSession, findOrCreateLinkedSession } from "./session/io.ts";
-import { readPitConfig, createTempSettingsFileEffect } from "./sandbox/io.ts";
+import type { PitMetadata, SandboxMounts } from "./types.ts";
+import { AGENT_DIR, PIT_DIR } from "./core/constants.ts";
+import { parseFlags } from "./core/worktree/pure.ts";
+import { worktreeCheckEffect } from "./core/worktree/io.ts";
+import { systemPromptArgs } from "./core/session/pure.ts";
+import { setupNewSession, findOrCreateLinkedSession } from "./core/session/io.ts";
+import { readPitConfig, createTempSettingsFileEffect } from "./core/sandbox/io.ts";
 import {
   isLinkedWorktree,
   resolveMainRepo,
   listRepoWorktrees,
   readWorktreeBranch,
   gitRepoRoot,
-} from "./git/utils.ts";
+} from "./core/git/utils.ts";
 import {
   extensionArgs,
   launchEffect,
@@ -161,7 +158,6 @@ export const showPicker = async (
     }
     return { sessionFile: selectedPath, meta: pitEntry.data };
   } catch {
-    // eslint-disable-next-line no-restricted-syntax -- degradation notice: session metadata unreadable is non-fatal; recovery path opens session directly
     console.warn("pit: could not read session metadata — opening session directly");
     await Effect.runPromise(
       launchEffect(process.cwd(), ["--session", selectedPath, ...piArgs], sandbox).pipe(
@@ -181,7 +177,6 @@ export const program = Effect.gen(function* () {
 
   if (filteredArgv.length > 0 && PI_SUBCOMMANDS.has(filteredArgv[0])) {
     const r = spawnSync("pi", filteredArgv, { stdio: "inherit", shell: false });
-    // eslint-disable-next-line no-restricted-syntax -- pi subcommand forwarding: process.exit propagates pi's own exit code directly
     process.exit(r.status ?? 0);
   }
 
@@ -225,7 +220,6 @@ export const program = Effect.gen(function* () {
     const sandboxMounts = yield* resolveSandboxMountsEffect(cwd, sandbox);
     const session = yield* findOrCreateLinkedSession(cwd, AGENT_DIR, sandboxMounts);
     if (session.kind === "new") {
-      // eslint-disable-next-line no-restricted-syntax -- informational: already in a linked worktree with no pit session; running no-tree is the correct fallback
     console.error("pit: already in a git worktree — no pit session found, running no-tree");
     }
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));

@@ -1,9 +1,6 @@
 /**
  * Launcher — everything pit needs to start pi (sandboxed or not) and the
  * pit-escape out-of-sandbox helper.
- *
- * No error display here; errors propagate as typed failures to the caller.
- * The CLI boundary (pit.ts) owns all console.error / process.exit calls.
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
@@ -13,17 +10,17 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
 import { main } from "@earendil-works/pi-coding-agent";
-import type { PitMetadata, SandboxMounts, OverlayMount } from "../types.ts";
-import { HOME, AGENT_DIR, PIT_DIR } from "./constants.ts";
+import type { PitMetadata, SandboxMounts, OverlayMount } from "./types.ts";
+import { HOME, AGENT_DIR, PIT_DIR } from "./core/constants.ts";
 import {
   isLinkedWorktree,
   resolveMainRepo,
   resolveWorktreeGitRwMounts,
-} from "./git/utils.ts";
-import { resolveUnversionedDirs } from "./sandbox/io.ts";
-import { buildSandboxMountSpec } from "./sandbox/pure.ts";
-import { probeSocketEffect } from "../extensions/escape/client.ts";
-import { SocketAliveError } from "../errors.ts";
+} from "./core/git/utils.ts";
+import { resolveUnversionedDirs } from "./core/sandbox/io.ts";
+import { buildSandboxMountSpec } from "./core/sandbox/pure.ts";
+import { probeSocketEffect } from "./extensions/escape/client.ts";
+import { SocketAliveError } from "./errors.ts";
 
 // ── extension args ────────────────────────────────────────────────────────────
 
@@ -90,7 +87,7 @@ export const buildSandboxMountsEffect = (
       ? (yield* resolveUnversionedDirs(parentRepo).pipe(
           Effect.catchAll((e) =>
             Effect.sync(() => {
-              // eslint-disable-next-line no-restricted-syntax, local/no-side-effects-in-pure-fn -- degradation notice: overlay unavailable is non-fatal; propagating as typed signal requires refactoring buildSandboxMountsEffect return type
+              // eslint-disable-next-line local/no-side-effects-in-pure-fn -- degradation notice inside Effect.sync; the effect wrapper encodes the side effect
               console.warn(`pit: overlay mounts unavailable: ${String(e)}`);
               return [] as string[];
             }),
@@ -177,7 +174,6 @@ export const bwrapLaunch = (
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
   if (settingsPath) try { unlinkSync(settingsPath); } catch { /* already gone */ }
-  // eslint-disable-next-line no-restricted-syntax -- bwrapLaunch never returns; process.exit is the intended outcome after spawnSync
   process.exit(result.status ?? 1);
 };
 
@@ -200,7 +196,6 @@ export const launchEffect = (
         ));
         bwrapLaunch(cwd, piArgs, m, settingsPath); // never returns
       }
-      // eslint-disable-next-line no-restricted-syntax -- degradation notice: sandbox unavailable is non-fatal; bwrap absence is checked here rather than at the boundary to keep launch logic self-contained
       console.warn("pit: bwrap not found — running without sandbox");
     }
     process.chdir(cwd);
@@ -245,7 +240,6 @@ export const startPitEscapeEffect = (
       });
 
       const timer = setTimeout(() => {
-        // eslint-disable-next-line no-restricted-syntax -- degradation notice: escape timeout is non-fatal; git tool and settings refresh degrade gracefully
         console.warn("pit: pit-escape timed out — git tool and settings refresh unavailable");
         resume(Effect.succeed(Option.none()));
       }, 3000);
@@ -253,7 +247,6 @@ export const startPitEscapeEffect = (
       child.stdout!.once("data", () => { clearTimeout(timer); resume(Effect.succeed(Option.some(socketPath))); });
       child.once("error", (err) => {
         clearTimeout(timer);
-        // eslint-disable-next-line no-restricted-syntax -- degradation notice: escape spawn failure is non-fatal, session continues without git tool
         console.warn(`pit: pit-escape: ${err.message}`);
         resume(Effect.succeed(Option.none()));
       });
