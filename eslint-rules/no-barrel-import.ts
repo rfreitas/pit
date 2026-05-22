@@ -9,11 +9,12 @@
 
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import type { TSESLint, TSESTree } from "@typescript-eslint/utils";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /** True if `source` is a root import (not a sub-path, relative, or built-in). */
-function isRootImport(source) {
+const isRootImport = (source: string): boolean => {
   if (source.startsWith(".") || source.startsWith("node:")) return false;
   if (source.startsWith("@")) {
     // Scoped: @scope/pkg is root, @scope/pkg/sub is a sub-path
@@ -21,27 +22,28 @@ function isRootImport(source) {
   }
   // Unscoped: "pkg" is root, "pkg/sub" is a sub-path
   return !source.includes("/");
-}
+};
 
 /**
  * Extract the sub-path keys from an `exports` field.
  * Handles string shorthand, object, and nested conditional forms.
  */
-function exportKeys(exports) {
+const exportKeys = (exports: unknown): string[] => {
   if (!exports || typeof exports === "string") return [];
-  return Object.keys(exports);
-}
+  return Object.keys(exports as Record<string, unknown>);
+};
 
 /** True if the package at `name` declares sub-path exports. */
-const cache = new Map();
+const cache = new Map<string, boolean>();
 
-function hasSubPaths(packageName, fromFile) {
-  if (cache.has(packageName)) return cache.get(packageName);
+const hasSubPaths = (packageName: string, fromFile: string): boolean => {
+  const cached = cache.get(packageName);
+  if (cached !== undefined) return cached;
 
   let result = false;
   try {
     const req = createRequire(join(dirname(fromFile), "__probe__.js"));
-    const pkg = req(`${packageName}/package.json`);
+    const pkg = req(`${packageName}/package.json`) as { exports?: unknown };
     const keys = exportKeys(pkg.exports);
     result = keys.some((k) => k !== "." && k !== "./package.json");
   } catch {
@@ -50,11 +52,15 @@ function hasSubPaths(packageName, fromFile) {
 
   cache.set(packageName, result);
   return result;
-}
+};
 
 // ── rule ──────────────────────────────────────────────────────────────────────
 
-export default {
+type MessageIds = "useSubPath";
+type Options = [{ allow?: string[] }];
+
+const rule: TSESLint.RuleModule<MessageIds, Options> = {
+  defaultOptions: [{}],
   meta: {
     type: "suggestion",
     docs: {
@@ -86,9 +92,9 @@ export default {
   },
 
   create(context) {
-    const allow = new Set(context.options[0]?.allow ?? []);
+    const allow = new Set<string>(context.options[0]?.allow ?? []);
     return {
-      ImportDeclaration(node) {
+      ImportDeclaration(node: TSESTree.ImportDeclaration) {
         const source = node.source.value;
         if (allow.has(source)) return;
         if (!isRootImport(source)) return;
@@ -102,3 +108,5 @@ export default {
     };
   },
 };
+
+export default rule;

@@ -22,9 +22,8 @@
  * which is now a strict subset of this rule.
  */
 
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-const { ESLintUtils } = require("@typescript-eslint/utils");
+import { ESLintUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
+import type * as ts from "typescript";
 
 // ── return-type classifier ────────────────────────────────────────────────────
 
@@ -32,9 +31,9 @@ const { ESLintUtils } = require("@typescript-eslint/utils");
  * Patterns whose presence in a type string marks the function as effectful.
  * Checked against the full TypeScript type string (e.g. "Effect.Effect<...>").
  */
-const IMPURE_TYPE_PATTERNS = [
-  /\bEffect\b/,   // Effect.Effect<A, E, R>
-  /\bPromise\b/,  // Promise<T>
+const IMPURE_TYPE_PATTERNS: RegExp[] = [
+  /\bEffect\b/,    // Effect.Effect<A, E, R>
+  /\bPromise\b/,   // Promise<T>
   /\bGenerator\b/, // Generator (Effect.gen internals)
   /^void$/,        // no meaningful return — exists for side effects
   /^undefined$/,   // same
@@ -45,14 +44,23 @@ const IMPURE_TYPE_PATTERNS = [
  * Return true if typeStr represents a plain (non-effectful) value.
  * "string | undefined" is plain; "Effect.Effect<string>" is not.
  */
-const isPlainReturnType = (typeStr) => {
+const isPlainReturnType = (typeStr: string | null): boolean => {
   if (!typeStr) return false;
   return !IMPURE_TYPE_PATTERNS.some((p) => p.test(typeStr));
 };
 
 // ── rule ──────────────────────────────────────────────────────────────────────
 
-export default {
+type MessageIds = "noAwait" | "noYield" | "noConsole" | "noLoop";
+type Options = [];
+
+type FunctionNode =
+  | TSESTree.FunctionDeclaration
+  | TSESTree.ArrowFunctionExpression
+  | TSESTree.FunctionExpression;
+
+const rule: TSESLint.RuleModule<MessageIds, Options> = {
+  defaultOptions: [],
   meta: {
     type: "problem",
     docs: {
@@ -71,30 +79,29 @@ export default {
         "Loop in a plain-return function — use .map / .filter / .reduce instead.",
     },
     schema: [],
-    requiresTypeChecking: true,
   },
 
   create(context) {
-    // ESLintUtils.getParserServices is the @typescript-eslint/utils v8 API.
-    // Returns null-like if the parser didn't provide services (e.g. no project config).
     // eslint-disable-next-line functional/no-let -- must be let: getParserServices throws on missing project; catch converts to null
-    let parserServices;
-    try { parserServices = ESLintUtils.getParserServices(context, false); }
-    catch { return {}; }
-    if (!parserServices?.program) return {};
+    let parserServices: ReturnType<typeof ESLintUtils.getParserServices> | null;
+    try {
+      parserServices = ESLintUtils.getParserServices(context, false);
+    } catch {
+      return {};
+    }
+    if (!parserServices.program) return {};
 
-    const checker = parserServices.program.getTypeChecker();
+    const checker: ts.TypeChecker = parserServices.program.getTypeChecker();
 
     /**
      * Get the return type string for a function node, or null on failure.
-     * Works for FunctionDeclaration, ArrowFunctionExpression, FunctionExpression.
      */
-    const returnTypeString = (node) => {
-      const tsNode = parserServices.esTreeNodeToTSNodeMap?.get(node);
+    const returnTypeString = (node: FunctionNode): string | null => {
+      const tsNode = parserServices.esTreeNodeToTSNodeMap.get(node);
       if (!tsNode) return null;
       try {
-        const type = checker.getTypeAtLocation(tsNode);
-        const sigs = type.getCallSignatures();
+        const fnType: ts.Type = checker.getTypeAtLocation(tsNode);
+        const sigs = fnType.getCallSignatures();
         if (!sigs.length) return null;
         return checker.typeToString(checker.getReturnTypeOfSignature(sigs[0]));
       } catch {
@@ -105,20 +112,20 @@ export default {
     // Stack of booleans — one entry per enclosing function context.
     // True means the immediately-enclosing function returns a plain value.
     // eslint-disable-next-line functional/no-let -- mutable stack required for function-context tracking; no pure alternative for push/pop
-    let pureStack = [];
+    let pureStack: boolean[] = [];
 
-    const enterFn = (node) => {
+    const enterFn = (node: FunctionNode): void => {
       // eslint-disable-next-line functional/immutable-data -- stack mutation is the intended operation
       pureStack = [...pureStack, isPlainReturnType(returnTypeString(node))];
     };
 
-    const exitFn = () => {
+    const exitFn = (): void => {
       // eslint-disable-next-line functional/immutable-data -- stack mutation is the intended operation
       pureStack = pureStack.slice(0, -1);
     };
 
     /** True if the immediately-enclosing function is plain-return. */
-    const inPure = () =>
+    const inPure = (): boolean =>
       pureStack.length > 0 && pureStack[pureStack.length - 1] === true;
 
     return {
@@ -129,33 +136,35 @@ export default {
       FunctionExpression: enterFn,
       "FunctionExpression:exit": exitFn,
 
-      AwaitExpression(node) {
+      AwaitExpression(node: TSESTree.AwaitExpression) {
         if (inPure()) context.report({ node, messageId: "noAwait" });
       },
 
-      YieldExpression(node) {
+      YieldExpression(node: TSESTree.YieldExpression) {
         if (inPure()) context.report({ node, messageId: "noYield" });
       },
 
-      "CallExpression[callee.object.name='console']"(node) {
+      "CallExpression[callee.object.name='console']"(node: TSESTree.CallExpression) {
         if (inPure()) context.report({ node, messageId: "noConsole" });
       },
 
-      ForStatement(node) {
+      ForStatement(node: TSESTree.ForStatement) {
         if (inPure()) context.report({ node, messageId: "noLoop" });
       },
-      WhileStatement(node) {
+      WhileStatement(node: TSESTree.WhileStatement) {
         if (inPure()) context.report({ node, messageId: "noLoop" });
       },
-      DoWhileStatement(node) {
+      DoWhileStatement(node: TSESTree.DoWhileStatement) {
         if (inPure()) context.report({ node, messageId: "noLoop" });
       },
-      ForInStatement(node) {
+      ForInStatement(node: TSESTree.ForInStatement) {
         if (inPure()) context.report({ node, messageId: "noLoop" });
       },
-      ForOfStatement(node) {
+      ForOfStatement(node: TSESTree.ForOfStatement) {
         if (inPure()) context.report({ node, messageId: "noLoop" });
       },
     };
   },
 };
+
+export default rule;

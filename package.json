@@ -6,9 +6,10 @@
   "keywords": [
     "pi-package"
   ],
+  "type": "module",
   "scripts": {
     "typecheck": "tsc",
-    "lint": "eslint 'pit/**/*.ts' --ignore-pattern 'pit/tests/**'",
+    "lint": "node --experimental-strip-types node_modules/.bin/eslint 'pit/**/*.ts' --ignore-pattern 'pit/tests/**'",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -3,8 +3,8 @@ import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
 import functional from "eslint-plugin-functional";
 import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
-import noBarrelImport from "./eslint-rules/no-barrel-import.mjs";
-import noSideEffectsInPureFn from "./eslint-rules/no-side-effects-in-pure-fn.mjs";
+import noBarrelImport from "./eslint-rules/no-barrel-import.ts";
+import noSideEffectsInPureFn from "./eslint-rules/no-side-effects-in-pure-fn.ts";
 
 // ── Two execution contexts, two sets of rules ─────────────────────────────────
 //
