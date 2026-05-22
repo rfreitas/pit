@@ -33,6 +33,16 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
     } catch { return null; }
   };
 
+  const syncReadWorktreeGitdir = (cwd: string): string | null => {
+    try {
+      const gitPath = join(cwd, ".git");
+      if (statSync(gitPath).isDirectory()) return null;
+      const gitdir = readFileSync(gitPath, "utf8").trim().replace(/^gitdir:\s*/, "");
+      if (!gitdir.includes("/.git/worktrees/")) return null;
+      return gitdir;
+    } catch { return null; }
+  };
+
   const mainRepo = syncResolveMainRepo(worktreePath);
   if (!mainRepo) {
     socket.end(JSON.stringify({ error: "cannot resolve main repo from worktree" }) + "\n");
@@ -49,6 +59,8 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
   const mainGitDir = join(mainRepo, ".git");
   const refsHeadsDir = join(mainGitDir, "refs", "heads");
   const reftableDir = join(mainGitDir, "reftable");
+  const worktreeGitdir = syncReadWorktreeGitdir(worktreePath);
+
   // eslint-disable-next-line functional/no-let -- mutable timer ref for debounced notify; no pure alternative for setTimeout handles
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -68,26 +80,68 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
     } catch { return null; }
   };
 
-  const worktreeBranch = syncReadWorktreeBranch(worktreePath);
-  const rawWatchers = [
+  // ── branch watcher — retargeted on rename ────────────────────────────────
+  //
+  // Watches the exact branch ref file. When the branch is renamed (HEAD
+  // changes), the HEAD watcher below updates currentBranch and replaces this.
+
+  // eslint-disable-next-line functional/no-let -- retargeted when HEAD changes on rename
+  let currentBranch = syncReadWorktreeBranch(worktreePath);
+  // eslint-disable-next-line functional/no-let -- replaced when currentBranch changes
+  let branchWatcher: FSWatcher | null = null;
+
+  const setupBranchWatcher = (): void => {
+    if (branchWatcher) { try { branchWatcher.close(); } catch { /* */ } }
+    const branch = currentBranch; // capture: TS can't narrow a let inside a callback
+    branchWatcher = branch
+      ? makeWatcher(
+          join(refsHeadsDir, dirname(branch)),
+          (f) => f === basename(branch),
+        )
+      : null;
+  };
+
+  setupBranchWatcher();
+
+  // ── HEAD watcher — detects rename ────────────────────────────────────────
+  //
+  // Watches the worktree-specific HEAD file. git branch -m updates this file,
+  // which triggers a re-read of the branch name and a retarget of branchWatcher.
+
+  const headWatcher = worktreeGitdir
+    ? (() => {
+        try {
+          return watch(worktreeGitdir, (_type, filename) => {
+            if (filename !== "HEAD") return;
+            const newBranch = syncReadWorktreeBranch(worktreePath);
+            if (newBranch !== currentBranch) {
+              currentBranch = newBranch;
+              setupBranchWatcher();
+            }
+            notify();
+          });
+        } catch { return null; }
+      })()
+    : null;
+
+  // ── static watchers ───────────────────────────────────────────────────────
+
+  const staticWatchers = [
     makeWatcher(refsHeadsDir, (f) => f === parentBranch),
-  ...(worktreeBranch ? [
-      // Watch without filename filter — the branch name changes after /rename-branch,
-      // so a filter on the original name would miss all subsequent commits.
-      makeWatcher(join(refsHeadsDir, dirname(worktreeBranch))),
-    ] : []),
     makeWatcher(mainGitDir, (f) => f === "packed-refs"),
     ...(existsSync(reftableDir) ? [makeWatcher(reftableDir)] : []),
   ];
-  const watchers: FSWatcher[] = rawWatchers.filter((w): w is FSWatcher => w !== null);
 
-  if (rawWatchers.length > 0 && watchers.length === 0) {
-    // All watcher setups failed — tell the client so it can tighten its poll interval
+  const allWatchers = [...staticWatchers, branchWatcher, headWatcher]
+    .filter((w): w is FSWatcher => w !== null);
+
+  if (allWatchers.length === 0) {
     socket.write(JSON.stringify({ watchDegraded: true }) + "\n");
   }
 
   const cleanup = () => {
-    watchers.forEach(w => { try { w.close(); } catch { /* */ } });
+    [...staticWatchers, branchWatcher, headWatcher]
+      .forEach(w => { if (w) { try { w.close(); } catch { /* */ } } });
     if (debounce) { clearTimeout(debounce); debounce = null; }
   };
   socket.once("close", cleanup);
