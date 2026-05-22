@@ -33,6 +33,7 @@ import {
   resolveSandboxMountsEffect,
   startPitEscapeEffect,
 } from "./launcher.ts";
+import { setPitEscapeSocket } from "./env.ts";
 import { spawnSync } from "node:child_process";
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -195,8 +196,7 @@ export const program = Effect.gen(function* () {
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
     const socketOpt = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
-    // eslint-disable-next-line functional/immutable-data -- process.env must be set before bwrap inherits the environment
-    if (Option.isSome(socketOpt)) process.env.PIT_ESCAPE_SOCKET = socketOpt.value;
+    if (Option.isSome(socketOpt)) setPitEscapeSocket(socketOpt.value);
 
     yield* launchEffect(
       result.cwd,
@@ -224,8 +224,7 @@ export const program = Effect.gen(function* () {
     }
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
     const socketOpt2 = yield* startPitEscapeEffect(cwd, session.meta.id, settingsPath);
-    // eslint-disable-next-line functional/immutable-data -- process.env must be set before bwrap inherits the environment
-    if (Option.isSome(socketOpt2)) process.env.PIT_ESCAPE_SOCKET = socketOpt2.value;
+    if (Option.isSome(socketOpt2)) setPitEscapeSocket(socketOpt2.value);
 
     yield* launchEffect(
       cwd,
@@ -240,8 +239,7 @@ export const program = Effect.gen(function* () {
   const result = yield* worktreeCheckEffect(undefined, noTree);
   const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
   const socketOpt3 = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
-  // eslint-disable-next-line functional/immutable-data -- process.env must be set before bwrap inherits the environment
-  if (Option.isSome(socketOpt3)) process.env.PIT_ESCAPE_SOCKET = socketOpt3.value;
+  if (Option.isSome(socketOpt3)) setPitEscapeSocket(socketOpt3.value);
 
   if (userManagingSession) {
     yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath);

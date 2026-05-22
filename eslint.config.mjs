@@ -171,6 +171,13 @@ export default [
       ],
     },
   },
+  // ── env.ts: process.env mutation ──────────────────────────────────────────
+  {
+    ...base,
+    files: ["pit/env.ts"],
+    rules: { "functional/immutable-data": "off" },
+  },
+
   // ── domain layers: no display logic ──────────────────────────────────────
   //
   // Any folder named core/ is domain logic — no console.* or process.exit.
