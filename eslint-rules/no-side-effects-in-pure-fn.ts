@@ -128,41 +128,19 @@ const rule: TSESLint.RuleModule<MessageIds, Options> = {
     const inPure = (): boolean =>
       pureStack.length > 0 && pureStack[pureStack.length - 1] === true;
 
+    const reportIfPure = (node: TSESTree.Node, messageId: MessageIds): void => {
+      if (inPure()) context.report({ node, messageId });
+    };
+
     return {
-      FunctionDeclaration: enterFn,
-      "FunctionDeclaration:exit": exitFn,
-      ArrowFunctionExpression: enterFn,
-      "ArrowFunctionExpression:exit": exitFn,
-      FunctionExpression: enterFn,
-      "FunctionExpression:exit": exitFn,
+      ":function"(node) { enterFn(node as FunctionNode); },
+      ":function:exit": exitFn,
 
-      AwaitExpression(node: TSESTree.AwaitExpression) {
-        if (inPure()) context.report({ node, messageId: "noAwait" });
-      },
-
-      YieldExpression(node: TSESTree.YieldExpression) {
-        if (inPure()) context.report({ node, messageId: "noYield" });
-      },
-
-      "CallExpression[callee.object.name='console']"(node: TSESTree.CallExpression) {
-        if (inPure()) context.report({ node, messageId: "noConsole" });
-      },
-
-      ForStatement(node: TSESTree.ForStatement) {
-        if (inPure()) context.report({ node, messageId: "noLoop" });
-      },
-      WhileStatement(node: TSESTree.WhileStatement) {
-        if (inPure()) context.report({ node, messageId: "noLoop" });
-      },
-      DoWhileStatement(node: TSESTree.DoWhileStatement) {
-        if (inPure()) context.report({ node, messageId: "noLoop" });
-      },
-      ForInStatement(node: TSESTree.ForInStatement) {
-        if (inPure()) context.report({ node, messageId: "noLoop" });
-      },
-      ForOfStatement(node: TSESTree.ForOfStatement) {
-        if (inPure()) context.report({ node, messageId: "noLoop" });
-      },
+      AwaitExpression: (node) => reportIfPure(node, "noAwait"),
+      YieldExpression: (node) => reportIfPure(node, "noYield"),
+      "CallExpression[callee.object.name='console']": (node) => reportIfPure(node, "noConsole"),
+      "ForStatement, WhileStatement, DoWhileStatement, ForInStatement, ForOfStatement":
+        (node) => reportIfPure(node, "noLoop"),
     };
   },
 };
