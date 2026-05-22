@@ -20,10 +20,10 @@ type LocDiffResponse =
  * Returns undefined when both are zero (hides the status item).
  * Exported for testing.
  */
-export function formatLoc(
+export const formatLoc = (
   insertions: number,
   deletions: number,
-): string | undefined {
+): string | undefined => {
   if (insertions === 0 && deletions === 0) return undefined;
   if (insertions > 0 && deletions === 0) return `+${insertions}`;
   if (insertions === 0 && deletions > 0) return `\u2212${deletions}`;

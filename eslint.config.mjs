@@ -141,4 +141,31 @@ export default [
       ],
     },
   },
+  // ── domain layers: no display logic ──────────────────────────────────────
+  //
+  // Any folder named core/ is domain logic — no console.* or process.exit.
+  // Covers pit/core/** and pit/escape/core/** with a single glob.
+  // Existing violations carry eslint-disable comments explaining why they are
+  // pending migration to a boundary.
+  {
+    ...base,
+    files: ["pit/**/core/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.object.name='console']",
+          message:
+            "core/ is domain logic — console.* belongs at a boundary (pit.ts or escape/server.ts).",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='process'][callee.property.name='exit']",
+          message:
+            "core/ is domain logic — process.exit belongs at a boundary.",
+        },
+      ],
+    },
+  },
+
 ];

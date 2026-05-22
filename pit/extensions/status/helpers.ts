@@ -22,14 +22,16 @@ import { socketLines } from "../escape/frames.ts";
 
 const FALLBACK_POLL_MS = 5 * 60_000;
 
-export function useEscapeStatus(
+export const useEscapeStatus = (
   pi: ExtensionAPI,
   socketPath: string,
   op: string,
   statusKey: string,
   format: (resp: unknown) => string | undefined,
-): void {
+): void => {
+  // eslint-disable-next-line functional/no-let -- mutable timer ref for setInterval handle; no pure alternative for clearing by reference
   let fallbackTimer: ReturnType<typeof setInterval> | undefined;
+  // eslint-disable-next-line functional/no-let -- mutable ref to active subscribe socket; destroyed on session_shutdown
   let subSocket: Socket | undefined;
 
   const updateStatusEffect = (
@@ -40,9 +42,9 @@ export function useEscapeStatus(
       setStatus(format(resp));
     });
 
-  function openSubscription(
+  const openSubscription = (
     setStatus: (text: string | undefined) => void,
-  ): void {
+  ): void => {
     const sock = createConnection(socketPath);
     subSocket = sock;
 

@@ -5,7 +5,7 @@
 
 import * as Effect from "effect/Effect";
 import { FileSystem } from "@effect/platform/FileSystem";
-import { readPitConfig, writeFilteredSettings } from "../../core/sandbox/io.ts";
+import { readPitConfig, writeFilteredSettings } from "../../../core/sandbox/io.ts";
 
 export const opRefreshSettings = (
   agentDir: string,

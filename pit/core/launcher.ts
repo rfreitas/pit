@@ -90,6 +90,7 @@ export const buildSandboxMountsEffect = (
       ? (yield* resolveUnversionedDirs(parentRepo).pipe(
           Effect.catchAll((e) =>
             Effect.sync(() => {
+              // eslint-disable-next-line no-restricted-syntax -- degradation notice: overlay unavailable is non-fatal; propagating as typed signal requires refactoring buildSandboxMountsEffect return type
               console.warn(`pit: overlay mounts unavailable: ${String(e)}`);
               return [] as string[];
             }),
@@ -176,6 +177,7 @@ export const bwrapLaunch = (
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
   if (settingsPath) try { unlinkSync(settingsPath); } catch { /* already gone */ }
+  // eslint-disable-next-line no-restricted-syntax -- bwrapLaunch never returns; process.exit is the intended outcome after spawnSync
   process.exit(result.status ?? 1);
 };
 
@@ -198,6 +200,7 @@ export const launchEffect = (
         ));
         bwrapLaunch(cwd, piArgs, m, settingsPath); // never returns
       }
+      // eslint-disable-next-line no-restricted-syntax -- degradation notice: sandbox unavailable is non-fatal; bwrap absence is checked here rather than at the boundary to keep launch logic self-contained
       console.warn("pit: bwrap not found — running without sandbox");
     }
     process.chdir(cwd);
@@ -242,12 +245,18 @@ export const startPitEscapeEffect = (
       });
 
       const timer = setTimeout(() => {
+        // eslint-disable-next-line no-restricted-syntax -- degradation notice: escape timeout is non-fatal; git tool and settings refresh degrade gracefully
         console.warn("pit: pit-escape timed out — git tool and settings refresh unavailable");
         resume(Effect.succeed(Option.none()));
       }, 3000);
 
       child.stdout!.once("data", () => { clearTimeout(timer); resume(Effect.succeed(Option.some(socketPath))); });
-      child.once("error", (err) => { clearTimeout(timer); console.warn(`pit: pit-escape: ${err.message}`); resume(Effect.succeed(Option.none())); });
+      child.once("error", (err) => {
+        clearTimeout(timer);
+        // eslint-disable-next-line no-restricted-syntax -- degradation notice: escape spawn failure is non-fatal, session continues without git tool
+        console.warn(`pit: pit-escape: ${err.message}`);
+        resume(Effect.succeed(Option.none()));
+      });
       child.once("exit", (code) => { if (code !== 0) { clearTimeout(timer); resume(Effect.succeed(Option.none())); } });
     });
   });

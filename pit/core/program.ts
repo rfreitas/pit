@@ -161,6 +161,7 @@ export const showPicker = async (
     }
     return { sessionFile: selectedPath, meta: pitEntry.data };
   } catch {
+    // eslint-disable-next-line no-restricted-syntax -- degradation notice: session metadata unreadable is non-fatal; recovery path opens session directly
     console.warn("pit: could not read session metadata — opening session directly");
     await Effect.runPromise(
       launchEffect(process.cwd(), ["--session", selectedPath, ...piArgs], sandbox).pipe(
@@ -180,6 +181,7 @@ export const program = Effect.gen(function* () {
 
   if (filteredArgv.length > 0 && PI_SUBCOMMANDS.has(filteredArgv[0])) {
     const r = spawnSync("pi", filteredArgv, { stdio: "inherit", shell: false });
+    // eslint-disable-next-line no-restricted-syntax -- pi subcommand forwarding: process.exit propagates pi's own exit code directly
     process.exit(r.status ?? 0);
   }
 
@@ -223,7 +225,8 @@ export const program = Effect.gen(function* () {
     const sandboxMounts = yield* resolveSandboxMountsEffect(cwd, sandbox);
     const session = yield* findOrCreateLinkedSession(cwd, AGENT_DIR, sandboxMounts);
     if (session.kind === "new") {
-      console.error("pit: already in a git worktree — no pit session found, running no-tree");
+      // eslint-disable-next-line no-restricted-syntax -- informational: already in a linked worktree with no pit session; running no-tree is the correct fallback
+    console.error("pit: already in a git worktree — no pit session found, running no-tree");
     }
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
     const socketOpt2 = yield* startPitEscapeEffect(cwd, session.meta.id, settingsPath);

@@ -5,7 +5,7 @@
 
 import * as Effect from "effect/Effect";
 import { type NodeContext } from "@effect/platform-node/NodeContext";
-import { resolveMainRepo, readWorktreeBranch } from "../../core/git/utils.ts";
+import { resolveMainRepo, readWorktreeBranch } from "../../../core/git/utils.ts";
 import { gitEffect, detectParentBranch } from "./git.ts";
 
 export const opLocDiff = (

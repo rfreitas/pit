@@ -14,12 +14,12 @@ import type { Socket } from "node:net";
 import { unlinkSync } from "node:fs";
 import * as Effect from "effect/Effect";
 import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
-import { gitEffect } from "./ops/git.ts";
-import { opGetState } from "./ops/state.ts";
-import { opMergeToParent, opIsMerged } from "./ops/merge.ts";
-import { opLocDiff } from "./ops/diff.ts";
-import { opRefreshSettings } from "./ops/settings.ts";
-import { handleSubscribe } from "./ops/subscribe.ts";
+import { gitEffect } from "./core/ops/git.ts";
+import { opGetState } from "./core/ops/state.ts";
+import { opMergeToParent, opIsMerged } from "./core/ops/merge.ts";
+import { opLocDiff } from "./core/ops/diff.ts";
+import { opRefreshSettings } from "./core/ops/settings.ts";
+import { handleSubscribe } from "./core/ops/subscribe.ts";
 
 const [, , socketPath, worktreePath, agentDir, pitDir, hostSettingsPath] =
   process.argv;

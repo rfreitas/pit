@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
 import { type NodeContext } from "@effect/platform-node/NodeContext";
-import { resolveMainRepo, readWorktreeBranch, readWorktreeGitdir } from "../../core/git/utils.ts";
+import { resolveMainRepo, readWorktreeBranch, readWorktreeGitdir } from "../../../core/git/utils.ts";
 import { gitEffect, detectParentBranch } from "./git.ts";
 
 export const opGetState = (
