@@ -346,6 +346,8 @@ describe("pit E2E — sandbox", () => {
   // findBwrap() uses fs.existsSync on hardcoded paths, not PATH lookup,
   // so we cannot fake its absence via environment when it is installed.
   it.skipIf(hasBwrap)("bwrap not found: warns on stderr and still launches pi", () => {
+    const repo = makeGitRepo(tmpDirs);
+    const agentDir = makeAgentDir(tmpDirs);
 
     const { stdout, stderr } = runPit(["--mode", "json", "hello"], {
       cwd: repo,
