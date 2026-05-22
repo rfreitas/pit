@@ -4,6 +4,7 @@ import tsparser from "@typescript-eslint/parser";
 import functional from "eslint-plugin-functional";
 import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
 import noBarrelImport from "./eslint-rules/no-barrel-import.mjs";
+import noSideEffectsInPureFn from "./eslint-rules/no-side-effects-in-pure-fn.mjs";
 
 // ── Two execution contexts, two sets of rules ─────────────────────────────────
 //
@@ -17,6 +18,13 @@ import noBarrelImport from "./eslint-rules/no-barrel-import.mjs";
 //   to require() it — that fails. Barrels work because they go through native
 //   import(). Sub-paths from effect-ecosystem packages must be avoided.
 //   MUST use barrel imports for @effect/* and effect/* packages.
+
+const localPlugin = {
+  rules: {
+    "no-barrel-import": noBarrelImport,
+    "no-side-effects-in-pure-fn": noSideEffectsInPureFn,
+  },
+};
 
 const base = {
   languageOptions: {
@@ -69,13 +77,36 @@ export default [
     }
   },
 
-  // ── pure functions only: no loops ───────────────────────────────────────────────
+  // ── plain-return functions: no side effects ──────────────────────────────
   //
-  // Loops in pure functions are always replaceable with .map/.reduce.
-  // Loops in IO functions (streaming, event handlers) are sometimes the
-  // safest option: MISRA/JPL forbid recursion because stack depth is
-  // unbounded and a stack overflow crashes silently.
-  // Rule scoped to */pure.ts only.
+  // Uses the TypeScript type-checker to identify functions whose return type
+  // is a plain value (not Effect / Promise / Generator / void). Those
+  // functions are pure by declaration and must not contain:
+  //   - await / yield     (async or Effect context)
+  //   - console.*         (display logic)
+  //   - for/while loops   (use .map/.filter/.reduce)
+  //
+  // Replaces the file-scoped functional/no-loop-statements rule on pure.ts
+  // (that rule is now a strict subset of this one).
+  {
+    ...base,
+    files: ["pit/**/*.ts"],
+    ignores: ["pit/tests/**"],
+    plugins: {
+      ...base.plugins,
+      local: { rules: { "no-side-effects-in-pure-fn": noSideEffectsInPureFn } },
+      local: localPlugin,
+    },
+    rules: {
+      "local/no-side-effects-in-pure-fn": "error",
+    },
+  },
+
+  // ── pure functions only: no loops ─────────────────────────────────────────
+  //
+  // Kept as a belt-and-suspenders fallback for pure.ts files in case
+  // parserServices is unavailable (e.g. editor lint without project config).
+  // The type-aware rule above is the primary enforcement.
   {
     ...base,
     files: ["pit/**/pure.ts"],
@@ -94,7 +125,7 @@ export default [
     ],
     plugins: {
       ...base.plugins,
-      local: { rules: { "no-barrel-import": noBarrelImport } },
+      local: localPlugin,
       "@eslint-community/eslint-comments": eslintComments,
     },
     rules: {

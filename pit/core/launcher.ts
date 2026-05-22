@@ -90,7 +90,7 @@ export const buildSandboxMountsEffect = (
       ? (yield* resolveUnversionedDirs(parentRepo).pipe(
           Effect.catchAll((e) =>
             Effect.sync(() => {
-              // eslint-disable-next-line no-restricted-syntax -- degradation notice: overlay unavailable is non-fatal; propagating as typed signal requires refactoring buildSandboxMountsEffect return type
+              // eslint-disable-next-line no-restricted-syntax, local/no-side-effects-in-pure-fn -- degradation notice: overlay unavailable is non-fatal; propagating as typed signal requires refactoring buildSandboxMountsEffect return type
               console.warn(`pit: overlay mounts unavailable: ${String(e)}`);
               return [] as string[];
             }),
