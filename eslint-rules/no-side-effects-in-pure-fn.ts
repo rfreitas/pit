@@ -12,6 +12,7 @@
  *   - await expressions     (async IO belongs in Effect)
  *   - yield expressions     (generator/Effect context)
  *   - console.* calls       (display logic)
+ *   - let declarations      (use const; rebinding is not needed in pure fns)
  *   - for/while/do loops    (use .map / .reduce / .filter instead)
  *
  * Purity is checked on the immediately-enclosing function only. A pure
@@ -51,7 +52,7 @@ const isPlainReturnType = (typeStr: string | null): boolean => {
 
 // ── rule ──────────────────────────────────────────────────────────────────────
 
-type MessageIds = "noAwait" | "noYield" | "noConsole" | "noLoop";
+type MessageIds = "noAwait" | "noYield" | "noConsole" | "noLet" | "noLoop";
 type Options = [];
 
 type FunctionNode =
@@ -75,6 +76,8 @@ const rule: TSESLint.RuleModule<MessageIds, Options> = {
         "yield in a plain-return function — plain functions cannot drive Effects.",
       noConsole:
         "console.* in a plain-return function — pure functions have no side effects.",
+      noLet:
+        "let in a plain-return function — use const; rebinding is a sign the function has state.",
       noLoop:
         "Loop in a plain-return function — use .map / .filter / .reduce instead.",
     },
@@ -139,6 +142,7 @@ const rule: TSESLint.RuleModule<MessageIds, Options> = {
       AwaitExpression: (node) => reportIfPure(node, "noAwait"),
       YieldExpression: (node) => reportIfPure(node, "noYield"),
       "CallExpression[callee.object.name='console']": (node) => reportIfPure(node, "noConsole"),
+      "VariableDeclaration[kind='let']": (node) => reportIfPure(node, "noLet"),
       "ForStatement, WhileStatement, DoWhileStatement, ForInStatement, ForOfStatement":
         (node) => reportIfPure(node, "noLoop"),
     };

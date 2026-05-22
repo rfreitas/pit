@@ -61,7 +61,6 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
   const reftableDir = join(mainGitDir, "reftable");
   const worktreeGitdir = syncReadWorktreeGitdir(worktreePath);
 
-  // eslint-disable-next-line functional/no-let -- mutable timer ref for debounced notify; no pure alternative for setTimeout handles
   let debounce: ReturnType<typeof setTimeout> | null = null;
 
   const notify = () => {
@@ -85,9 +84,7 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
   // Watches the exact branch ref file. When the branch is renamed (HEAD
   // changes), the HEAD watcher below updates currentBranch and replaces this.
 
-  // eslint-disable-next-line functional/no-let -- retargeted when HEAD changes on rename
   let currentBranch = syncReadWorktreeBranch(worktreePath);
-  // eslint-disable-next-line functional/no-let -- replaced when currentBranch changes
   let branchWatcher: FSWatcher | null = null;
 
   const setupBranchWatcher = (): void => {

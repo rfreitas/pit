@@ -44,7 +44,6 @@ export default [
     files: ["pit/**/*.ts"],
     ignores: ["pit/tests/**"],
     rules: {
-      "functional/no-let": "error",
       "functional/immutable-data": "error",
       "prefer-arrow-callback": "error",
       "func-style": ["error", "expression"],

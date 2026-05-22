@@ -29,9 +29,7 @@ export const useEscapeStatus = (
   statusKey: string,
   format: (resp: unknown) => string | undefined,
 ): void => {
-  // eslint-disable-next-line functional/no-let -- mutable timer ref for setInterval handle; no pure alternative for clearing by reference
   let fallbackTimer: ReturnType<typeof setInterval> | undefined;
-  // eslint-disable-next-line functional/no-let -- mutable ref to active subscribe socket; destroyed on session_shutdown
   let subSocket: Socket | undefined;
 
   const updateStatusEffect = (

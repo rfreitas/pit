@@ -99,7 +99,6 @@ process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
 
 const server = createServer((socket: Socket) => {
-  // eslint-disable-next-line functional/no-let -- bidirectional socket: Readable.toWeb transfers read ownership which prevents writing the response back. Manual buffer required here.
   let buf = "";
 
   socket.on("data", (chunk: Buffer) => {
