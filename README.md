@@ -170,29 +170,38 @@ Requires: Node.js ≥ 22, git. bwrap is optional but recommended for sandboxing 
 
 ```
 pit/                 pit itself (main package)
-  pit.ts             entry point
+  pit.ts             CLI boundary — entry point
   errors.ts          Effect tagged error types
-  git/               filesystem + subprocess utilities (Effect + @effect/platform)
-  sandbox/           bwrap mount spec builders
-  session/           pi session JSONL read/write
-  worktree/          git worktree creation
-  escape/
-    server.ts        pit-escape subprocess (runs outside sandbox)
-  extensions/        everything loaded by pi via jiti
-    escape/          escape protocol client + reload hook
-    commands/        pi slash commands (/merge, /rename-branch, ...)
-    tools/           pi tools (git)
-extensions/          Pi extensions loaded globally (auto-picked up by Pi)
-packages/            Extension subprojects with tests
-plans/               Design docs and notes
+  types.ts           shared TypeScript types
+  core/              domain logic — no display (see core/README.md)
+    constants.ts
+    launcher.ts
+    program.ts
+    git/
+    sandbox/
+    session/
+    worktree/
+  escape/            out-of-sandbox helper (see escape/README.md)
+    server.ts        socket boundary
+    core/ops/        op implementations
+  extensions/        loaded by Pi via jiti (see extensions/README.md)
+    commands/        slash commands (/merge, /rename-branch)
+    tools/           agent tools (git)
+    status/          footer status items
+    hooks/           session lifecycle hooks
+    escape/          escape server transport client
+eslint-rules/        custom ESLint rules (see eslint-rules/README.md)
+extensions/          Pi extensions loaded globally
+packages/            extension subprojects with tests
+plans/               design docs
 ```
 
 ### Development
 
 ```bash
 npm run typecheck   # TypeScript
-npm run lint        # ESLint — zero errors required; warnings are purity hints
-npm test            # Vitest (320 tests)
+npm run lint        # ESLint — zero errors required
+npm test            # Vitest
 ```
 
 See `pit/AGENTS.md` for the architecture overview, Effect usage, and import rules.
@@ -206,28 +215,13 @@ See `pit/AGENTS.md` for the architecture overview, Effect usage, and import rule
 
 ### pit-bundled extensions
 
-These load only inside pit sessions (never in plain `pi`):
+These load only inside pit sessions:
 
 | File | Kind | Purpose |
 |---|---|---|
-| `git.ts` | agent tool | `git` tool — permitted subcommands routed through pit-escape |
-| `merge.ts` | user command | `/merge` — merge worktree branch back to parent |
-| `rename-branch.ts` | user command | `/rename-branch` — rename branch from session topic |
-| `reload.ts` | hook | hooks `/reload` to refresh filtered settings before Pi reloads packages |
-
-Agent tools and user commands are kept in separate files: tools run autonomously and are tightly constrained; commands are human-initiated and trusted.
-
-`pit/escape-client.ts` is a shared socket client imported by all bundled files that communicate with pit-escape. It lives outside `bundled/` so it is not loaded as an extension itself.
-
-### Bundled command: `/rename-branch`
-
-Renames the current worktree branch based on the session topic while preserving the branch path prefix.
-
-```
-/rename-branch
-```
-
-- Only available in pit sessions (guards on `PIT_ESCAPE_SOCKET`).
-- Analyzes the conversation, asks the model for a branch slug.
-- Renames `pi/<id>` to `pi/<topic-slug>` — the prefix is always preserved.
-- Runs `git branch -m` directly inside the sandbox (no pit-escape needed: the bwrap mounts already include `refs/heads/pi/` as read-write).
+| `extensions/tools/git.ts` | agent tool | `git` — permitted subcommands routed through pit-escape |
+| `extensions/commands/merge/` | user command | `/merge` — merge worktree branch back to parent |
+| `extensions/commands/rename-branch/` | user command | `/rename-branch` — rename branch from session topic |
+| `extensions/status/loc-diff.ts` | status item | lines changed vs parent branch |
+| `extensions/status/merge-status.ts` | status item | merged/ahead/behind indicator |
+| `extensions/hooks/reload.ts` | hook | refreshes filtered settings before Pi reloads packages |

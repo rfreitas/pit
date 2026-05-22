@@ -1,17 +1,27 @@
-# Pit Extensions
+# pit/extensions
 
-Code in this directory runs **inside Pi** and is loaded via Pi's `jiti` extension loader.
+Loaded by Pi via jiti. All files here run inside the Pi process.
 
-### The Import Trap
-Jiti evaluates these files using CJS `require()`. Because of this, **sub-path imports from dual-format packages (like `effect/Effect`) will crash**. Jiti resolves the sub-path to the ESM file, attempts to `require()` it, and throws `Cannot find module`.
+## Import rule
 
-**Rule:** Always use barrel imports in this directory.
+Jiti resolves sub-path imports to the ESM file then tries to `require()` it — crashing with "Cannot find module". Use barrel imports for `@effect/*` packages.
+
 ```ts
-// ❌ FAILS (Jiti tries to require an ES module)
+// ❌ crashes under jiti
 import * as Effect from "effect/Effect";
 
-// ✅ WORKS (Jiti successfully requires the CJS main entry)
+// ✅ works
 import { Effect } from "effect";
 ```
 
-*Note: Core `pit` files (outside this directory) run directly under Node.js ESM. They DO use sub-path imports for a ~200ms startup performance gain. ESLint enforces this boundary.*
+Core pit files outside this directory run under Node.js ESM and must use sub-path imports. ESLint enforces both sides of this boundary.
+
+## Folder structure
+
+| Folder | Registers | Rule |
+|---|---|---|
+| `commands/` | `pi.registerCommand` | Each command has `index.ts` (boundary: registration + `catchAll`) and `effect.ts` (logic: propagates errors) |
+| `tools/` | `pi.registerTool` | Agent-facing; tightly constrained |
+| `status/` | Footer status items via `useEscapeStatus` in `helpers.ts` | — |
+| `hooks/` | `pi.on("session_*")` | Session lifecycle only |
+| `escape/` | — | Escape server transport client; shared by commands, tools, status, hooks |
