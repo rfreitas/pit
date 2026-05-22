@@ -46,9 +46,11 @@ import type { Socket } from "node:net";
 import { existsSync, readFileSync, statSync, unlinkSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { Readable } from "node:stream";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Chunk from "effect/Chunk";
+import * as Option from "effect/Option";
 import { make as makeCommand, start as startCommand, workingDirectory as commandWorkingDirectory } from "@effect/platform/Command";
 import { FileSystem } from "@effect/platform/FileSystem";
 import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
@@ -365,7 +367,7 @@ process.on("SIGTERM", cleanup);
 process.on("SIGINT", cleanup);
 
 const server = createServer((socket) => {
-  // eslint-disable-next-line functional/no-let -- socket accumulator; newline-framed protocol requires stateful buffer
+  // eslint-disable-next-line functional/no-let -- bidirectional socket: Readable.toWeb transfers read ownership which prevents writing the response back. Manual buffer required here.
   let buf = "";
 
   socket.on("data", (chunk: Buffer) => {

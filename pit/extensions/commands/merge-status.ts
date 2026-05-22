@@ -10,9 +10,10 @@
  * Only active when PIT_ESCAPE_SOCKET is set (running under pit with a worktree session).
  */
 
-import { Effect } from "effect";
+import { Effect, Stream } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createConnection, type Socket } from "node:net";
+import { socketLines } from "../escape/frames.ts";
 import { sendEffect } from "../escape/client.ts";
 
 type IsMergedResponse =
@@ -80,37 +81,26 @@ export default function (pi: ExtensionAPI) {
   ): void => {
     const sock = createConnection(socketPath!);
     subSocket = sock;
-    // eslint-disable-next-line functional/no-let -- socket accumulator; newline-framed protocol requires stateful buffer
-    let buf = "";
 
     sock.once("connect", () =>
       sock.write(JSON.stringify({ op: "subscribe" }) + "\n"),
     );
-    sock.on("data", (chunk: Buffer) => {
-      buf += chunk.toString("utf8");
-      // eslint-disable-next-line functional/no-let -- frame index updated each iteration of the streaming parse loop
-      let nl: number;
-       
-      while ((nl = buf.indexOf("\n")) !== -1) {
-        const line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        const msg = (() => {
-          try { return JSON.parse(line) as SubscribeMessage; }
-          catch { return null; }
-        })();
-        if (!msg) continue;
-        if ("event" in msg && msg.event === "ref-change") {
-          void Effect.runPromise(updateStatusEffect(setStatus));
-        }
-      }
-    });
-    sock.once("error", () => {
-      subSocket = undefined;
-    });
-    sock.once("close", () => {
-      subSocket = undefined;
-    });
-  }
+
+    // Stream-based frame parsing via socketLines — no manual buffer accumulation.
+    void Effect.runPromise(
+      socketLines(sock).pipe(
+        Stream.runForEach(line => Effect.sync(() => {
+          const msg = (() => { try { return JSON.parse(line) as SubscribeMessage; } catch { return null; } })();
+          if (msg && "event" in msg && msg.event === "ref-change") {
+            void Effect.runPromise(updateStatusEffect(setStatus));
+          }
+        })),
+      ),
+    ).catch(() => { /* socket closed — expected on session end */ });
+
+    sock.once("error", () => { subSocket = undefined; });
+    sock.once("close", () => { subSocket = undefined; });
+  };
 
   pi.on("session_start", async (_event, ctx) => {
     const setStatus = (text: string | undefined) =>
