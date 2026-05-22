@@ -166,36 +166,6 @@ Requires: Node.js ≥ 22, git. bwrap is optional but recommended for sandboxing 
 
 ---
 
-## Repository layout
-
-```
-pit/                 pit itself (main package)
-  pit.ts             CLI boundary — entry point
-  errors.ts          Effect tagged error types
-  types.ts           shared TypeScript types
-  core/              domain logic — no display (see core/README.md)
-    constants.ts
-    launcher.ts
-    program.ts
-    git/
-    sandbox/
-    session/
-    worktree/
-  escape/            out-of-sandbox helper (see escape/README.md)
-    server.ts        socket boundary
-    core/ops/        op implementations
-  extensions/        loaded by Pi via jiti (see extensions/README.md)
-    commands/        slash commands (/merge, /rename-branch)
-    tools/           agent tools (git)
-    status/          footer status items
-    hooks/           session lifecycle hooks
-    escape/          escape server transport client
-eslint-rules/        custom ESLint rules (see eslint-rules/README.md)
-extensions/          Pi extensions loaded globally
-packages/            extension subprojects with tests
-plans/               design docs
-```
-
 ### Development
 
 ```bash
@@ -204,24 +174,9 @@ npm run lint        # ESLint — zero errors required
 npm test            # Vitest
 ```
 
-See `pit/AGENTS.md` for the architecture overview, Effect usage, and import rules.
-
 ### Included extensions
 |---|---|
 | `/handoff` | Move the current session to a different project |
 | `/rename` | Ask the model to name the session |
 | `/chat-summary` | Summarise the conversation |
 | `sudo` | Prompt before running privileged commands |
-
-### pit-bundled extensions
-
-These load only inside pit sessions:
-
-| File | Kind | Purpose |
-|---|---|---|
-| `extensions/tools/git.ts` | agent tool | `git` — permitted subcommands routed through pit-escape |
-| `extensions/commands/merge/` | user command | `/merge` — merge worktree branch back to parent |
-| `extensions/commands/rename-branch/` | user command | `/rename-branch` — rename branch from session topic |
-| `extensions/status/loc-diff.ts` | status item | lines changed vs parent branch |
-| `extensions/status/merge-status.ts` | status item | merged/ahead/behind indicator |
-| `extensions/hooks/reload.ts` | hook | refreshes filtered settings before Pi reloads packages |
