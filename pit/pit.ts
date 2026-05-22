@@ -8,6 +8,8 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import { layer as NodeContextLayer } from "@effect/platform-node/NodeContext";
 import { program } from "./program.ts";
 import {
@@ -17,6 +19,23 @@ import {
   SessionWriteError,
   SettingsWriteError,
 } from "./errors.ts";
+
+// ── logger ───────────────────────────────────────────────────────────────────
+//
+// Plain renderer: writes the message directly to stderr without timestamps or
+// fiber IDs. Domain code uses Effect.logInfo / Effect.logWarning; this layer
+// controls the output format.
+
+const pitLogger = Logger.make(({ message }) =>
+  process.stderr.write(String(message) + "\n"),
+);
+
+const appLayer = Layer.merge(
+  NodeContextLayer,
+  Logger.replace(Logger.defaultLogger, pitLogger),
+);
+
+// ── run ───────────────────────────────────────────────────────────────────────
 
 type PitError =
   | WorktreeCreationError
@@ -48,7 +67,7 @@ Effect.runPromise(
         process.exit(1);
       }),
     ),
-    Effect.provide(NodeContextLayer),
+    Effect.provide(appLayer),
   ),
 ).catch((err: unknown) => {
   console.error(`pit: ${err instanceof Error ? err.message : String(err)}`);

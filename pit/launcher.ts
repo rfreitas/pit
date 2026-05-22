@@ -86,11 +86,9 @@ export const buildSandboxMountsEffect = (
     const overlayDirs = parentRepo
       ? (yield* resolveUnversionedDirs(parentRepo).pipe(
           Effect.catchAll((e) =>
-            Effect.sync(() => {
-              // eslint-disable-next-line local/no-side-effects-in-pure-fn -- degradation notice inside Effect.sync; the effect wrapper encodes the side effect
-              console.warn(`pit: overlay mounts unavailable: ${String(e)}`);
-              return [] as string[];
-            }),
+            Effect.logWarning(`pit: overlay mounts unavailable: ${String(e)}`).pipe(
+              Effect.as([] as string[]),
+            ),
           ),
         )).flatMap(rel => {
           const src = join(parentRepo, rel);
@@ -196,7 +194,7 @@ export const launchEffect = (
         ));
         bwrapLaunch(cwd, piArgs, m, settingsPath); // never returns
       }
-      console.warn("pit: bwrap not found — running without sandbox");
+      yield* Effect.logWarning("pit: bwrap not found — running without sandbox");
     }
     process.chdir(cwd);
     yield* Effect.promise(() => main(piArgs).catch(() => {}));
@@ -240,15 +238,21 @@ export const startPitEscapeEffect = (
       });
 
       const timer = setTimeout(() => {
-        console.warn("pit: pit-escape timed out — git tool and settings refresh unavailable");
-        resume(Effect.succeed(Option.none()));
+        resume(
+          Effect.logWarning("pit: pit-escape timed out — git tool and settings refresh unavailable").pipe(
+            Effect.as(Option.none<string>()),
+          ),
+        );
       }, 3000);
 
       child.stdout!.once("data", () => { clearTimeout(timer); resume(Effect.succeed(Option.some(socketPath))); });
       child.once("error", (err) => {
         clearTimeout(timer);
-        console.warn(`pit: pit-escape: ${err.message}`);
-        resume(Effect.succeed(Option.none()));
+        resume(
+          Effect.logWarning(`pit: pit-escape: ${err.message}`).pipe(
+            Effect.as(Option.none<string>()),
+          ),
+        );
       });
       child.once("exit", (code) => { if (code !== 0) { clearTimeout(timer); resume(Effect.succeed(Option.none())); } });
     });

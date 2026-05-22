@@ -22,12 +22,9 @@ export const createWorktreeEffect = ({
   worktree: string;
 }>): Effect.Effect<void, WorktreeCreationError, CommandExecutor> =>
   Effect.gen(function* () {
-    // eslint-disable-next-line no-restricted-syntax -- progress notice: worktree creation is user-visible; these lines are the canonical pit diagnostic output
-    console.error("pit: creating worktree");
-    // eslint-disable-next-line no-restricted-syntax -- progress notice: see above
-    console.error(`  branch:   ${branch}`);
-    // eslint-disable-next-line no-restricted-syntax -- progress notice: see above
-    console.error(`  worktree: ${worktree}`);
+    yield* Effect.logInfo("pit: creating worktree");
+    yield* Effect.logInfo(`  branch:   ${branch}`);
+    yield* Effect.logInfo(`  worktree: ${worktree}`);
     yield* commandExitCode(
       makeCommand("git", "worktree", "add", "-b", branch, worktree, "HEAD"),
     ).pipe(
@@ -57,8 +54,7 @@ export const recreateWorktreeEffect = ({
   CommandExecutor
 > =>
   Effect.gen(function* () {
-    // eslint-disable-next-line no-restricted-syntax -- progress notice: recreate attempt is user-visible diagnostic
-    console.error("pit: worktree missing, attempting to recreate…");
+    yield* Effect.logWarning("pit: worktree missing, attempting to recreate…");
     const exists = yield* branchExists(repo, branch);
     if (!exists) {
       yield* Effect.fail(new WorktreeMissingError({ branch }));
@@ -72,8 +68,7 @@ export const recreateWorktreeEffect = ({
       ).pipe(
         Effect.flatMap((code) =>
           code === 0
-            // eslint-disable-next-line no-restricted-syntax -- progress notice: recreate success is user-visible diagnostic
-            ? Effect.sync(() => console.error(`pit: worktree recreated at ${worktree}`))
+            ? Effect.logInfo(`pit: worktree recreated at ${worktree}`)
             : Effect.fail(new WorktreeCreationError({ message: `git worktree add exited ${code}` })),
         ),
         Effect.catchTag("WorktreeCreationError", (e) => Effect.fail(e)),
