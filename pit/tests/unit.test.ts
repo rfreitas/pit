@@ -27,12 +27,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, buildAnnouncement, buildSessionLines, systemPromptArgs } from "../session/pure.ts";
-import { setupNewSession } from "../session/io.ts";
-import { formatSandboxNote, buildSandboxMountSpec, applyDenylist } from "../sandbox/pure.ts";
-import { readPitConfig, writeFilteredSettings, resolveUnversionedDirs } from "../sandbox/io.ts";
-import { isLinkedWorktree, resolveMainRepo, readWorktreeBranch } from "../git/utils.ts";
-import { parseFlags, buildNoTreeMeta, buildWorktreeMeta } from "../worktree/pure.ts";
+import { cwdToBucket, buildAnnouncement, buildSessionLines, systemPromptArgs } from "../core/session/pure.ts";
+import { setupNewSession } from "../core/session/io.ts";
+import { formatSandboxNote, buildSandboxMountSpec, applyDenylist } from "../core/sandbox/pure.ts";
+import { readPitConfig, writeFilteredSettings, resolveUnversionedDirs } from "../core/sandbox/io.ts";
+import { isLinkedWorktree, resolveMainRepo, readWorktreeBranch } from "../core/git/utils.ts";
+import { parseFlags, buildNoTreeMeta, buildWorktreeMeta } from "../core/worktree/pure.ts";
 import type { WorktreeResult, SandboxMounts, OverlayMount, PitMetadata } from "../types.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>

@@ -2,9 +2,9 @@
  * Tests for useEscapeStatus — the shared subscribe+poll lifecycle helper.
  *
  * Strategy:
- *   - vi.mock ../extensions/escape/client.ts  →  sendEffect returns preset Effects
- *   - vi.mock node:net                         →  createConnection returns a fake socket
- *   - vi.mock ../extensions/escape/frames.ts  →  socketLines returns a controlled Stream
+ *   - vi.mock ../extensions/status/client.ts  →  sendEffect returns preset Effects
+ *   - vi.mock node:net                          →  createConnection returns a fake socket
+ *   - vi.mock ../extensions/status/frames.ts   →  socketLines returns a controlled Stream
  *
  * What's under test:
  *   - Initial fetch on session_start calls sendEffect with the correct op
@@ -22,7 +22,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ── mocks (hoisted) ───────────────────────────────────────────────────────────
 
-vi.mock("../extensions/escape/client.ts", () => ({
+vi.mock("../extensions/status/client.ts", () => ({
   sendEffect: vi.fn(),
 }));
 
@@ -30,14 +30,14 @@ vi.mock("node:net", () => ({
   createConnection: vi.fn(),
 }));
 
-vi.mock("../extensions/escape/frames.ts", () => ({
+vi.mock("../extensions/status/frames.ts", () => ({
   socketLines: vi.fn(),
 }));
 
-import { sendEffect } from "../extensions/escape/client.ts";
+import { sendEffect } from "../extensions/status/client.ts";
 import { createConnection } from "node:net";
-import { socketLines } from "../extensions/escape/frames.ts";
-import { useEscapeStatus } from "../extensions/escape/use-escape-status.ts";
+import { socketLines } from "../extensions/status/frames.ts";
+import { useEscapeStatus } from "../extensions/status/use-escape-status.ts";
 
 // ── fake socket ───────────────────────────────────────────────────────────────
 

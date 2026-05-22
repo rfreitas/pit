@@ -4,7 +4,7 @@
  */
 
 import { join } from "node:path";
-import type { SandboxMounts, OverlayMount } from "../types.ts";
+import type { SandboxMounts, OverlayMount } from "../../types.ts";
 
 // ── sandbox announcement ──────────────────────────────────────────────────────
 

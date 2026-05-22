@@ -13,10 +13,10 @@ import type {
   WorktreeResult,
   SandboxMounts,
   LinkedWorktreeSession,
-} from "../types.ts";
+} from "../../types.ts";
 import { cwdToBucket, buildSessionLines } from "./pure.ts";
 import { genId, buildNoTreeMeta } from "../worktree/pure.ts";
-import { SessionWriteError } from "../errors.ts";
+import { SessionWriteError } from "../../errors.ts";
 
 // ── session discovery ─────────────────────────────────────────────────────────
 

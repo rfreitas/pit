@@ -22,8 +22,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { setupNewSession } from "../session/io.ts";
-import { cwdToBucket } from "../session/pure.ts";
+import { setupNewSession } from "../core/session/io.ts";
+import { cwdToBucket } from "../core/session/pure.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));

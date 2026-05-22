@@ -19,8 +19,8 @@ import { Effect } from "effect";
 import { NodeContext } from "@effect/platform-node";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { setupNewSession, findOrCreateLinkedSession } from "../session/io.ts";
-import { cwdToBucket } from "../session/pure.ts";
+import { setupNewSession, findOrCreateLinkedSession } from "../core/session/io.ts";
+import { cwdToBucket } from "../core/session/pure.ts";
 import type { WorktreeResult, PitMetadata } from "../types.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>

@@ -19,12 +19,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { setupNewSession, findPitSession } from "../session/io.ts";
-import { listRepoWorktrees } from "../git/utils.ts";
+import { setupNewSession, findPitSession } from "../core/session/io.ts";
+import { listRepoWorktrees } from "../core/git/utils.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
-import { cwdToBucket } from "../session/pure.ts";
+import { cwdToBucket } from "../core/session/pure.ts";
 import type { WorktreeResult, PitMetadata } from "../types.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────

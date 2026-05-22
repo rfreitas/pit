@@ -43,7 +43,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import gitExt from "../extensions/tools/git.ts";
-import mergeExt from "../extensions/commands/merge.ts";
+import mergeExt from "../extensions/commands/merge/index.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

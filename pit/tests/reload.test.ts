@@ -27,7 +27,7 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import reloadExt from "../extensions/escape/reload.ts";
+import reloadExt from "../extensions/status/reload.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

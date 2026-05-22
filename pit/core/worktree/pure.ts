@@ -5,7 +5,7 @@
 
 import { join, dirname, basename } from "node:path";
 import { randomBytes } from "node:crypto";
-import type { PitMetadata, ParsedFlags } from "../types.ts";
+import type { PitMetadata, ParsedFlags } from "../../types.ts";
 
 // ── id generation ─────────────────────────────────────────────────────────────
 

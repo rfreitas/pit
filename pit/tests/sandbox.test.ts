@@ -25,7 +25,7 @@ import { NodeContext } from "@effect/platform-node";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { writeFilteredSettings } from "../sandbox/io.ts";
+import { writeFilteredSettings } from "../core/sandbox/io.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));

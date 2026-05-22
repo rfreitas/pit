@@ -9,8 +9,8 @@ import { FileSystem } from "@effect/platform/FileSystem";
 import { CommandExecutor } from "@effect/platform/CommandExecutor";
 import { gitRepoRoot, branchExists } from "../git/utils.ts";
 import { genId, buildNoTreeMeta, buildWorktreeMeta } from "./pure.ts";
-import type { PitMetadata, WorktreeResult } from "../types.ts";
-import { WorktreeCreationError, WorktreeMissingError } from "../errors.ts";
+import type { PitMetadata, WorktreeResult } from "../../types.ts";
+import { WorktreeCreationError, WorktreeMissingError } from "../../errors.ts";
 
 // ── worktree creation / recreation ────────────────────────────────────────────
 

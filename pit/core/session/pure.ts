@@ -5,7 +5,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import type { PitMetadata, WorktreeResult, SandboxMounts } from "../types.ts";
+import type { PitMetadata, WorktreeResult, SandboxMounts } from "../../types.ts";
 import { formatSandboxNote } from "../sandbox/pure.ts";
 
 // ── bucket naming ─────────────────────────────────────────────────────────────

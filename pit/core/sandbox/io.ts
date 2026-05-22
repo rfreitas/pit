@@ -10,9 +10,9 @@ import { make as makeCommand, lines as commandLines } from "@effect/platform/Com
 import { FileSystem } from "@effect/platform/FileSystem";
 import { CommandExecutor } from "@effect/platform/CommandExecutor";
 import type { PlatformError } from "@effect/platform/Error";
-import type { PitConfig } from "../types.ts";
+import type { PitConfig } from "../../types.ts";
 import { applyDenylist } from "./pure.ts";
-import { SettingsWriteError } from "../errors.ts";
+import { SettingsWriteError } from "../../errors.ts";
 
 // ── unversioned dir discovery ─────────────────────────────────────────────────
 

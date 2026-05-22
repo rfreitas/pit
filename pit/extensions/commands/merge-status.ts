@@ -8,7 +8,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { useEscapeStatus } from "../escape/use-escape-status.ts";
+import { useEscapeStatus } from "../status/use-escape-status.ts";
 
 type IsMergedResponse =
   | {
