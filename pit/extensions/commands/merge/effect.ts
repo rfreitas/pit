@@ -8,7 +8,7 @@
 
 import { Effect } from "effect";
 import type { ExtensionCommandContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { sendEffect, isOk, errMsg, type EscapeResult } from "../../status/client.ts";
+import { sendEffect, isOk, errMsg, type EscapeResult } from "../../escape/client.ts";
 
 type StateResponse = {
   branch: string | null;

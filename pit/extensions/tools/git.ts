@@ -8,7 +8,7 @@
 import { Effect } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { sendEffect } from "../status/client.ts";
+import { sendEffect } from "../escape/client.ts";
 
 const ALLOWED = [
   "add",

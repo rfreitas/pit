@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatLoc } from "../extensions/commands/loc-diff.ts";
+import { formatLoc } from "../extensions/status/loc-diff.ts";
 
 describe("formatLoc", () => {
   it("returns undefined when both are zero", () => {

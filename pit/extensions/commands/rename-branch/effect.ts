@@ -9,7 +9,7 @@ import { NodeContext } from "@effect/platform-node";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { readWorktreeBranch } from "../../../core/git/utils.ts";
-import { sendEffect, errMsg } from "../../status/client.ts";
+import { sendEffect, errMsg } from "../../escape/client.ts";
 
 // ── git context ────────────────────────────────────────────────────────────
 

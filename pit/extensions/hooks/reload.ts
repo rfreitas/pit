@@ -6,7 +6,7 @@
 
 import { Effect } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { sendEffect } from "./client.ts";
+import { sendEffect } from "../escape/client.ts";
 
 export default function (pi: ExtensionAPI) {
   const socketPath = process.env.PIT_ESCAPE_SOCKET;

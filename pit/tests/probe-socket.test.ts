@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { probeSocket } from "../extensions/status/client.ts";
+import { probeSocket } from "../extensions/escape/client.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

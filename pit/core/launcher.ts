@@ -22,7 +22,7 @@ import {
 } from "./git/utils.ts";
 import { resolveUnversionedDirs } from "./sandbox/io.ts";
 import { buildSandboxMountSpec } from "./sandbox/pure.ts";
-import { probeSocketEffect } from "../extensions/status/client.ts";
+import { probeSocketEffect } from "../extensions/escape/client.ts";
 import { SocketAliveError } from "../errors.ts";
 
 // ── extension args ────────────────────────────────────────────────────────────
@@ -30,11 +30,11 @@ import { SocketAliveError } from "../errors.ts";
 export const extensionArgs = (): string[] => {
   const d = resolve(dirname(process.argv[1]));
   return [
-    join(d, "extensions", "status", "reload.ts"),
+    join(d, "extensions", "hooks", "reload.ts"),
     join(d, "extensions", "tools", "git.ts"),
     join(d, "extensions", "commands", "merge", "index.ts"),
-    join(d, "extensions", "commands", "loc-diff.ts"),
-    join(d, "extensions", "commands", "merge-status.ts"),
+    join(d, "extensions", "status", "loc-diff.ts"),
+    join(d, "extensions", "status", "merge-status.ts"),
     join(d, "extensions", "commands", "rename-branch", "index.ts"),
   ].flatMap((f) => ["--extension", f]);
 };

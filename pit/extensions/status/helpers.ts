@@ -17,8 +17,8 @@
 import { Effect, Stream } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createConnection, type Socket } from "node:net";
-import { sendEffect } from "./client.ts";
-import { socketLines } from "./frames.ts";
+import { sendEffect } from "../escape/client.ts";
+import { socketLines } from "../escape/frames.ts";
 
 const FALLBACK_POLL_MS = 5 * 60_000;
 
