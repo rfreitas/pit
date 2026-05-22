@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { probeSocket } from "../extensions/escape/client.ts";
+import { probeSocket } from "../src/extensions/escape/client.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -28,9 +28,7 @@ const TEST_SANDBOX = path.join(
 );
 const PIT_ESCAPE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "escape",
-  "server.ts"
+  "..","src","escape","server.ts"
 );
 
 const tmpDirs: string[] = [];

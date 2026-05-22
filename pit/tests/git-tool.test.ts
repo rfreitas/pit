@@ -22,7 +22,7 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import gitToolExt from "../extensions/tools/git.ts";
+import gitToolExt from "../src/extensions/tools/git.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

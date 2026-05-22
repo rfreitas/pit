@@ -11,14 +11,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import { layer as NodeContextLayer } from "@effect/platform-node/NodeContext";
-import { program } from "./program.ts";
+import { program } from "./src/program.ts";
 import {
   WorktreeCreationError,
   WorktreeMissingError,
   SocketAliveError,
   SessionWriteError,
   SettingsWriteError,
-} from "./errors.ts";
+} from "./src/errors.ts";
 
 // ── logger ───────────────────────────────────────────────────────────────────
 //

@@ -22,7 +22,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ── mocks (hoisted) ───────────────────────────────────────────────────────────
 
-vi.mock("../extensions/escape/client.ts", () => ({
+vi.mock("../src/extensions/escape/client.ts", () => ({
   sendEffect: vi.fn(),
 }));
 
@@ -30,14 +30,14 @@ vi.mock("node:net", () => ({
   createConnection: vi.fn(),
 }));
 
-vi.mock("../extensions/escape/frames.ts", () => ({
+vi.mock("../src/extensions/escape/frames.ts", () => ({
   socketLines: vi.fn(),
 }));
 
-import { sendEffect } from "../extensions/escape/client.ts";
+import { sendEffect } from "../src/extensions/escape/client.ts";
 import { createConnection } from "node:net";
-import { socketLines } from "../extensions/escape/frames.ts";
-import { useEscapeStatus } from "../extensions/status/helpers.ts";
+import { socketLines } from "../src/extensions/escape/frames.ts";
+import { useEscapeStatus } from "../src/extensions/status/helpers.ts";
 
 // ── fake socket ───────────────────────────────────────────────────────────────
 

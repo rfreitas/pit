@@ -32,6 +32,7 @@ const TEST_SANDBOX = path.join(
 const PIT_ESCAPE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
+  "src",
   "escape",
   "server.ts"
 );

@@ -27,12 +27,12 @@ import { SocketAliveError } from "./errors.ts";
 export const extensionArgs = (): string[] => {
   const d = resolve(dirname(process.argv[1]));
   return [
-    join(d, "extensions", "hooks", "reload.ts"),
-    join(d, "extensions", "tools", "git.ts"),
-    join(d, "extensions", "commands", "merge", "index.ts"),
-    join(d, "extensions", "status", "loc-diff.ts"),
-    join(d, "extensions", "status", "merge-status.ts"),
-    join(d, "extensions", "commands", "rename-branch", "index.ts"),
+    join(d, "src", "extensions", "hooks", "reload.ts"),
+    join(d, "src", "extensions", "tools", "git.ts"),
+    join(d, "src", "extensions", "commands", "merge", "index.ts"),
+    join(d, "src", "extensions", "status", "loc-diff.ts"),
+    join(d, "src", "extensions", "status", "merge-status.ts"),
+    join(d, "src", "extensions", "commands", "rename-branch", "index.ts"),
   ].flatMap((f) => ["--extension", f]);
 };
 
@@ -220,7 +220,7 @@ export const startPitEscapeEffect = (
     yield* Effect.sync(() => { try { unlinkSync(socketPath); } catch { /* gone */ } });
 
     const scriptDir = resolve(dirname(process.argv[1]));
-    const escapeScript = join(scriptDir, "escape", "server.ts");
+    const escapeScript = join(scriptDir, "src", "escape", "server.ts");
 
     return yield* Effect.async<Option.Option<string>>((resume) => {
       const child = spawn(

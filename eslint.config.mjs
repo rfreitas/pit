@@ -120,7 +120,7 @@ export default [
     files: ["pit/**/*.ts"],
     ignores: [
       "pit/tests/**",
-      "pit/extensions/**",
+      "pit/src/extensions/**",
     ],
     plugins: {
       ...base.plugins,
@@ -144,7 +144,7 @@ export default [
   // ── extension files: no sub-path imports for effect ecosystem ──────────────
   {
     ...base,
-    files: ["pit/extensions/**/*.ts"],
+    files: ["pit/src/extensions/**/*.ts"],
     rules: {
       // Jiti resolves sub-path imports (e.g. effect/Effect, @effect/platform/FileSystem)
       // using ["node","import"] conditions, which finds the ESM file, then tries
@@ -174,7 +174,7 @@ export default [
   // ── env.ts: process.env mutation ──────────────────────────────────────────
   {
     ...base,
-    files: ["pit/env.ts"],
+    files: ["pit/src/env.ts"],
     rules: { "functional/immutable-data": "off" },
   },
 
