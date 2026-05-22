@@ -4,20 +4,20 @@
  * Strategy:
  *   - vi.mock ../extensions/escape/client.ts  →  sendEffect returns preset Effects
  *   - vi.mock node:net                         →  createConnection returns a fake socket
+ *   - vi.mock ../extensions/escape/frames.ts  →  socketLines returns a controlled Stream
  *
  * What's under test:
  *   - Initial fetch on session_start calls sendEffect with the correct op
  *   - format() return value is forwarded to ctx.ui.setStatus
  *   - format() returning undefined still calls setStatus (clears the item)
- *   - A ref-change message on the subscribe socket triggers a re-fetch
+ *   - A ref-change line from the subscribe stream triggers a re-fetch
+ *   - Non-ref-change lines (ok handshake, malformed JSON) do not trigger re-fetch
  *   - session_shutdown clears the fallback timer and destroys the subscribe socket
- *   - Non-ref-change subscribe messages (ok handshake, error) do not trigger re-fetch
- *   - Malformed JSON on the subscribe socket is silently ignored
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Readable } from "node:stream";
-import { Effect } from "effect";
+import { EventEmitter } from "node:events";
+import { Effect, Stream } from "effect";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ── mocks (hoisted) ───────────────────────────────────────────────────────────
@@ -30,33 +30,27 @@ vi.mock("node:net", () => ({
   createConnection: vi.fn(),
 }));
 
+vi.mock("../extensions/escape/frames.ts", () => ({
+  socketLines: vi.fn(),
+}));
+
 import { sendEffect } from "../extensions/escape/client.ts";
 import { createConnection } from "node:net";
+import { socketLines } from "../extensions/escape/frames.ts";
 import { useEscapeStatus } from "../extensions/escape/use-escape-status.ts";
 
 // ── fake socket ───────────────────────────────────────────────────────────────
 
-class FakeSocket extends Readable {
+class FakeSocket extends EventEmitter {
   written: string[] = [];
   isDestroyed = false;
 
-  // Required by Readable — we push data manually in tests
-  _read() {}
-
   write(data: string) {
     this.written.push(data);
-    return true;
   }
-
   destroy() {
     this.isDestroyed = true;
-    super.destroy();
-    return this;
-  }
-
-  /** Push a newline-delimited subscribe message into the stream. */
-  pushLine(json: object) {
-    this.push(Buffer.from(JSON.stringify(json) + "\n"));
+    this.emit("close");
   }
 }
 
@@ -80,14 +74,10 @@ function makeFakePi() {
     }),
   } as unknown as ExtensionAPI;
 
-  const ctx: FakeCtx = {
-    ui: { setStatus: vi.fn() },
-  };
+  const ctx: FakeCtx = { ui: { setStatus: vi.fn() } };
 
   async function trigger(event: SessionEvent) {
-    for (const h of handlers.get(event) ?? []) {
-      await h({}, ctx);
-    }
+    for (const h of handlers.get(event) ?? []) await h({}, ctx);
   }
 
   return { pi, ctx, trigger };
@@ -99,23 +89,18 @@ const SOCKET_PATH = "/tmp/fake-pit.sock";
 const OP = "test-op";
 const KEY = "pit-test";
 
-/** Default format fn: echo the response as JSON */
 const echoFormat = (resp: unknown) => JSON.stringify(resp);
 
-/** Drain the microtask / nextTick queue without advancing fake timers.
- * Multiple rounds needed for the Readable → Web ReadableStream → Effect Stream pipeline.
- */
+/** Drain Effect fiber microtasks without advancing fake timers. */
 const flushPromises = async () => {
-  for (let i = 0; i < 50; i++) {
-    await new Promise<void>(process.nextTick);
-  }
+  for (let i = 0; i < 10; i++) await new Promise<void>(process.nextTick);
 };
 
 beforeEach(() => {
   vi.useFakeTimers();
-  const fakeSocket = new FakeSocket();
-  vi.mocked(createConnection).mockReturnValue(fakeSocket as any);
+  vi.mocked(createConnection).mockReturnValue(new FakeSocket() as any);
   vi.mocked(sendEffect).mockReturnValue(Effect.succeed({ value: "ok" }) as any);
+  vi.mocked(socketLines).mockReturnValue(Stream.empty);
 });
 
 afterEach(() => {
@@ -155,8 +140,6 @@ describe("useEscapeStatus", () => {
       const { pi, trigger } = makeFakePi();
       useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
       await trigger("session_start");
-      // createConnection: once for the fetch (inside sendEffect mock — skipped),
-      // once for the subscribe socket in openSubscription
       expect(vi.mocked(createConnection)).toHaveBeenCalledWith(SOCKET_PATH);
     });
 
@@ -171,17 +154,15 @@ describe("useEscapeStatus", () => {
     });
 
     it("re-fetches when ref-change arrives", async () => {
-      const fakeSocket = new FakeSocket();
-      vi.mocked(createConnection).mockReturnValue(fakeSocket as any);
-      const { pi, ctx, trigger } = makeFakePi();
+      vi.mocked(socketLines).mockReturnValue(
+        Stream.make(JSON.stringify({ event: "ref-change" })),
+      );
       vi.mocked(sendEffect)
         .mockReturnValueOnce(Effect.succeed({ v: 1 }) as any)
         .mockReturnValue(Effect.succeed({ v: 2 }) as any);
+      const { pi, ctx, trigger } = makeFakePi();
       useEscapeStatus(pi, SOCKET_PATH, OP, KEY, (r: any) => String(r.v));
       await trigger("session_start");
-
-      // Simulate ref-change push from subscribe socket
-      fakeSocket.pushLine({ event: "ref-change" });
       await flushPromises();
 
       expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(KEY, "2");
@@ -189,49 +170,25 @@ describe("useEscapeStatus", () => {
     });
 
     it("ignores the ok handshake message", async () => {
-      const fakeSocket = new FakeSocket();
-      vi.mocked(createConnection).mockReturnValue(fakeSocket as any);
+      vi.mocked(socketLines).mockReturnValue(
+        Stream.make(JSON.stringify({ ok: true, watching: "main" })),
+      );
       const { pi, trigger } = makeFakePi();
       useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
       await trigger("session_start");
-      const callsBefore = vi.mocked(sendEffect).mock.calls.length;
-
-      fakeSocket.pushLine({ ok: true, watching: "main" });
       await flushPromises();
 
-      expect(vi.mocked(sendEffect)).toHaveBeenCalledTimes(callsBefore);
+      expect(vi.mocked(sendEffect)).toHaveBeenCalledTimes(1);
     });
 
-    it("ignores malformed JSON on the subscribe socket", async () => {
-      const fakeSocket = new FakeSocket();
-      vi.mocked(createConnection).mockReturnValue(fakeSocket as any);
+    it("ignores malformed JSON", async () => {
+      vi.mocked(socketLines).mockReturnValue(Stream.make("not json"));
       const { pi, trigger } = makeFakePi();
       useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
       await trigger("session_start");
-      const callsBefore = vi.mocked(sendEffect).mock.calls.length;
-
-      fakeSocket.push(Buffer.from("not json\n"));
       await flushPromises();
 
-      expect(vi.mocked(sendEffect)).toHaveBeenCalledTimes(callsBefore);
-    });
-
-    it("handles data arriving in multiple chunks", async () => {
-      const fakeSocket = new FakeSocket();
-      vi.mocked(createConnection).mockReturnValue(fakeSocket as any);
-      const { pi, ctx, trigger } = makeFakePi();
-      vi.mocked(sendEffect)
-        .mockReturnValueOnce(Effect.succeed({}) as any)
-        .mockReturnValue(Effect.succeed({ v: "chunked" }) as any);
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, (r: any) => r.v ?? "init");
-      await trigger("session_start");
-
-      const msg = JSON.stringify({ event: "ref-change" }) + "\n";
-      fakeSocket.push(Buffer.from(msg.slice(0, 5)));
-      fakeSocket.push(Buffer.from(msg.slice(5)));
-      await flushPromises();
-
-      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(KEY, "chunked");
+      expect(vi.mocked(sendEffect)).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -270,9 +227,8 @@ describe("useEscapeStatus", () => {
 
       await trigger("session_shutdown");
       vi.advanceTimersByTime(10 * 60_000);
-      await vi.runAllTimersAsync();
+      await flushPromises();
 
-      // No additional fetches after shutdown
       expect(vi.mocked(sendEffect)).toHaveBeenCalledTimes(callsAfterStart);
     });
   });
