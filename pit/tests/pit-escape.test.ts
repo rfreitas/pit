@@ -939,4 +939,57 @@ describe("pit-escape subscribe op", () => {
     const resp = await send(socketPath, { op: "is-merged" });
     expect(resp.merged).toBe(false); // branch has unique commits
   });
+
+  it("pushes ref-change when the branch is renamed via rename-branch op", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/original-name");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const sub = openSubscription(socketPath);
+    await sub.waitForMessage(); // ack
+
+    // Rename fires a ref-change: HEAD file changes + new ref created in refs/heads/pi/
+    await send(socketPath, { op: "rename-branch", newBranch: "pi/new-name" });
+
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
+
+  it("pushes ref-change for commits made after a branch rename", async () => {
+    // Regression: the branch watcher used to be set up once at subscribe time
+    // with a filter on the original branch filename. After rename-branch,
+    // commits on the new name were invisible to the watcher.
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    const hostSettingsPath = path.join(agentDir, "settings.json");
+
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/original-name");
+
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const sub = openSubscription(socketPath);
+    await sub.waitForMessage(); // ack — watcher targeting "pi/original-name"
+
+    // Rename the branch
+    await send(socketPath, { op: "rename-branch", newBranch: "pi/new-name" });
+    await sub.waitForMessage(3000); // consume the rename ref-change
+
+    // Commit on the renamed branch — must still fire ref-change
+    addCommit(worktreeDir);
+
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
 });
