@@ -11,26 +11,31 @@ richer contextual display (merge in progress, detached HEAD, no parent branch).
 ## Display format
 
 Segments joined by ` · `. Only non-zero/relevant segments shown.
+Ahead and behind are combined into one segment with `, ` when both non-zero.
 
 ```
-2 commits ahead (+42 −7) · 3 commits behind main · staged (+5) · unstaged (+3 −1)
+2 commits ahead (+42 −7) of main, 3 behind · staged (+5) · unstaged (+3 −1)
 ```
 
 ### Segment rules
 
-**Ahead segment** — omitted when `aheadCount === 0`
+**Ahead+behind segment**
 ```
-2 commits ahead (+42 −7)          — text + binary
-2 commits ahead (+42 −7, 2 binary files)  — mixed
-2 commits ahead (2 binary files)  — binary only
-2 commits ahead (+0)              — empty/permission-only commits
-1 commit ahead (+5)               — singular
+2 commits ahead (+42 −7) of main           — ahead only
+3 commits behind main                       — behind only, includes "commits"
+2 commits ahead (+42 −7) of main, 3 behind — both; "behind" omits "commits"
+2 commits ahead (+42 −7) of main, 1 behind — singular behind in combined form
+1 commit ahead (+5) of main                — singular ahead
+1 commit behind main                        — singular behind only
+in sync with main                           — neither
 ```
 
-**Behind segment** — omitted when `behindCount === 0`; no LOC (upstream commits, not ours)
+**LOC in ahead parenthetical**
 ```
-3 commits behind main
-1 commit behind main              — singular
+2 commits ahead (+42 −7) of main           — text changes
+2 commits ahead (2 binary files) of main   — binary only
+2 commits ahead (+42 −7, 2 binary files) of main  — mixed
+2 commits ahead (+0) of main               — empty/permission-only commits
 ```
 
 **Staged segment** — omitted when both zero
@@ -47,14 +52,14 @@ unstaged (−3)
 unstaged (+3 −1)
 ```
 
-**Special states** — replace ahead/behind segments; staged/unstaged still appended
+**Special states** — replace ahead/behind segment; staged/unstaged still appended
 ```
-in sync with main                         — 0 ahead, 0 behind, clean
-in sync with main · staged (+5)           — 0 ahead, 0 behind, dirty
-merge in progress · 2 commits ahead (+42 −7) · 3 commits behind main · staged (+5)
-staged (+5) · no parent branch            — no master/main found
-staged (+5) · detached HEAD               — detached HEAD, dirty
-(hidden)                                  — detached HEAD or no parent, clean
+in sync with main · staged (+5)                    — in sync, dirty
+merge in progress · in sync with main              — mid-merge, clean
+merge in progress · 2 commits ahead (+42 −7) of main, 3 behind · staged (+5)
+staged (+5) · no parent branch                     — no master/main found, dirty
+staged (+5) · detached HEAD                        — detached HEAD, dirty
+(hidden)                                           — detached HEAD or no parent, clean
 ```
 
 ### LOC format inside parentheses
@@ -161,8 +166,8 @@ is correct for atomicity. This split is tracked as a separate concern.
 | 6 | `"42\t7\tfoo.ts\n-\t-\timg.png\n"` | `{ insertions: 42, deletions: 7, binaryFiles: 1 }` |
 | 7 | `"0\t5\tfoo.ts\n"` | `{ insertions: 0, deletions: 5, binaryFiles: 0 }` |
 | 8 | `"5\t0\tfoo.ts\n"` | `{ insertions: 5, deletions: 0, binaryFiles: 0 }` |
-| 9 | `"5\t2\tfoo.ts\n"` (trailing newline) | `{ insertions: 5, deletions: 2, binaryFiles: 0 }` |
-| 10 | `"5\t2\tfoo.ts\r\n"` (CRLF) | `{ insertions: 5, deletions: 2, binaryFiles: 0 }` |
+| 9 | trailing newline: `"5\t2\tfoo.ts\n"` | `{ insertions: 5, deletions: 2, binaryFiles: 0 }` |
+| 10 | CRLF: `"5\t2\tfoo.ts\r\n"` | `{ insertions: 5, deletions: 2, binaryFiles: 0 }` |
 
 ### `formatBranchStatus(state)` — factory default state
 
@@ -177,29 +182,26 @@ const s = (overrides = {}) => ({
 });
 ```
 
-Note: `formatBranchStatus` receives the raw op response and calls `parseNumstat`
-internally — the factory works over the parsed fields for test clarity.
-
 #### Normal states
 | # | Overrides | Expected |
 |---|-----------|----------|
 | 1 | *(none)* | `"in sync with main"` |
-| 2 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7` | `"2 commits ahead (+42 −7)"` |
+| 2 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7` | `"2 commits ahead (+42 −7) of main"` |
 | 3 | `behindCount:3` | `"3 commits behind main"` |
-| 4 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, behindCount:3` | `"2 commits ahead (+42 −7) · 3 commits behind main"` |
+| 4 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, behindCount:3` | `"2 commits ahead (+42 −7) of main, 3 behind"` |
 | 5 | `stagedInsertions:5` | `"in sync with main · staged (+5)"` |
 | 6 | `unstagedInsertions:3, unstagedDeletions:1` | `"in sync with main · unstaged (+3 −1)"` |
 | 7 | `stagedInsertions:5, unstagedInsertions:3, unstagedDeletions:1` | `"in sync with main · staged (+5) · unstaged (+3 −1)"` |
-| 8 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, stagedInsertions:5` | `"2 commits ahead (+42 −7) · staged (+5)"` |
+| 8 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, stagedInsertions:5` | `"2 commits ahead (+42 −7) of main · staged (+5)"` |
 | 9 | `behindCount:3, stagedInsertions:5, unstagedInsertions:3, unstagedDeletions:1` | `"3 commits behind main · staged (+5) · unstaged (+3 −1)"` |
-| 10 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, behindCount:3, stagedInsertions:5, unstagedInsertions:3, unstagedDeletions:1` | `"2 commits ahead (+42 −7) · 3 commits behind main · staged (+5) · unstaged (+3 −1)"` |
+| 10 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, behindCount:3, stagedInsertions:5, unstagedInsertions:3, unstagedDeletions:1` | `"2 commits ahead (+42 −7) of main, 3 behind · staged (+5) · unstaged (+3 −1)"` |
 
 #### LOC edge cases
 | # | Overrides | Expected |
 |---|-----------|----------|
-| 11 | `aheadCount:2` | `"2 commits ahead (+0)"` |
-| 12 | `aheadCount:2, aheadBinaryFiles:2` | `"2 commits ahead (2 binary files)"` |
-| 13 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, aheadBinaryFiles:2` | `"2 commits ahead (+42 −7, 2 binary files)"` |
+| 11 | `aheadCount:2` | `"2 commits ahead (+0) of main"` |
+| 12 | `aheadCount:2, aheadBinaryFiles:2` | `"2 commits ahead (2 binary files) of main"` |
+| 13 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, aheadBinaryFiles:2` | `"2 commits ahead (+42 −7, 2 binary files) of main"` |
 | 14 | `stagedInsertions:5` | `"in sync with main · staged (+5)"` |
 | 15 | `stagedDeletions:3` | `"in sync with main · staged (−3)"` |
 | 16 | `unstagedInsertions:5` | `"in sync with main · unstaged (+5)"` |
@@ -209,7 +211,7 @@ internally — the factory works over the parsed fields for test clarity.
 | # | Overrides | Expected |
 |---|-----------|----------|
 | 18 | `mergeInProgress:true` | `"merge in progress · in sync with main"` |
-| 19 | `mergeInProgress:true, aheadCount:2, aheadInsertions:42, aheadDeletions:7, behindCount:3, stagedInsertions:5, unstagedInsertions:3, unstagedDeletions:1` | `"merge in progress · 2 commits ahead (+42 −7) · 3 commits behind main · staged (+5) · unstaged (+3 −1)"` |
+| 19 | `mergeInProgress:true, aheadCount:2, aheadInsertions:42, aheadDeletions:7, behindCount:3, stagedInsertions:5, unstagedInsertions:3, unstagedDeletions:1` | `"merge in progress · 2 commits ahead (+42 −7) of main, 3 behind · staged (+5) · unstaged (+3 −1)"` |
 | 20 | `parentBranch:null` | `undefined` |
 | 21 | `parentBranch:null, stagedInsertions:5` | `"staged (+5) · no parent branch"` |
 | 22 | `detachedHead:true` | `undefined` |
@@ -218,30 +220,27 @@ internally — the factory works over the parsed fields for test clarity.
 #### Singular/plural
 | # | Overrides | Expected |
 |---|-----------|----------|
-| 24 | `aheadCount:1, aheadInsertions:5` | `"1 commit ahead (+5)"` |
-| 25 | `aheadCount:2, aheadInsertions:5` | `"2 commits ahead (+5)"` |
+| 24 | `aheadCount:1, aheadInsertions:5` | `"1 commit ahead (+5) of main"` |
+| 25 | `aheadCount:2, aheadInsertions:5` | `"2 commits ahead (+5) of main"` |
 | 26 | `behindCount:1` | `"1 commit behind main"` |
 | 27 | `behindCount:2` | `"2 commits behind main"` |
-| 28 | `aheadCount:1, aheadBinaryFiles:1` | `"1 commit ahead (1 binary file)"` |
-| 29 | `aheadCount:1, aheadBinaryFiles:2` | `"1 commit ahead (2 binary files)"` |
+| 28 | `aheadCount:1, aheadBinaryFiles:1` | `"1 commit ahead (1 binary file) of main"` |
+| 29 | `aheadCount:1, aheadBinaryFiles:2` | `"1 commit ahead (2 binary files) of main"` |
+| 30 | `aheadCount:2, aheadInsertions:42, aheadDeletions:7, behindCount:1` | `"2 commits ahead (+42 −7) of main, 1 behind"` |
 
 #### Consistency
 | # | Overrides | Expected |
 |---|-----------|----------|
-| 30 | `parentBranch:"master", behindCount:3` | `"3 commits behind master"` |
-| 31 | `parentBranch:"develop", aheadCount:1, aheadInsertions:5` | `"1 commit ahead (+5) · in sync with develop"` — wait, this needs thought |
+| 31 | `parentBranch:"master", behindCount:3` | `"3 commits behind master"` |
+| 32 | `parentBranch:"develop", aheadCount:1, aheadInsertions:5` | `"1 commit ahead (+5) of develop"` |
 
 ---
 
 ## Open questions
 
-1. **Case 18 display**: when merge in progress and 0 ahead/behind — show
-   `"merge in progress · in sync with main"` or just `"merge in progress"`?
-   Currently planned as the former for context.
-
-2. **Server refactor (read ops)**: the dumb-server direction (multiple client
+1. **Server refactor (read ops)**: the dumb-server direction (multiple client
    calls for read-only ops) is worth pursuing separately. `branch-status` keeps
    server coordination for now due to the merge-base dependency chain.
 
-3. **Deprecation of `is-merged` and `loc-diff` ops**: once `branch-status` ships,
+2. **Deprecation of `is-merged` and `loc-diff` ops**: once `branch-status` ships,
    these can be removed from the server. Tracked here to not forget.
