@@ -17,7 +17,7 @@ export const createReloadHook = (
       Effect.gen(function* () {
         const result = yield* sendEffect(socketPath, token, { op: "refresh-settings" });
         if ("error" in result) {
-          process.stderr.write(`pit: settings refresh failed: ${result.error}\n`);
+          yield* Effect.logWarning(`pit: settings refresh failed: ${result.error}`);
         }
       }),
     );

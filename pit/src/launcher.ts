@@ -131,7 +131,13 @@ const shadowAgentMountArgs = (agentDirReal: string, settingsPath: string): strin
   ];
 };
 
-// ── dynamic pit mounts ─────────────────────────────────────────────────────────────
+// ── env helpers ─────────────────────────────────────────────────────────────
+
+/** Return ["--setenv", name, value] if the var is set in process.env, else []. */
+const passEnv = (name: string): string[] =>
+  process.env[name] ? ["--setenv", name, process.env[name]!] : [];
+
+
 
 /**
  * Resolve the pit source directory and its node_modules for mounting.
@@ -197,19 +203,11 @@ export const bwrapLaunch = (
     "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
     "--setenv", "PI_CODING_AGENT", "true",
     "--setenv", "PIT_IS_INNER", "1",
-    ...(process.env.TERM ? ["--setenv", "TERM", process.env.TERM] : []),
-    ...(process.env.LANG ? ["--setenv", "LANG", process.env.LANG] : []),
-    // Proxy vars: passed by default since they are non-secret and needed for
-    // the undici EnvHttpProxyAgent inside inner.ts to route AI API traffic.
-    ...(process.env.http_proxy  ? ["--setenv", "http_proxy",  process.env.http_proxy]  : []),
-    ...(process.env.https_proxy ? ["--setenv", "https_proxy", process.env.https_proxy] : []),
-    ...(process.env.no_proxy    ? ["--setenv", "no_proxy",    process.env.no_proxy]    : []),
-    ...(process.env.HTTP_PROXY  ? ["--setenv", "HTTP_PROXY",  process.env.HTTP_PROXY]  : []),
-    ...(process.env.HTTPS_PROXY ? ["--setenv", "HTTPS_PROXY", process.env.HTTPS_PROXY] : []),
-    ...(process.env.NO_PROXY    ? ["--setenv", "NO_PROXY",    process.env.NO_PROXY]    : []),
-    ...(process.env.PIT_ESCAPE_SOCKET
-      ? ["--setenv", "PIT_ESCAPE_SOCKET", process.env.PIT_ESCAPE_SOCKET]
-      : []),
+    ...passEnv("TERM"), ...passEnv("LANG"),
+    // Proxy vars: non-secret, needed for undici EnvHttpProxyAgent in inner.ts.
+    ...passEnv("http_proxy"), ...passEnv("https_proxy"), ...passEnv("no_proxy"),
+    ...passEnv("HTTP_PROXY"), ...passEnv("HTTPS_PROXY"), ...passEnv("NO_PROXY"),
+    ...passEnv("PIT_ESCAPE_SOCKET"),
     ...(escapeToken ? ["--setenv", "PIT_ESCAPE_TOKEN", escapeToken] : []),
     ...allowedEnvArgs(pitConfig, process.env as Record<string, string | undefined>),
   ];
@@ -236,7 +234,7 @@ export const launchEffect = (
   settingsPath?: string,
   mounts?: SandboxMounts,
   pitConfig?: PitConfig,
-  escapeToken?: string,
+  escapeHandle?: EscapeHandle,
 ): Effect.Effect<void, never, NodeContext> =>
   Effect.gen(function* () {
     if (sandbox) {
@@ -248,17 +246,18 @@ export const launchEffect = (
           getExtensionMounts(),
           dirname(dirname(process.execPath)),
         ));
-        bwrapLaunch(cwd, piArgs, m, pitConfig ?? {}, settingsPath, escapeToken); // never returns
+        bwrapLaunch(cwd, piArgs, m, pitConfig ?? {}, settingsPath, escapeHandle?.token); // never returns
       }
       yield* Effect.logWarning("pit: bwrap not found — running without sandbox");
     }
     // Non-sandbox: pass the same factories so extension behaviour is consistent
     // whether bwrap is available or not.
-    const socketPath = process.env.PIT_ESCAPE_SOCKET ?? "";
+    const socketPath = escapeHandle?.socketPath ?? "";
+    const token = escapeHandle?.token ?? "";
     process.chdir(cwd);
     yield* Effect.promise(() =>
       main(piArgs, {
-        extensionFactories: createExtensionFactories(socketPath, escapeToken ?? ""),
+        extensionFactories: createExtensionFactories(socketPath, token),
       }).catch(() => {})
     );
   });
