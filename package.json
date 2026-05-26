@@ -9,7 +9,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc",
-    "lint": "node --experimental-strip-types node_modules/.bin/eslint 'pit/**/*.ts' --ignore-pattern 'pit/tests/**' --ignore-pattern 'pit/src/**/*.test.ts' && node --experimental-strip-types pit/scripts/check-no-disable.ts",
+    "lint": "node --experimental-strip-types node_modules/.bin/eslint 'pit/**/*.ts' --ignore-pattern 'pit/tests/**' --ignore-pattern 'pit/src/**/*.test.ts' --ignore-pattern 'pit/src/tests/helpers.ts' && node --experimental-strip-types pit/scripts/check-no-disable.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

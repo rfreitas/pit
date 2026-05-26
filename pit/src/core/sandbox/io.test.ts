@@ -1,149 +1,170 @@
-import { fileURLToPath } from "node:url";
-import { describe, it, expect, afterEach } from "vitest";
-import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { describe, it, expect } from "vitest";
+import { useTmpDirs, makeGitRepo } from "../../tests/helpers.ts";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { dirname } from "node:path";
+import { run } from "../../tests/helpers.ts";
 import { resolveUnversionedDirs, readPitConfig, writeFilteredSettings } from "./io.ts";
 
-const TEST_SANDBOX = path.join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "test-sandbox");
-fs.mkdirSync(TEST_SANDBOX, { recursive: true });
+const { makeTmp, makeSandbox } = useTmpDirs();
 
-const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
-  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
-
-const tmpDirs: string[] = [];
-afterEach(() => {
-  for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
-  tmpDirs.length = 0;
-});
-const makeTmp = (prefix: string) => {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tmpDirs.push(d);
-  return d;
-};
-const makeSandboxDir = (prefix: string) => {
-  const d = fs.mkdtempSync(path.join(TEST_SANDBOX, prefix));
-  tmpDirs.push(d);
-  return d;
-};
-const makeGitRepo = () => {
-  const repo = makeTmp("pit-unversioned-test-");
-  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
-  execFileSync("git", ["-C", repo, "config", "user.email", "test@pit.test"], { stdio: "ignore" });
-  execFileSync("git", ["-C", repo, "config", "user.name", "pit test"], { stdio: "ignore" });
-  fs.writeFileSync(path.join(repo, ".gitkeep"), "");
-  execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
-  execFileSync("git", ["-C", repo, "commit", "-m", "init"], { stdio: "ignore" });
-  return repo;
-};
+// ── resolveUnversionedDirs ────────────────────────────────────────────────────
+//
+// Discovers unversioned directories (untracked + ignored) in a git repo.
+// Uses `git ls-files --directory` so git recurses into tracked dirs to find
+// nested unversioned ones while reporting each as a unit.
 
 describe("resolveUnversionedDirs", () => {
-  it("returns empty array for a non-git dir", async () => {
+  it("returns empty array for a non-git directory", async () => {
     expect(await run(resolveUnversionedDirs(makeTmp("pit-nongit-")))).toEqual([]);
   });
-  it("returns empty array for non-existent path", async () => {
-    expect(await run(resolveUnversionedDirs("/nonexistent/pit-test-unversioned"))).toEqual([]);
+  it("returns empty array for a non-existent path", async () => {
+    expect(await run(resolveUnversionedDirs("/nonexistent/path/pit-test-unversioned"))).toEqual([]);
   });
-  it("returns empty when no untracked or ignored dirs", async () => {
-    expect(await run(resolveUnversionedDirs(makeGitRepo()))).toEqual([]);
+  it("returns empty array when no untracked or ignored dirs exist", async () => {
+    expect(await run(resolveUnversionedDirs(makeGitRepo(makeTmp)))).toEqual([]);
   });
-  it("returns directories only — not untracked files", async () => {
-    const repo = makeGitRepo();
-    fs.writeFileSync(path.join(repo, "file.txt"), "hello");
+  it("does not return untracked files — only directories", async () => {
+    // git ls-files marks dirs with a trailing slash; files have none.
+    // resolveUnversionedDirs must filter to dirs only so callers don't
+    // accidentally try to --tmp-overlay a regular file.
+    const repo = makeGitRepo(makeTmp);
+    fs.writeFileSync(path.join(repo, "untracked-file.txt"), "hello");
     fs.mkdirSync(path.join(repo, "untracked-dir"));
-    const r = await run(resolveUnversionedDirs(repo));
-    expect(r).toContain("untracked-dir");
-    expect(r).not.toContain("file.txt");
+    const result = await run(resolveUnversionedDirs(repo));
+    expect(result).toContain("untracked-dir");
+    expect(result).not.toContain("untracked-file.txt");
   });
-  it("returns an untracked directory", async () => {
-    const repo = makeGitRepo();
+  it("does not return ignored files listed in .gitignore — only ignored dirs", async () => {
+    // An ignored file should not appear; only the ignored directory should.
+    const repo = makeGitRepo(makeTmp);
+    fs.writeFileSync(path.join(repo, ".gitignore"), "*.log\nnode_modules/\n");
+    fs.writeFileSync(path.join(repo, "debug.log"), "log content"); // ignored file
+    fs.mkdirSync(path.join(repo, "node_modules"));
+    const result = await run(resolveUnversionedDirs(repo));
+    expect(result).toContain("node_modules");
+    expect(result).not.toContain("debug.log");
+  });
+  it("returns an untracked directory (no .gitignore needed)", async () => {
+    const repo = makeGitRepo(makeTmp);
     fs.mkdirSync(path.join(repo, "new-dir"));
     expect(await run(resolveUnversionedDirs(repo))).toContain("new-dir");
   });
-  it("returns an ignored directory", async () => {
-    const repo = makeGitRepo();
+  it("returns an ignored directory listed in .gitignore", async () => {
+    const repo = makeGitRepo(makeTmp);
     fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\n");
     fs.mkdirSync(path.join(repo, "node_modules"));
     expect(await run(resolveUnversionedDirs(repo))).toContain("node_modules");
   });
   it("does not return tracked directories", async () => {
-    const repo = makeGitRepo();
+    const repo = makeGitRepo(makeTmp);
     fs.mkdirSync(path.join(repo, "src"));
     fs.writeFileSync(path.join(repo, "src", "index.ts"), "");
     execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
     execFileSync("git", ["-C", repo, "commit", "-m", "add src"], { stdio: "ignore" });
     expect(await run(resolveUnversionedDirs(repo))).not.toContain("src");
   });
-  it("strips trailing slashes", async () => {
-    const repo = makeGitRepo();
+  it("strips trailing slashes from git output", async () => {
+    const repo = makeGitRepo(makeTmp);
     fs.mkdirSync(path.join(repo, "some-dir"));
-    const r = await run(resolveUnversionedDirs(repo));
-    expect(r.every((e) => !e.endsWith("/"))).toBe(true);
+    expect((await run(resolveUnversionedDirs(repo))).every((r) => !r.endsWith("/"))).toBe(true);
   });
-  it("deduplicates", async () => {
-    const repo = makeGitRepo();
+  it("deduplicates when git would otherwise double-report", async () => {
+    const repo = makeGitRepo(makeTmp);
     fs.mkdirSync(path.join(repo, "build"));
-    const r = await run(resolveUnversionedDirs(repo));
-    expect(r.filter((e) => e === "build").length).toBe(1);
+    const result = await run(resolveUnversionedDirs(repo));
+    expect(result.filter((r) => r === "build").length).toBe(1);
   });
-  it("finds nested unversioned dirs inside tracked dirs", async () => {
-    const repo = makeGitRepo();
+  it("finds nested unversioned dirs inside tracked directories", async () => {
+    // packages/ is tracked; packages/foo/node_modules is ignored.
+    const repo = makeGitRepo(makeTmp);
     fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\n");
     fs.mkdirSync(path.join(repo, "packages", "foo"), { recursive: true });
     fs.writeFileSync(path.join(repo, "packages", "foo", "package.json"), "{}");
     execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
     execFileSync("git", ["-C", repo, "commit", "-m", "add packages"], { stdio: "ignore" });
     fs.mkdirSync(path.join(repo, "packages", "foo", "node_modules"));
-    const r = await run(resolveUnversionedDirs(repo));
-    expect(r).toContain("packages/foo/node_modules");
-    expect(r).not.toContain("packages");
+    const result = await run(resolveUnversionedDirs(repo));
+    expect(result).toContain("packages/foo/node_modules");
+    expect(result).not.toContain("packages");
+  });
+  it("reports multiple unversioned dirs at different depths", async () => {
+    const repo = makeGitRepo(makeTmp);
+    fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\ndist/\n");
+    fs.mkdirSync(path.join(repo, "node_modules"));
+    fs.mkdirSync(path.join(repo, "dist"));
+    fs.mkdirSync(path.join(repo, "packages", "bar"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "packages", "bar", "index.ts"), "");
+    execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
+    execFileSync("git", ["-C", repo, "commit", "-m", "add packages"], { stdio: "ignore" });
+    fs.mkdirSync(path.join(repo, "packages", "bar", "node_modules"));
+    const result = await run(resolveUnversionedDirs(repo));
+    expect(result).toContain("node_modules");
+    expect(result).toContain("dist");
+    expect(result).toContain("packages/bar/node_modules");
   });
 });
 
+// ── readPitConfig ─────────────────────────────────────────────────────────────
+//
+// Reads <pitDir>/config.json. Must return an empty object (not throw) for
+// absent or malformed files.
+
 describe("readPitConfig", () => {
-  it("returns empty object when config.json absent", async () => {
-    expect(await run(readPitConfig(makeSandboxDir("pit-config-test-")))).toEqual({});
+  it("returns empty object when config.json does not exist", async () => {
+    expect(await run(readPitConfig(makeSandbox("pit-config-")))).toEqual({});
   });
-  it("parses denyPackages", async () => {
-    const d = makeSandboxDir("pit-config-test-");
-    fs.writeFileSync(path.join(d, "config.json"), JSON.stringify({ denyPackages: ["npm:@x/pkg"] }));
-    expect((await run(readPitConfig(d))).denyPackages).toEqual(["npm:@x/pkg"]);
+  it("parses denyPackages from config.json", async () => {
+    const d = makeSandbox("pit-config-");
+    fs.writeFileSync(path.join(d, "config.json"), JSON.stringify({ denyPackages: ["npm:@casualjim/pi-heimdall"] }));
+    expect((await run(readPitConfig(d))).denyPackages).toEqual(["npm:@casualjim/pi-heimdall"]);
   });
-  it("returns empty object for malformed JSON", async () => {
-    const d = makeSandboxDir("pit-config-test-");
-    fs.writeFileSync(path.join(d, "config.json"), "{ invalid }");
+  it("returns empty object for malformed JSON (does not throw)", async () => {
+    const d = makeSandbox("pit-config-");
+    fs.writeFileSync(path.join(d, "config.json"), "{ invalid json }");
     expect(await run(readPitConfig(d))).toEqual({});
   });
+  it("returns empty object when denyPackages is absent from valid JSON", async () => {
+    // Distinguishes "missing file" from "valid JSON without denyPackages key".
+    // The function must not crash on missing key access.
+    const d = makeSandbox("pit-config-");
+    fs.writeFileSync(path.join(d, "config.json"), JSON.stringify({}));
+    expect((await run(readPitConfig(d))).denyPackages).toBeUndefined();
+  });
 });
+
+// ── writeFilteredSettings ─────────────────────────────────────────────────────
+//
+// Reads settings.json, applies the denylist, and writes filtered result.
 
 describe("writeFilteredSettings", () => {
   const rawSettings = {
     defaultModel: "claude-sonnet",
-    packages: ["npm:@casualjim/pi-heimdall", "npm:pi-agent-browser-native"],
+    packages: [
+      "npm:@casualjim/pi-heimdall",
+      "npm:@spences10/pi-confirm-destructive",
+      "npm:pi-agent-browser-native",
+    ],
   };
+
   it("writes a file at the given path", async () => {
-    const agentDir = makeSandboxDir("pit-settings-agent-");
-    const outDir = makeSandboxDir("pit-settings-out-");
+    const agentDir = makeSandbox("pit-settings-agent-");
+    const outDir = makeSandbox("pit-settings-out-");
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "settings.json");
     await run(writeFilteredSettings(agentDir, {}, outPath));
     expect(fs.existsSync(outPath)).toBe(true);
   });
   it("output is valid JSON", async () => {
-    const agentDir = makeSandboxDir("pit-settings-agent-");
-    const outDir = makeSandboxDir("pit-settings-out-");
+    const agentDir = makeSandbox("pit-settings-agent-");
+    const outDir = makeSandbox("pit-settings-out-");
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
-    const outPath = path.join(outDir, "settings.json");
-    await run(writeFilteredSettings(agentDir, {}, outPath));
-    expect(() => JSON.parse(fs.readFileSync(outPath, "utf8"))).not.toThrow();
+    await run(writeFilteredSettings(agentDir, {}, path.join(outDir, "settings.json")));
+    expect(() => JSON.parse(fs.readFileSync(path.join(outDir, "settings.json"), "utf8"))).not.toThrow();
   });
-  it("removes denied packages", async () => {
-    const agentDir = makeSandboxDir("pit-settings-agent-");
-    const outDir = makeSandboxDir("pit-settings-out-");
+  it("removes denied packages from the output", async () => {
+    const agentDir = makeSandbox("pit-settings-agent-");
+    const outDir = makeSandbox("pit-settings-out-");
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "settings.json");
     await run(writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath));
@@ -151,17 +172,34 @@ describe("writeFilteredSettings", () => {
     expect(r.packages).not.toContain("npm:@casualjim/pi-heimdall");
     expect(r.packages).toContain("npm:pi-agent-browser-native");
   });
-  it("creates parent directories if needed", async () => {
-    const agentDir = makeSandboxDir("pit-settings-agent-");
-    const outDir = makeSandboxDir("pit-settings-out-");
+  it("with empty denylist, output packages match input exactly", async () => {
+    const agentDir = makeSandbox("pit-settings-agent-");
+    const outDir = makeSandbox("pit-settings-out-");
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
+    const outPath = path.join(outDir, "settings.json");
+    await run(writeFilteredSettings(agentDir, {}, outPath));
+    expect(JSON.parse(fs.readFileSync(outPath, "utf8")).packages).toEqual(rawSettings.packages);
+  });
+  it("creates parent directories if they don't exist", async () => {
+    const agentDir = makeSandbox("pit-settings-agent-");
+    const outDir = makeSandbox("pit-settings-out-");
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
     const outPath = path.join(outDir, "nested", "deep", "settings.json");
     await run(writeFilteredSettings(agentDir, {}, outPath));
     expect(fs.existsSync(outPath)).toBe(true);
   });
-  it("absent settings.json produces empty object", async () => {
-    const agentDir = makeSandboxDir("pit-settings-agent-");
-    const outDir = makeSandboxDir("pit-settings-out-");
+  it("preserves non-packages keys in the output", async () => {
+    // applyDenylist must not strip keys other than packages.
+    const agentDir = makeSandbox("pit-settings-agent-");
+    const outDir = makeSandbox("pit-settings-out-");
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
+    const outPath = path.join(outDir, "settings.json");
+    await run(writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath));
+    expect(JSON.parse(fs.readFileSync(outPath, "utf8")).defaultModel).toBe("claude-sonnet");
+  });
+  it("absent settings.json produces an empty object (no throw)", async () => {
+    const agentDir = makeSandbox("pit-settings-agent-");
+    const outDir = makeSandbox("pit-settings-out-");
     const outPath = path.join(outDir, "settings.json");
     await run(writeFilteredSettings(agentDir, {}, outPath));
     expect(JSON.parse(fs.readFileSync(outPath, "utf8"))).toEqual({});
