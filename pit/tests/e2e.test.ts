@@ -471,3 +471,307 @@ describe("pit E2E — extension loading", () => {
     ).toHaveLength(0);
   });
 });
+
+// ── pit -r session resumption ─────────────────────────────────────────────────
+//
+// Bug: when pit -r selects an existing session and launches inner pit with
+// --session <path>, inner pit creates a NEW session instead of opening the
+// existing one, losing conversation history.
+//
+// The test runs inner.ts directly (bypassing the picker) with
+// --session pointing to a pre-seeded session file, then asserts:
+//   a) no new session files appeared in the bucket
+//   b) the sentinel message in the original file survives
+
+describe("pit -r — inner pit resumes existing session", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  const INNER_SCRIPT = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../src/inner.ts"
+  );
+
+  it.skipIf(!hasBwrap)(
+    "opening existing session with --session does not create a new session file",
+    () => {
+      const repo     = makeGitRepo(tmpDirs);
+      const agentDir = makeAgentDir(tmpDirs);
+
+      // Step 1: first pit run — creates worktree + session file
+      const firstRun = runPit(["--mode", "json", "hello"], { cwd: repo, agentDir });
+      expect(
+        parseJsonLines(firstRun.stdout).find((l: any) => l.type === "session"),
+        `first pit run produced no session\nstderr: ${firstRun.stderr}`
+      ).toBeDefined();
+
+      // Find the one session file that was created
+      const allBuckets = fs.readdirSync(path.join(agentDir, "sessions"));
+      expect(allBuckets).toHaveLength(1);
+      const sessionDir = path.join(agentDir, "sessions", allBuckets[0]!);
+      const filesBefore = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(filesBefore).toHaveLength(1);
+      const sessionFile = path.join(sessionDir, filesBefore[0]!);
+
+      // Find the worktree that pit created (needed for --chdir)
+      const worktrees = findWorktrees(repo);
+      expect(worktrees).toHaveLength(1);
+      const worktree = worktrees[0]!;
+
+      // Step 2: append a sentinel so we can detect if the file was preserved
+      const SENTINEL_ID = "resume-test-sentinel";
+      fs.appendFileSync(sessionFile, JSON.stringify({
+        type: "user", id: SENTINEL_ID, parentId: null,
+        timestamp: new Date().toISOString(),
+        content: [{ type: "text", text: "sentinel — must survive resume" }],
+      }) + "\n");
+
+      // Step 3: run inner.ts with --session <existing-file>
+      // Pipe EOF to stdin so pi exits quickly after setup without an LLM call.
+      const result = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", INNER_SCRIPT,
+          "--session", sessionFile, "--mode", "json"],
+        {
+          cwd: worktree,
+          input: "",  // EOF — pi exits immediately
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: agentDir,
+            PI_SKIP_VERSION_CHECK: "1",
+            PIT_IS_INNER: "1",
+          },
+          encoding: "utf8",
+          timeout: 15000,
+        }
+      );
+
+      // Step 4: no new session file should have been created
+      const filesAfter = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(
+        filesAfter,
+        `New session file created — inner pit did not resume the existing session.\n` +
+        `stderr: ${result.stderr?.slice(0, 400)}`
+      ).toHaveLength(1);
+
+      // Step 5: sentinel must still be present in the original file
+      expect(
+        fs.readFileSync(sessionFile, "utf8").includes(SENTINEL_ID),
+        `Sentinel missing — original session was overwritten.\n` +
+        `stderr: ${result.stderr?.slice(0, 200)}`
+      ).toBe(true);
+    }
+  );
+  it.skipIf(!hasBwrap)(
+    "bwrap launch with --session opens existing session, not a new one",
+    () => {
+      const repo     = makeGitRepo(tmpDirs);
+      const agentDir = makeAgentDir(tmpDirs);
+
+      // First run — creates worktree + session
+      const firstRun = runPit(["--mode", "json", "hello"], { cwd: repo, agentDir });
+      expect(
+        parseJsonLines(firstRun.stdout).find((l: any) => l.type === "session"),
+        `first pit run failed\nstderr: ${firstRun.stderr}`
+      ).toBeDefined();
+
+      const sessionBucketDir = fs.readdirSync(path.join(agentDir, "sessions"))[0]!;
+      const sessionDir = path.join(agentDir, "sessions", sessionBucketDir);
+      const filesBefore = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(filesBefore).toHaveLength(1);
+      const sessionFile = path.join(sessionDir, filesBefore[0]!);
+
+      const SENTINEL_ID = "bwrap-resume-sentinel";
+      fs.appendFileSync(sessionFile, JSON.stringify({
+        type: "user", id: SENTINEL_ID, parentId: null,
+        timestamp: new Date().toISOString(),
+        content: [{ type: "text", text: "bwrap sentinel" }],
+      }) + "\n");
+
+      // Second run — pit resumes via --session (same as pit -r would do)
+      const secondRun = runPit(
+        ["--session", sessionFile, "--mode", "json"],
+        { cwd: repo, agentDir }
+      );
+
+      // No new session file should have been created
+      const filesAfter = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(
+        filesAfter,
+        `New session created instead of resuming.\n` +
+        `Before: ${filesBefore.join(", ")}\nAfter: ${filesAfter.join(", ")}\n` +
+        `stderr: ${secondRun.stderr?.slice(0, 400)}`
+      ).toHaveLength(1);
+
+      expect(
+        fs.readFileSync(sessionFile, "utf8").includes(SENTINEL_ID),
+        "Sentinel missing — session was overwritten"
+      ).toBe(true);
+    }
+  );
+  it.skipIf(!hasBwrap)(
+    "pit -r with session path flag resumes existing session without creating a new one",
+    () => {
+      const repo     = makeGitRepo(tmpDirs);
+      const agentDir = makeAgentDir(tmpDirs);
+
+      // First run — create worktree + session file
+      const firstRun = runPit(["--mode", "json", "hello"], { cwd: repo, agentDir });
+      expect(
+        parseJsonLines(firstRun.stdout).find((l: any) => l.type === "session"),
+        `first run failed\nstderr: ${firstRun.stderr}`
+      ).toBeDefined();
+
+      const sessionBucketName = fs.readdirSync(path.join(agentDir, "sessions"))[0]!;
+      const sessionDir = path.join(agentDir, "sessions", sessionBucketName);
+      const filesBefore = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(filesBefore).toHaveLength(1);
+      const sessionFile = path.join(sessionDir, filesBefore[0]!);
+
+      const SENTINEL_ID = "pit-r-flag-sentinel";
+      fs.appendFileSync(sessionFile, JSON.stringify({
+        type: "user", id: SENTINEL_ID, parentId: null,
+        timestamp: new Date().toISOString(),
+        content: [{ type: "text", text: "sentinel for pit -r test" }],
+      }) + "\n");
+
+      // Simulate what pit -r does: pass --session directly (bypassing the TUI picker)
+      // pit reads the session file, extracts pit metadata, and resumes.
+      // This is equivalent to the picker selecting this exact session.
+      const resumeRun = runPit(
+        ["--session", sessionFile, "--mode", "json"],
+        { cwd: repo, agentDir }
+      );
+
+      const filesAfter = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(
+        filesAfter,
+        `Resume created a new session file instead of opening existing.\n` +
+        `stderr: ${resumeRun.stderr?.slice(0, 400)}`
+      ).toHaveLength(1);
+
+      expect(
+        fs.readFileSync(sessionFile, "utf8").includes(SENTINEL_ID),
+        `Sentinel missing from session after resume — session was overwritten.\nstderr: ${resumeRun.stderr?.slice(0, 200)}`
+      ).toBe(true);
+    }
+  );
+  it.skipIf(!hasBwrap)(
+    "pit run from inside worktree resumes existing session, not creates new one",
+    () => {
+      const repo     = makeGitRepo(tmpDirs);
+      const agentDir = makeAgentDir(tmpDirs);
+
+      // First run from repo root — creates worktree + session
+      const firstRun = runPit(["--mode", "json", "hello"], { cwd: repo, agentDir });
+      const firstLines = parseJsonLines(firstRun.stdout);
+      expect(
+        firstLines.find((l: any) => l.type === "session"),
+        `first run failed\nstderr: ${firstRun.stderr}`
+      ).toBeDefined();
+
+      // Find the worktree that pit created
+      const worktrees = findWorktrees(repo);
+      expect(worktrees).toHaveLength(1);
+      const worktree = worktrees[0]!;
+
+      // Find the session bucket for the WORKTREE path
+      const worktreeBucket = "--" + worktree.replace(/^\//, "").replace(/\//g, "-") + "--";
+      const possibleDirs = [worktreeBucket, ...fs.readdirSync(path.join(agentDir, "sessions"))];
+      const sessionBucketName = fs.readdirSync(path.join(agentDir, "sessions"))[0]!;
+      const sessionDir = path.join(agentDir, "sessions", sessionBucketName);
+      const filesBefore = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(filesBefore).toHaveLength(1);
+      const sessionFile = path.join(sessionDir, filesBefore[0]!);
+
+      const SENTINEL_ID = "linked-worktree-sentinel";
+      fs.appendFileSync(sessionFile, JSON.stringify({
+        type: "user", id: SENTINEL_ID, parentId: null,
+        timestamp: new Date().toISOString(),
+        content: [{ type: "text", text: "linked worktree sentinel" }],
+      }) + "\n");
+
+      // Second run from INSIDE the worktree — should find + resume existing session
+      const secondRun = runPit(["--mode", "json", "hello"], { cwd: worktree, agentDir });
+
+      // Key assertion: still only one session file (no new one created)
+      const filesAfter = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(
+        filesAfter,
+        `Running pit from inside worktree created a new session instead of resuming.\n` +
+        `New files: ${filesAfter.filter(f => !filesBefore.includes(f)).join(", ")}\n` +
+        `stderr: ${secondRun.stderr?.slice(0, 400)}`
+      ).toHaveLength(1);
+
+      expect(
+        fs.readFileSync(sessionFile, "utf8").includes(SENTINEL_ID),
+        `Sentinel missing — session was overwritten on second run.\nstderr: ${secondRun.stderr?.slice(0, 200)}`
+      ).toBe(true);
+    }
+  );
+  it.skipIf(!hasBwrap)(
+    "pit run from inside an already-sandboxed session resumes, not creates new session",
+    () => {
+      // This reproduces the reported bug scenario:
+      // user is already inside a pit bwrap session (PI_CODING_AGENT_DIR=/pit-agent)
+      // and runs pit again from within the worktree path.
+      //
+      // The inner bwrap session has PI_CODING_AGENT_DIR pointing to a shadow agent dir.
+      // When outer pit starts inside bwrap, it uses that agentDir, not ~/.pi/agent.
+      // findOrCreateLinkedSession must still find the existing session.
+      const repo     = makeGitRepo(tmpDirs);
+      const agentDir = makeAgentDir(tmpDirs);
+
+      // First run — create worktree + session
+      const firstRun = runPit(["--mode", "json", "hello"], { cwd: repo, agentDir });
+      expect(
+        parseJsonLines(firstRun.stdout).find((l: any) => l.type === "session"),
+        `first run failed\nstderr: ${firstRun.stderr}`
+      ).toBeDefined();
+
+      const worktrees = findWorktrees(repo);
+      expect(worktrees).toHaveLength(1);
+      const worktree = worktrees[0]!;
+
+      const sessionBucketName = fs.readdirSync(path.join(agentDir, "sessions"))[0]!;
+      const sessionDir = path.join(agentDir, "sessions", sessionBucketName);
+      const filesBefore = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(filesBefore).toHaveLength(1);
+      const sessionFile = path.join(sessionDir, filesBefore[0]!);
+
+      const SENTINEL_ID = "nested-session-sentinel";
+      fs.appendFileSync(sessionFile, JSON.stringify({
+        type: "user", id: SENTINEL_ID, parentId: null,
+        timestamp: new Date().toISOString(),
+        content: [{ type: "text", text: "nested run sentinel" }],
+      }) + "\n");
+
+      // Simulate running pit from inside bwrap:
+      // PI_CODING_AGENT_DIR is set to a path OTHER than the real agentDir
+      // (simulating /pit-agent which is bind-mounted to agentDir).
+      // pit must still find the session in agentDir/sessions/<bucket>/.
+      const secondRun = runPit(["--mode", "json", "hello"], {
+        cwd: worktree,
+        agentDir,
+        // This simulates PI_CODING_AGENT_DIR=/pit-agent inside bwrap,
+        // but we point it at agentDir directly since we can't do a real bind mount here.
+        extraEnv: { PI_CODING_AGENT_DIR: agentDir },
+      });
+
+      const filesAfter = fs.readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));
+      expect(
+        filesAfter,
+        `Running pit from inside worktree (with PI_CODING_AGENT_DIR set) created a new session.\n` +
+        `stderr: ${secondRun.stderr?.slice(0, 400)}`
+      ).toHaveLength(1);
+
+      expect(
+        fs.readFileSync(sessionFile, "utf8").includes(SENTINEL_ID),
+        `Sentinel missing — session was overwritten.\nstderr: ${secondRun.stderr?.slice(0, 200)}`
+      ).toBe(true);
+    }
+  );
+});
