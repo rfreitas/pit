@@ -80,22 +80,17 @@ fails immediately. Pit and pi stay in sync by contract, not by convention.
 
 ## Mount requirement (same for both approaches)
 
-Both approaches require the pit source directory and its node_modules to be
-accessible inside bwrap. This is because:
+Because Approach B uses native ESM, the inner pit process resolves its imports (like `effect`) based on the physical location of `inner.ts` (`process.argv[1]`), **not** the worktree (`process.cwd()`).
 
-- Approach A: extension files at `~/repos/agent/pit/src/extensions/` are loaded
-  by jiti from inside bwrap. They import `effect`, `@earendil-works/pi-coding-agent`,
-  etc., which resolve from `~/repos/agent/node_modules/`.
-- Approach B: inner pit binary at `~/repos/agent/pit/pit.ts` is exec'd inside
-  bwrap. It imports the same packages from the same path.
+- **In Production:** If `pit` is globally installed via npm, it lives in the Node global `lib/node_modules/` directory. `bwrapLaunch` *already* mounts this directory read-only. No extra mounts are needed.
+- **In Development:** If `pit` is executed from source (`~/repos/agent/pit/pit.ts`), Node walks up to `~/repos/agent/node_modules/` to find dependencies. Because selective home mounts exclude the broader home directory, this dev dependency path must be explicitly mounted.
 
 Node.js ESM resolution follows the source file location, not `cwd` or
 `NODE_PATH`. The only clean solutions are:
 
 1. Keep `--ro-bind $HOME $HOME` (current — exposes credential files)
-2. Add explicit `--ro-bind ~/repos/agent/pit ~/repos/agent/pit` and
-   `--ro-bind ~/repos/agent/node_modules ~/repos/agent/node_modules`
-   (targeted — neither path contains credentials)
+2. Dynamically `--ro-bind` the pit directory and its closest `node_modules` ancestor.
+   (targeted — neither path contains credentials, automatically handles both dev and prod)
 
 Option 2 is recommended alongside selective home mounts. It mounts source code
 and dev dependencies, not secrets.
