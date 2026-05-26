@@ -1,178 +1,248 @@
-# Plan: harden the pit-escape socket
+# Plan: secure the pit-escape socket
 
 ## Problem
 
-The escape socket is an unauthenticated privileged channel. Any process inside
-the sandbox — including loaded extensions and the AI agent manipulated by a
-prompt injection — can connect and issue any op: `git reset --hard`, forged
-commits, `refresh-settings`.
+The escape socket is unauthenticated. Any process inside the sandbox — a
+malicious extension or the AI agent manipulated by prompt injection — can connect
+and issue ops: `git reset --hard`, forged commits, `refresh-settings`.
 
-See `plans/pit-escape-socket-security.md` for the original bypass write-up.
+The fix is an auth token. The token must be available to pit's own extensions
+(so they can authenticate with the escape server) but **not to the AI agent**
+(so a manipulated agent cannot forge authenticated requests).
 
-## Threat model
+---
 
-`merge-to-parent` and `rename-branch` are user-initiated slash commands. The
-agent does not call them autonomously, so confirmation prompts are not needed.
+## Two approaches to token delivery
 
-Real threats:
-1. A malicious or compromised npm package loaded as a pi extension
-2. The AI agent manipulated into calling lower-level socket ops directly via bash
+The challenge is architectural: pit's extensions run inside bwrap alongside the
+AI agent. Any channel that delivers the token to extensions is potentially
+readable by the agent unless it is consumed before the agent starts.
 
-Neither is currently resisted.
+### Approach A — Pi binary wrapper (extensions via jiti)
 
-## Architecture constraints (current codebase)
+bwrap execs the pi binary. Pit's own extensions are passed as `--extension path`
+flags and loaded by pi's jiti CJS loader. The token must travel from the outer
+pit process into the jiti extension context without being readable by the agent.
 
-- `pit/scripts/check-no-disable.ts` fails the build if any `eslint-disable`
-  directive exists in `pit/src/`. Zero disables are allowed.
-- `functional/no-let` is **removed** from the eslint config. `let` declarations
-  and variable reassignment are fine. `functional/immutable-data` still bans
-  **object property** mutations (`obj.prop = x`).
-- `func-style: ["error", "expression"]` requires arrow functions, not `function`
-  declarations.
-- `env.ts` is the established pattern for unavoidable `process.env` mutations:
-  one dedicated file with a scoped `functional/immutable-data: off` override in
-  `eslint.config.mjs`. All callers import a named function; no direct mutation
-  outside that file.
-- Extensions are loaded by pi's jiti CJS loader **sequentially** (confirmed:
-  `for…await` loop in pi's extension loader). The first extension in
-  `extensionArgs()` fully completes before the second starts.
+**Token path:** outer pit → named pipe (fifo) → `token.ts` IIFE (first extension
+to load) → module singleton → `getEscapeToken()` called by each extension.
 
-## Two layers — implement in order
+The fifo is in kernel buffers — never in `/proc/environ` or `/proc/cmdline`.
+After the first `readFileSync` it is empty. Subsequent extensions read from the
+cached module singleton.
 
-### Layer 1: auth token
+### Approach B — Pi API wrapper (extensions via closures)
 
-**Server side** — `pit/src/escape/server.ts`
+bwrap execs pit itself. Inner pit detects it is running inside bwrap (via env
+var), reads the token, then calls `main(argv, { extensionFactories })` from the
+pi SDK. Extensions are plain ESM arrow functions that close over `socketPath`
+and `token` — no delivery mechanism needed.
 
-`startPitEscapeEffect` in `launcher.ts` generates a token with `randomUUID()`
-and passes it as `argv[2]` to the escape server process (first positional arg,
-before socket path). The server stores it in a module-level `const` and checks
-`req.token !== token` on every request, responding `{ error: "unauthorized" }`
-and closing the connection on mismatch.
+**Token path:** outer pit → `--setenv PIT_ESCAPE_TOKEN` in bwrap args → inner
+pit reads and deletes immediately → passes as closure to factories.
 
-Token in escape server argv is visible in `/proc/[pid]/cmdline` to other
-processes with the same UID — but the escape server runs outside bwrap and is
-already trusted. Not a new vector.
+The token is in `/proc/environ` of the inner pit process from startup until
+`deletePitEscapeToken()` is called. That gap is the first microseconds of
+startup, before any JS runs — effectively zero. After deletion no child process
+or bash tool call can see it.
 
-**Token delivery to the sandbox**
+---
 
-Two modes:
+## Comparison
 
-*Sandbox mode* (bwrap): token travels through a kernel named pipe (fifo).
+| | Approach A (pi binary wrapper) | Approach B (pi API wrapper) |
+|---|---|---|
+| **What bwrap execs** | pi binary (globally installed, always in `nodeDir/bin`) | pit binary (needs pit dir + node_modules mounted) |
+| **Extension loading** | jiti CJS — `--extension /path/to/file.ts` | pi SDK extensionFactories — ESM closures |
+| **Token delivery** | fifo → `token.ts` IIFE → module singleton | env var → deleted immediately → closure |
+| **Token in `/proc`** | never (fifo content is in kernel buffers) | sub-ms window in `/proc/environ` at startup |
+| **Token access by agent** | not possible — fifo drained before any extension, module singleton not in env | not possible — deleted before `main()` runs |
+| **CJS/ESM boundary** | yes — barrel import restriction in extensions | none — plain ESM |
+| **pi version coupling** | pit must track pi's `--extension` loader behaviour | none — pit calls `main()` directly; if pi's API changes, TypeScript catches it at compile time |
+| **Bootstrap code in pit** | none — pit does not replicate pi binary preamble | 4 lines to replicate (`process.title`, `configureHttpDispatcher`, etc.) — stable across verified versions |
+| **Selective home mounts** | extensions need `~/repos/agent/pit/src/` and `~/repos/agent/node_modules` mounted | same requirement for pit binary + node_modules |
+| **piScript path** | `which pi` — always resolvable | `process.argv[1] + src/inner.ts` — needs pit dir mounted |
+| **Test pattern** | mock `process.env` + jiti module singletons | pass `socketPath`/`token` directly to factory |
+| **Extension contributor convention** | standard pi `export default function(pi)` | pit-specific factory pattern |
 
-```
-launcher.ts
-  token = randomUUID()
-  mkfifo /tmp/pit-token-<pid>.fifo  (mode 600)
-  writeFile(fifoPath, token, noop)  ← async; libuv thread blocks on O_WRONLY
-                                       until inner process opens read end
-  bwrapLaunch(... --ro-bind fifoPath /pit-token-pipe ...)
-  spawnSync(bwrap)  ← main thread blocks; libuv thread runs independently
-  // inner process reads /pit-token-pipe → unblocks libuv thread → write completes
-  unlinkSync(fifoPath)              ← after bwrap exits
-```
+### Key pro for Approach B: version safety
 
-The fifo path appears in the bwrap `--ro-bind` arg (visible in `/proc/[pid]/cmdline`
-of the outer bwrap process) but not the token content. The content lives in kernel
-pipe buffers — invisible to `/proc/self/environ`, `/proc/self/cmdline`, and all
-userspace tools. After the first `readFileSync` the pipe is empty.
+With Approach A, pit bundles extension file paths into `--extension` args and
+relies on pi's jiti loader to load them. If pi's extension loading behaviour
+changes (jiti version bump, loader rewrite, API rename), extensions silently
+break or behave differently without a compile-time error.
 
-*Non-sandbox mode* (no bwrap, `--no-sandbox`): token is set in
-`process.env.PIT_ESCAPE_TOKEN` via `setPitEscapeToken()` in `env.ts` before
-`main(piArgs)` is called. `token.ts` (see below) reads and deletes it on first
-import, which happens during `reload.ts` loading — before the agent processes
-any user request and before any bash child is spawned.
+With Approach B, pit calls `main(argv, { extensionFactories })`. The
+`ExtensionFactory` type is in pi's public TypeScript API. If it changes, `tsc`
+fails immediately. Pit and pi stay in sync by contract, not by convention.
 
-**Token module — `pit/src/extensions/escape/token.ts`** (new file)
+---
 
-A module-level `let _token = ""` is set once by an IIFE at module load time.
-Since `functional/no-let` is removed, this is valid without any lint exception.
-The `delete process.env.PIT_ESCAPE_TOKEN` mutation goes through `env.ts`.
+## Mount requirement (same for both approaches)
+
+Both approaches require the pit source directory and its node_modules to be
+accessible inside bwrap. This is because:
+
+- Approach A: extension files at `~/repos/agent/pit/src/extensions/` are loaded
+  by jiti from inside bwrap. They import `effect`, `@earendil-works/pi-coding-agent`,
+  etc., which resolve from `~/repos/agent/node_modules/`.
+- Approach B: inner pit binary at `~/repos/agent/pit/pit.ts` is exec'd inside
+  bwrap. It imports the same packages from the same path.
+
+Node.js ESM resolution follows the source file location, not `cwd` or
+`NODE_PATH`. The only clean solutions are:
+
+1. Keep `--ro-bind $HOME $HOME` (current — exposes credential files)
+2. Add explicit `--ro-bind ~/repos/agent/pit ~/repos/agent/pit` and
+   `--ro-bind ~/repos/agent/node_modules ~/repos/agent/node_modules`
+   (targeted — neither path contains credentials)
+
+Option 2 is recommended alongside selective home mounts. It mounts source code
+and dev dependencies, not secrets.
+
+---
+
+## Decision: Approach B recommended
+
+Approach B is chosen. The version safety argument is decisive: pit calling
+`main()` via the public SDK API means TypeScript enforces compatibility on every
+build, rather than relying on runtime jiti behaviour staying stable. The
+tradeoff (4 lines of bootstrap replication, factory pattern for extensions) is
+small and well-contained.
+
+---
+
+## Implementation
+
+### Layer 1 — Auth token (Approach B)
+
+#### Escape server (`pit/src/escape/server.ts`)
+
+`startPitEscapeEffect` generates a token and passes it as `argv[2]` (before
+socket path). Server validates `req.token !== token` on every request.
+
+#### Inner pit entry point (`pit/src/inner.ts`) — new file
 
 ```ts
-import { readFileSync } from "node:fs";
-import { deletePitEscapeToken } from "../../env.ts";
+import * as undici from "undici";
+import { main, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { deletePitEscapeToken, deletePitIsInner } from "./env.ts";
+import { createExtensionFactories } from "./extensions/index.ts";
 
-let _token = "";
+// Replicate pi binary bootstrap (stable across verified versions 0.74–0.75)
+process.title = "pi";
+process.emitWarning = () => {};
+undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent({
+  allowH2: false, bodyTimeout: 300_000, headersTimeout: 300_000,
+}));
+undici.install?.();
 
-export const getEscapeToken = (): string => _token;
+// Read and delete env vars before any child process is spawned
+deletePitIsInner();
+const token = process.env.PIT_ESCAPE_TOKEN ?? "";
+deletePitEscapeToken();
+const socketPath = process.env.PIT_ESCAPE_SOCKET ?? "";
 
-// Runs once when the module is first required by jiti.
-// reload.ts is first in extensionArgs(), so this executes before any other
-// extension imports this module.
-void (() => {
-  try {
-    // Sandbox mode: read from kernel fifo — zero /proc exposure
-    const t = readFileSync("/pit-token-pipe", "utf8").trim();
-    if (t) { _token = t; return; }
-  } catch { /* not in sandbox or no fifo */ }
-  // Non-sandbox mode: read from env var, then delete it
-  _token = process.env.PIT_ESCAPE_TOKEN ?? "";
-  deletePitEscapeToken();
-})();
+const factories: ExtensionFactory[] = socketPath
+  ? createExtensionFactories(socketPath, token)
+  : [];
+
+await main(process.argv.slice(2), { extensionFactories: factories });
 ```
 
-Jiti caches modules by resolved absolute path. All extensions that import
-`token.ts` get the same cached instance, so `getEscapeToken()` returns the same
-value everywhere.
-
-**env.ts additions**
+#### `pit/src/pit.ts` — inner mode detection
 
 ```ts
-export const setPitEscapeToken = (token: string): void => {
-  process.env.PIT_ESCAPE_TOKEN = token;
+if (process.env.PIT_IS_INNER === "1") {
+  await import("./inner.ts");
+} else {
+  // existing Effect.runPromise(program...) path
+}
+```
+
+#### `bwrapLaunch` in `pit/src/launcher.ts`
+
+```ts
+// Before: exec pi binary
+"--", nodeBin, piScript, ...piArgs
+
+// After: exec pit's inner entry point
+const pitInnerScript = resolve(dirname(process.argv[1]), "src", "inner.ts");
+"--", nodeBin, "--experimental-strip-types", pitInnerScript, ...piArgs
+
+// Additional --setenv entries:
+"--setenv", "PIT_IS_INNER", "1",
+"--setenv", "PIT_ESCAPE_TOKEN", token,
+// PIT_ESCAPE_SOCKET already in default whitelist
+
+// Additional mounts for pit source + node_modules:
+"--ro-bind", pitDir, pitDir,
+"--ro-bind", pitNodeModules, pitNodeModules,
+```
+
+#### Extension factories (`pit/src/extensions/index.ts`) — new file
+
+```ts
+export const createExtensionFactories = (
+  socketPath: string,
+  token: string,
+): ExtensionFactory[] => [
+  createReloadHook(socketPath, token),
+  createGitTool(socketPath, token),
+  createMergeCommand(socketPath, token),
+  createLocDiffStatus(socketPath, token),
+  createMergeStatus(socketPath, token),
+  createRenameBranchCommand(socketPath, token),
+];
+```
+
+#### Each extension — factory pattern
+
+```ts
+// Before
+export default function (pi: ExtensionAPI) {
+  const socketPath = process.env.PIT_ESCAPE_SOCKET;
+  if (!socketPath) return;
+  // register using socketPath
+}
+
+// After
+export const createGitTool = (
+  socketPath: string,
+  token: string,
+): ExtensionFactory => (pi) => {
+  // register using socketPath and token — both closure vars
 };
-export const deletePitEscapeToken = (): void => {
-  delete process.env.PIT_ESCAPE_TOKEN;
-};
 ```
 
-No new eslint exception needed — file already has `functional/immutable-data: off`.
-
-**Extension callers**
-
-Every call site that sends to the escape socket needs the token:
+#### `pit/src/env.ts` additions
 
 ```ts
-import { getEscapeToken } from "../escape/token.ts"; // adjust relative path
-
-const token = getEscapeToken();
-yield* sendEffect(socketPath, token, { op: "..." });
+export const setPitIsInner = (): void    => { process.env.PIT_IS_INNER = "1"; };
+export const deletePitIsInner = (): void => { delete process.env.PIT_IS_INNER; };
+export const setPitEscapeToken = (t: string): void => { process.env.PIT_ESCAPE_TOKEN = t; };
+export const deletePitEscapeToken = (): void       => { delete process.env.PIT_ESCAPE_TOKEN; };
 ```
 
-`sendEffect` in `escape/client.ts` gains a `token: string` second parameter
-and includes it in every request body: `JSON.stringify({ ...req, token })`.
+#### `pit/src/program.ts`
 
-**Files changed**
+- Remove `extensionArgs()` import and all call sites
+- `startPitEscapeEffect` returns `Option<{ socketPath, token }>`
+- Thread token to `launchEffect`; non-sandbox path calls
+  `main(piArgs, { extensionFactories })` directly
 
-| File | Change |
-|---|---|
-| `pit/src/launcher.ts` | `startPitEscapeEffect` returns `Option<{socketPath, token}>`, generates token, passes as argv to server; `bwrapLaunch` adds fifo creation + bind; `launchEffect` calls `setPitEscapeToken` in non-sandbox path |
-| `pit/src/program.ts` | reads `pitConfig` once at top, extracts `{socketPath, token}` from escape handle, threads both to `launchEffect` |
-| `pit/src/env.ts` | adds `setPitEscapeToken`, `deletePitEscapeToken` |
-| `pit/src/escape/server.ts` | reads token from `argv[2]`, shifts other argv, validates on every request |
-| `pit/src/extensions/escape/token.ts` | new — module singleton |
-| `pit/src/extensions/escape/client.ts` | `sendEffect(socketPath, token, req)` — adds token param |
-| `pit/src/extensions/hooks/reload.ts` | imports token.ts (triggers IIFE), passes `getEscapeToken()` to sendEffect |
-| `pit/src/extensions/tools/git.ts` | imports `getEscapeToken`, passes to sendEffect |
-| `pit/src/extensions/status/helpers.ts` | same |
-| `pit/src/extensions/commands/merge/effect.ts` + `index.ts` | same |
-| `pit/src/extensions/commands/rename-branch/effect.ts` + `index.ts` | same |
+---
 
-### Layer 2: env whitelist
+### Layer 2 — Env whitelist
 
-`--clearenv` in `bwrapLaunch` strips the full parent environment. Only an
-explicit allowlist enters the sandbox.
+`--clearenv` in `bwrapLaunch` strips all inherited env. Only an explicit
+allowlist enters the sandbox.
 
-**Why this is safe**
+**Why safe:** pi reads API keys from `auth.json` in `AGENT_DIR` (rw-mounted),
+not env vars. SSH git ops go through the escape server (outside bwrap, full
+parent env). `--clearenv` breaks nothing.
 
-- pi reads API keys from `auth.json` in `AGENT_DIR` (rw-mounted as `/pit-agent`),
-  not from env vars. Confirmed by reading pi's source.
-- SSH git operations go through the escape server (outside bwrap), which inherits
-  the full parent env including `SSH_AUTH_SOCK`. Confirmed: `@effect/platform`
-  Command executor uses `{ ...process.env, ...command.env }` when spawning.
-- `--clearenv` does not break pi's auth or git functionality.
-
-**Built-in default whitelist** (hardcoded in `bwrapLaunch`):
+**Built-in default whitelist:**
 
 | Var | Why |
 |---|---|
@@ -180,54 +250,60 @@ explicit allowlist enters the sandbox.
 | `PATH` | finding executables |
 | `TERM` | TUI terminal capability detection |
 | `LANG` | character encoding |
-| `PI_CODING_AGENT` | pi's own detection flag |
-| `PI_CODING_AGENT_DIR` | shadow agent dir path (when active) |
+| `PI_CODING_AGENT` | pi detection flag |
+| `PI_CODING_AGENT_DIR` | shadow agent dir (when active) |
 | `PIT_ESCAPE_SOCKET` | escape socket path |
+| `PIT_IS_INNER` | inner-mode signal (deleted immediately) |
+| `PIT_ESCAPE_TOKEN` | auth token (deleted immediately) |
 
-**Project allowlist** — `allowEnv` in `pit/config.json`
+**Project allowlist** — `allowEnv` in `pit/config.json`:
 
 ```json
 { "denyPackages": [], "allowEnv": ["http_proxy", "https_proxy"] }
 ```
 
-`allowedEnvArgs(config, env)` in `core/sandbox/pure.ts` is a pure function that
-maps the list to `--setenv` pairs, skipping vars absent from the parent env.
-
-**Files changed**
-
-| File | Change |
-|---|---|
-| `pit/src/types.ts` | adds `allowEnv?: string[]` to `PitConfig` |
-| `pit/src/core/sandbox/pure.ts` | adds `allowedEnvArgs` pure fn, selective home mounts |
-| `pit/src/launcher.ts` | `bwrapLaunch` adds `--clearenv` + default setenv + `allowedEnvArgs` expansion; accepts `pitConfig: PitConfig` |
-| `pit/config.example.json` | documents `allowEnv` field |
-
-**Selective home mounts**
-
-The full `--ro-bind $HOME $HOME` is replaced with specific optional mounts.
-pi only needs from home: `AGENT_DIR` (explicitly rw-mounted), `~/.gitconfig`,
-`~/.config/git`, `~/.npmrc`, `~/.local/share/mise/installs`. Confirmed by
-reading pi's source — it reads nothing else from home.
+**Selective home mounts** — replace `--ro-bind $HOME $HOME` with:
+- `~/.gitconfig`, `~/.config/git` — git identity
+- `~/.npmrc` — npm config
+- `~/.local/share/mise/installs` — mise tool binaries
+- `~/repos/agent/pit/` — pit source (inner.ts, extensions)
+- `~/repos/agent/node_modules/` — pit's dependencies
 
 Excluded: `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.gnupg`.
 
+---
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `pit/src/inner.ts` | new — inner-mode entry point |
+| `pit/src/pit.ts` | add inner-mode branch at top |
+| `pit/src/launcher.ts` | bwrapLaunch: exec inner.ts, add token setenvs, add pit mounts; startPitEscapeEffect: generate token, return EscapeHandle; launchEffect: gains token param; delete extensionArgs() |
+| `pit/src/program.ts` | remove extensionArgs() call sites; thread token to launchEffect |
+| `pit/src/env.ts` | add 4 env mutation helpers |
+| `pit/src/extensions/index.ts` | new — factory aggregator |
+| `pit/src/extensions/hooks/reload.ts` | factory pattern |
+| `pit/src/extensions/tools/git.ts` | factory pattern |
+| `pit/src/extensions/status/helpers.ts` | add token param |
+| `pit/src/extensions/status/merge-status.ts` | factory pattern |
+| `pit/src/extensions/status/loc-diff.ts` | factory pattern |
+| `pit/src/extensions/commands/merge/effect.ts` + `index.ts` | factory pattern |
+| `pit/src/extensions/commands/rename-branch/effect.ts` + `index.ts` | factory pattern |
+| `pit/src/types.ts` | add `allowEnv?: string[]` to `PitConfig` |
+| `pit/src/core/sandbox/pure.ts` | add `allowedEnvArgs` pure fn; selective home mounts |
+| `pit/config.example.json` | document `allowEnv` |
+
+---
+
 ## Not in scope
 
-- `--unshare-ipc`: does **not** block D-Bus or abstract sockets (those are
-  scoped to the network namespace, not the IPC namespace). It only isolates
-  SysV IPC (shared memory, semaphores, message queues) which Node.js does not
-  use. Benefit is negligible; omitted.
-- `--unshare-net` + proxy: separate work; would break pi's AI API calls without
-  a forwarding proxy. Deferred.
-- Seccomp: high complexity, fragile with Node.js. Deferred.
+- `--unshare-net` + proxy: breaks AI API calls without a forwarding proxy
+- `--unshare-ipc`: only isolates SysV IPC — does not block D-Bus abstract sockets
+- Seccomp: fragile with Node.js
 
-## Tests
+## Bootstrap stability check (future skill)
 
-| Test location | What it covers |
-|---|---|
-| `pit/src/escape/server.test.ts` | rejects missing/wrong token; accepts correct token |
-| `pit/src/extensions/escape/client.test.ts` | `sendEffect` includes token in request |
-| `pit/src/extensions/hooks/reload.test.ts` | token read and sent on refresh-settings |
-| `pit/src/core/sandbox/pure.test.ts` | `allowedEnvArgs` pure fn; selective home mounts |
-| `pit/src/extensions/escape/token.test.ts` | (new) fifo read path; env fallback; delete |
-| `pit/src/tests/bwrap-args.test.ts` | (new) `--clearenv` present; default vars present; `allowEnv` expansion |
+inner.ts replicates 4 lines from the pi binary preamble. These have been
+stable across verified versions 0.74.0 → 0.75.5. A skill should diff the
+installed pi `cli.js` preamble against `inner.ts` after every `pi update`.
