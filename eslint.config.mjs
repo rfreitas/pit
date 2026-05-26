@@ -42,7 +42,7 @@ export default [
   {
     ...base,
     files: ["pit/**/*.ts"],
-    ignores: ["pit/tests/**"],
+    ignores: ["pit/tests/**", "pit/src/**/*.test.ts", "pit/src/tests/**"],
     rules: {
       "functional/immutable-data": "error",
       "prefer-arrow-callback": "error",
@@ -90,10 +90,9 @@ export default [
   {
     ...base,
     files: ["pit/**/*.ts"],
-    ignores: ["pit/tests/**"],
+    ignores: ["pit/tests/**", "pit/src/**/*.test.ts", "pit/src/tests/**"],
     plugins: {
       ...base.plugins,
-      local: { rules: { "no-side-effects-in-pure-fn": noSideEffectsInPureFn } },
       local: localPlugin,
     },
     rules: {
@@ -120,6 +119,8 @@ export default [
     files: ["pit/**/*.ts"],
     ignores: [
       "pit/tests/**",
+      "pit/src/**/*.test.ts",
+      "pit/src/tests/**",
       "pit/src/extensions/**",
     ],
     plugins: {
