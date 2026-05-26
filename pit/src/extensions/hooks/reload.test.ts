@@ -27,15 +27,11 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import reloadExt from "../src/extensions/hooks/reload.ts";
+import reloadExt from "./reload.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-const TEST_SANDBOX = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "test-sandbox"
-);
+const TEST_SANDBOX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "test-sandbox");
 
 type ShutdownReason = "quit" | "reload" | "new" | "resume" | "fork";
 

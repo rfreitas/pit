@@ -33,7 +33,7 @@ vi.mock("@earendil-works/pi-ai", () => ({
 }));
 
 import { complete } from "@earendil-works/pi-ai";
-import renameBranchExt from "../src/extensions/commands/rename-branch/index.ts";
+import renameBranchExt from "./index.ts";
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -71,11 +71,7 @@ const CONVERSATION_ENTRIES = [
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-const TEST_SANDBOX = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "test-sandbox"
-);
+const TEST_SANDBOX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "test-sandbox");
 
 type Notification = { message: string; level: string };
 

@@ -24,18 +24,8 @@ import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-const TEST_SANDBOX = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "test-sandbox"
-);
-const PIT_ESCAPE = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "src",
-  "escape",
-  "server.ts"
-);
+const TEST_SANDBOX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "test-sandbox");
+const PIT_ESCAPE = path.join(path.dirname(fileURLToPath(import.meta.url)), "server.ts");
 
 const tmpDirs: string[] = [];
 const children: ChildProcess[] = [];
