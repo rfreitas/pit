@@ -346,7 +346,8 @@ credential files (~/repos/agent/.env, ~/repos/agent/secrets, etc.) would still
 be readable if they exist there. Is the selective home mount still meaningfully
 more secure than full home mount given this constraint?
 
-**5. Non-worktree mode**
-In non-worktree mode (pit -nt), there is no escape server and therefore no
-token. inner.ts gets empty factories — pi runs without pit's git tool, /merge,
-etc. Is that acceptable for non-worktree sessions?
+**5. Non-linked-worktree mode**
+When cwd is not a linked worktree (e.g. main repo root), startPitEscapeEffect
+returns None — regardless of -nt. The sandbox still runs. -nt only skips
+worktree creation, not sandboxing. inner.ts gets empty factories — pit's git tool, /merge,
+etc. are unavailable. Is this intentional for main-repo-root sessions?
