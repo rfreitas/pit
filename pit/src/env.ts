@@ -16,3 +16,8 @@ export const deletePitIsInner = (): void => {
 export const deletePitEscapeToken = (): void => {
   delete process.env.PIT_ESCAPE_TOKEN;
 };
+
+export const bootstrapProcess = (): void => {
+  process.title = "pi";
+  process.emitWarning = () => {};
+};

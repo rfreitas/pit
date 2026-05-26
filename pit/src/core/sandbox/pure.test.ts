@@ -152,7 +152,7 @@ describe("buildSandboxMountSpec", () => {
   const base = {
     home: "/home/user",
     cwd: "/home/user/repo-wt-abc",
-    agentDirReal: "/home/user/.pi/agent",
+    agentDir: "agent", agentDirReal: "/home/user/.pi/agent",
     extensionMounts: [] as string[],
     nodeDir: "/usr/local",
     gitRwMounts: [] as Array<{ path: string; label?: string }>,

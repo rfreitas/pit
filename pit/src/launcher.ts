@@ -80,6 +80,7 @@ export const getExtensionMounts = (): string[] => {
  */
 export const buildSandboxMountsEffect = (
   cwd: string,
+  agentDir: string,
   agentDirReal: string,
   extensionMounts: string[],
   nodeDir: string,
@@ -106,7 +107,7 @@ export const buildSandboxMountsEffect = (
       : [];
     const gitRwMounts = yield* resolveWorktreeGitRwMounts(cwd);
     return buildSandboxMountSpec({
-      home: HOME, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs,
+      home: HOME, cwd, agentDir, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs,
     });
   });
 
@@ -118,7 +119,7 @@ export const resolveSandboxMountsEffect = (
     if (!useSandbox || !findBwrap()) return undefined;
     const nodeDir = dirname(dirname(process.execPath));
     return yield* buildSandboxMountsEffect(
-      cwd, realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir,
+      cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir,
     );
   });
 
@@ -242,6 +243,7 @@ export const launchEffect = (
       if (bwrap) {
         const m = mounts ?? (yield* buildSandboxMountsEffect(
           cwd,
+          AGENT_DIR,
           realpathSync(AGENT_DIR),
           getExtensionMounts(),
           dirname(dirname(process.execPath)),

@@ -52,13 +52,14 @@ export const allowedEnvArgs = (
 export const buildSandboxMountSpec = (params: Readonly<{
   home: string;
   cwd: string;
+  agentDir: string;
   agentDirReal: string;
   extensionMounts: string[];
   nodeDir: string;
   gitRwMounts: Array<{ path: string; label?: string }>;
   overlayDirs: OverlayMount[];
 }>): SandboxMounts  => {
-  const { home, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs } = params;
+  const { home, cwd, agentDir, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs } = params;
   return {
     ro: [
       // Selective home dotfiles — full home is NOT bind-mounted.
@@ -80,6 +81,7 @@ export const buildSandboxMountSpec = (params: Readonly<{
       ...gitRwMounts,
       { path: cwd },
       { path: agentDirReal,                               label: "Pi config dir" },
+      ...(agentDir !== agentDirReal ? [{ path: agentDir, label: "Pi config dir (symlink)" }] : []),
       { path: join(home, ".npm"),                    label: "npm cache" },
       { path: join(home, ".local/share/mise/shims"), label: "mise shims" },
       { path: join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },

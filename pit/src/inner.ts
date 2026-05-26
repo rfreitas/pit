@@ -6,7 +6,7 @@
  */
 import * as undici from "undici";
 import { main } from "@earendil-works/pi-coding-agent";
-import { deletePitEscapeToken, deletePitIsInner } from "./env.ts";
+import { deletePitEscapeToken, deletePitIsInner, bootstrapProcess } from "./env.ts";
 import { createExtensionFactories } from "./extensions/index.ts";
 
 /**
@@ -18,8 +18,7 @@ export const runInner = async (
   env: NodeJS.ProcessEnv,
 ): Promise<void> => {
   // Bootstrap — mirrors what the pi binary does before calling main()
-  process.title = "pi";
-  process.emitWarning = () => {};
+  bootstrapProcess();
   undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent({
     allowH2: false,
     bodyTimeout: 300_000,
