@@ -302,3 +302,72 @@ Excluded: `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.gnupg`.
 inner.ts replicates 4 lines from the pi binary preamble. These have been
 stable across verified versions 0.74.0 → 0.75.5. A skill should diff the
 installed pi `cli.js` preamble against `inner.ts` after every `pi update`.
+
+---
+
+## Tests
+
+### Philosophy
+
+Tests assert **observable behaviour at meaningful boundaries**, not internal
+implementation details. Renaming a helper or splitting a function must not
+break passing tests.
+
+### Area 1 — `bwrapLaunch` args (`pit/src/launcher.test.ts`)
+
+Mock `node:child_process` (`spawnSync` spy) and `process.exit` so `bwrapLaunch`
+runs its full production arg-building code without actually spawning bwrap.
+Assert on the exact args the spy receives.
+
+```
+--clearenv present
+HOME, PATH, PI_CODING_AGENT, PIT_IS_INNER in --setenv list
+PIT_ESCAPE_TOKEN in --setenv when escapeToken provided, absent otherwise
+PIT_ESCAPE_SOCKET in --setenv when set in env
+allowEnv extras forwarded from pitConfig
+--ro-bind for pitDir + pitNodeModules when script is in a local dev path
+no pit --ro-bind when script path is inside global lib/node_modules
+inner.ts is the exec target, not the pi binary
+--experimental-strip-types flag present
+```
+
+### Area 2 — Escape server auth (`pit/src/escape/server.test.ts`)
+
+Already integration-tests a real server over a real socket. Update `spawnEscape`
+to pass token as `argv[2]`. Add token to request objects.
+
+```
+request without token   → { error: "unauthorized" }
+request with wrong token  → { error: "unauthorized" }
+request with correct token → op result
+```
+
+### Area 3 — Extension factories (`pit/src/extensions/index.test.ts`)
+
+Call `createExtensionFactories("mock.sock", "mock-token")`. Invoke every
+returned factory on a mock `ExtensionAPI`. Assert on **registered names and
+token usage** — not on factory count (an implementation detail that changes
+when extensions are added).
+
+```
+mockPi.registerTool called with { name: "git" }
+mockPi.registerCommand called with "merge"
+mockPi.registerCommand called with "rename-branch"
+pi.on("session_shutdown") registered (reload hook)
+sendEffect spy called with "mock-token" when tool/command executes
+empty array returned when socketPath is empty string
+```
+
+### Area 4 — `inner.ts` bootstrap (`pit/src/inner.test.ts`)
+
+Mock `@earendil-works/pi-coding-agent` so `main` is a spy that returns
+immediately. Import and run real production `inner.ts` code.
+
+```
+PIT_ESCAPE_TOKEN deleted from process.env before main() is called
+PIT_IS_INNER deleted from process.env before main() is called
+main() receives process.argv.slice(2) as its first argument
+main() receives non-empty extensionFactories when PIT_ESCAPE_SOCKET is set
+main() receives empty extensionFactories when PIT_ESCAPE_SOCKET is empty
+process.title equals "pi" before main() is called
+```
