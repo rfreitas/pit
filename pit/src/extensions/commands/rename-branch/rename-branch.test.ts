@@ -33,7 +33,7 @@ vi.mock("@earendil-works/pi-ai", () => ({
 }));
 
 import { complete } from "@earendil-works/pi-ai";
-import renameBranchExt from "./index.ts";
+import { createRenameBranchCommand } from "./index.ts";
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -180,8 +180,7 @@ beforeEach(() => {
 afterEach(async () => {
   process.chdir(originalCwd);
   fixture.cleanup();
-  delete process.env.PIT_ESCAPE_SOCKET;
-  vi.clearAllMocks();
+    vi.clearAllMocks();
   await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
   servers.length = 0;
   for (const p of socketPaths) { try { fs.unlinkSync(p); } catch { /* gone */ } }
@@ -200,21 +199,19 @@ function makeSocketPath(): string {
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 describe("/rename-branch command", () => {
-  it("does NOT register when PIT_ESCAPE_SOCKET is unset", () => {
-    delete process.env.PIT_ESCAPE_SOCKET;
-    const pi = makeMockPi();
-    renameBranchExt(pi as any);
-    expect(pi.getCommand("rename-branch")).toBeUndefined();
+  it("does NOT register when socketPath is empty (aggregator returns empty array)", async () => {
+    const { createExtensionFactories } = await import("../../../extensions/index.ts");
+    expect(createExtensionFactories("", "token")).toHaveLength(0);
   });
 
   it("registers when PIT_ESCAPE_SOCKET is set", () => {
     const socketPath = makeSocketPath();
     const { server } = startMockEscape(socketPath, defaultEscapeHandler);
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-
+    
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     expect(pi.getCommand("rename-branch")).toBeDefined();
   });
 
@@ -222,10 +219,10 @@ describe("/rename-branch command", () => {
     const socketPath = makeSocketPath();
     const { received, server } = startMockEscape(socketPath, withCommitsHandler);
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-
+    
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     const ctx = makeMockCtx();
     await pi.getCommand("rename-branch")!.handler("", ctx);
 
@@ -247,10 +244,10 @@ describe("/rename-branch command", () => {
     const socketPath = makeSocketPath();
     const { server } = startMockEscape(socketPath, defaultEscapeHandler);
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-
+    
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     const ctx = makeMockCtx();
     await pi.getCommand("rename-branch")!.handler("", ctx);
 
@@ -263,12 +260,11 @@ describe("/rename-branch command", () => {
     const socketPath = makeSocketPath();
     const { server } = startMockEscape(socketPath, defaultEscapeHandler);
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
 
     vi.mocked(complete).mockResolvedValue(aiResponse("add-rename-command") as any);
 
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     const ctx = makeMockCtx();
     await pi.getCommand("rename-branch")!.handler("", ctx);
 
@@ -285,12 +281,11 @@ describe("/rename-branch command", () => {
       return defaultEscapeHandler(req);
     });
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
 
     vi.mocked(complete).mockResolvedValue(aiResponse("fix-auth") as any);
 
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     await pi.getCommand("rename-branch")!.handler("", makeMockCtx());
 
     const renameReq = (received as Array<Record<string, unknown>>)
@@ -306,12 +301,11 @@ describe("/rename-branch command", () => {
       return defaultEscapeHandler(req);
     });
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
 
     vi.mocked(complete).mockResolvedValue(aiResponse("Fix Auth Flow!!") as any);
 
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     await pi.getCommand("rename-branch")!.handler("", makeMockCtx());
 
     const renameReq = (received as Array<Record<string, unknown>>)
@@ -323,13 +317,12 @@ describe("/rename-branch command", () => {
     const socketPath = makeSocketPath();
     const { received, server } = startMockEscape(socketPath, defaultEscapeHandler);
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
 
     // Slug matches the current branch id
     vi.mocked(complete).mockResolvedValue(aiResponse("fd9b759f") as any);
 
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     const ctx = makeMockCtx();
     await pi.getCommand("rename-branch")!.handler("", ctx);
 
@@ -343,14 +336,13 @@ describe("/rename-branch command", () => {
     const socketPath = makeSocketPath();
     const { server } = startMockEscape(socketPath, defaultEscapeHandler);
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
 
     vi.mocked(complete).mockResolvedValue({
       content: [{ type: "text" as const, text: "not json at all" }],
     } as any);
 
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     const ctx = makeMockCtx();
     await pi.getCommand("rename-branch")!.handler("", ctx);
 
@@ -361,12 +353,11 @@ describe("/rename-branch command", () => {
     const socketPath = makeSocketPath();
     const { server } = startMockEscape(socketPath, defaultEscapeHandler);
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
 
     vi.mocked(complete).mockResolvedValue(aiResponse("") as any);
 
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     const ctx = makeMockCtx();
     await pi.getCommand("rename-branch")!.handler("", ctx);
 
@@ -381,10 +372,10 @@ describe("/rename-branch command", () => {
       return defaultEscapeHandler(req);
     });
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-
+    
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     const ctx = makeMockCtx();
     await pi.getCommand("rename-branch")!.handler("", ctx);
 
@@ -396,10 +387,10 @@ describe("/rename-branch command", () => {
     const socketPath = makeSocketPath();
     const { server } = startMockEscape(socketPath, defaultEscapeHandler);
     servers.push(server);
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-
+    
     const pi = makeMockPi();
-    renameBranchExt(pi as any);
+
+    createRenameBranchCommand(socketPath, "test-token")(pi as any);
     const ctx = makeMockCtx({ model: null });
     await pi.getCommand("rename-branch")!.handler("", ctx);
 

@@ -21,11 +21,11 @@ import { opLocDiff } from "./core/ops/diff.ts";
 import { opRefreshSettings } from "./core/ops/settings.ts";
 import { handleSubscribe } from "./core/ops/subscribe.ts";
 
-const [, , socketPath, worktreePath, agentDir, pitDir, hostSettingsPath] =
+const [, , token, socketPath, worktreePath, agentDir, pitDir, hostSettingsPath] =
   process.argv;
-if (!socketPath || !worktreePath || !agentDir || !pitDir || !hostSettingsPath) {
+if (!token || !socketPath || !worktreePath || !agentDir || !pitDir || !hostSettingsPath) {
   process.stderr.write(
-    "usage: pit-escape <socket-path> <worktree-path> <agent-dir> <pit-dir> <host-settings-path>\n",
+    "usage: pit-escape <token> <socket-path> <worktree-path> <agent-dir> <pit-dir> <host-settings-path>\n",
   );
   process.exit(1);
 }
@@ -37,6 +37,7 @@ const GIT_ALLOWED = new Set([
 
 type Request = {
   op?: string;
+  token?: string;
   args?: unknown;
   parentBranch?: string;
   newBranch?: string;
@@ -116,6 +117,11 @@ const server = createServer((socket: Socket) => {
       }
     })();
     if (!req) return;
+
+    if (req.token !== token) {
+      socket.end(JSON.stringify({ error: "unauthorized" }) + "\n");
+      return;
+    }
 
     if (typeof req.op !== "string") {
       socket.end(JSON.stringify({ error: "request must have op (string)" }) + "\n");

@@ -158,8 +158,12 @@ describe("buildSandboxMountSpec", () => {
     gitRwMounts: [] as Array<{ path: string; label?: string }>,
     overlayDirs: [] as OverlayMount[],
   };
-  it("ro section includes home directory entry", () => {
-    expect(buildSandboxMountSpec(base).ro.some((m) => m.label === "home directory")).toBe(true);
+  it("ro section includes home dotfiles (selective mounts)", () => {
+    expect(buildSandboxMountSpec(base).ro.some((m) => m.label === "home dotfiles")).toBe(true);
+  });
+
+  it("ro section does NOT include a wholesale home directory bind", () => {
+    expect(buildSandboxMountSpec(base).ro.some((m) => m.label === "home directory")).toBe(false);
   });
   it("ro section includes /usr and /etc as system dirs", () => {
     const paths = buildSandboxMountSpec(base).ro.filter((m) => m.label === "system dirs").map((m) => m.path);

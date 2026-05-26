@@ -7,7 +7,7 @@
  * Only active when PIT_ESCAPE_SOCKET is set (running under pit with a worktree session).
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { useEscapeStatus } from "./helpers.ts";
 
 type IsMergedResponse =
@@ -42,13 +42,13 @@ export const formatStatus = (
   }
 };
 
-export default function (pi: ExtensionAPI) {
-  const socketPath = process.env.PIT_ESCAPE_SOCKET;
-  if (!socketPath) return;
-
-  useEscapeStatus(pi, socketPath, "is-merged", "pit-merged", (resp) => {
+export const createMergeStatus = (
+  socketPath: string,
+  token: string,
+): ExtensionFactory => (pi: ExtensionAPI) => {
+  useEscapeStatus(pi, socketPath, token, "is-merged", "pit-merged", (resp) => {
     const r = resp as IsMergedResponse;
     if ("error" in r || !r.parentBranch) return undefined;
     return formatStatus(r.aheadCount, r.behindCount, r.parentBranch);
   });
-}
+};

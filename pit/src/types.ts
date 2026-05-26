@@ -74,6 +74,12 @@ export interface SandboxMounts {
 export interface PitConfig {
   /** Package sources to strip from settings.json when launching sandboxed. */
   denyPackages?: string[];
+  /**
+   * Extra env var names to pass into the sandbox on top of the built-in
+   * defaults. Values are taken from the host env at launch time; absent vars
+   * are silently skipped. Example: ["http_proxy", "https_proxy"].
+   */
+  allowEnv?: string[];
 }
 
 // ── flag parsing ──────────────────────────────────────────────────────────────

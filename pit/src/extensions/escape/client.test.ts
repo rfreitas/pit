@@ -50,6 +50,7 @@ async function spawnEscape(socketPath: string): Promise<void> {
       "--experimental-strip-types",
       "--no-warnings",
       PIT_ESCAPE,
+      "probe-test-token",  // token (arbitrary — probe tests don't send ops)
       socketPath,
       dir,          // worktreePath (dummy)
       dir,          // agentDir (dummy)

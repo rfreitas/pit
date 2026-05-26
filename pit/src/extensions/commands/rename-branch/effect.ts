@@ -17,20 +17,21 @@ type StateResponse = { parentBranch: string | null };
 
 const buildGitContextEffect = (
   socketPath: string,
+  token: string,
 ): Effect.Effect<Option.Option<string>> =>
   Effect.gen(function* () {
-    const stateResp = yield* sendEffect(socketPath, { op: "get-state" });
+    const stateResp = yield* sendEffect(socketPath, token, { op: "get-state" });
     if ("error" in stateResp) return Option.none();
 
     const { parentBranch } = stateResp as unknown as StateResponse;
     if (!parentBranch) return Option.none();
 
     const [logResp, diffResp] = yield* Effect.all([
-      sendEffect(socketPath, {
+      sendEffect(socketPath, token, {
         op: "git",
         args: ["log", `${parentBranch}..HEAD`, "--oneline", "--max-count=20"],
       }),
-      sendEffect(socketPath, {
+      sendEffect(socketPath, token, {
         op: "git",
         args: ["diff", "--stat", `${parentBranch}...HEAD`],
       }),
@@ -102,6 +103,7 @@ type AuthResult =
 export const renameBranchEffect = (
   ctx: ExtensionCommandContext,
   socketPath: string,
+  token: string,
 ): Effect.Effect<void, Error, NodeContext.NodeContext> =>
   Effect.gen(function* () {
     const cwd = process.cwd();
@@ -127,7 +129,7 @@ export const renameBranchEffect = (
     }
 
     ctx.ui.notify("Building context...", "info");
-    const gitContextOpt = yield* buildGitContextEffect(socketPath);
+    const gitContextOpt = yield* buildGitContextEffect(socketPath, token);
 
     const context = Option.isSome(gitContextOpt)
       ? gitContextOpt.value
@@ -200,7 +202,7 @@ export const renameBranchEffect = (
       return;
     }
 
-    const resp = yield* sendEffect(socketPath, { op: "rename-branch", newBranch });
+    const resp = yield* sendEffect(socketPath, token, { op: "rename-branch", newBranch });
 
     if ("error" in resp || resp.code !== 0) {
       yield* Effect.fail(new Error(`branch rename failed: ${errMsg(resp)}`));
