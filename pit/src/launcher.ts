@@ -21,7 +21,8 @@ import {
 import { resolveUnversionedDirs } from "./core/sandbox/io.ts";
 import { buildSandboxMountSpec, allowedEnvArgs } from "./core/sandbox/pure.ts";
 import { probeSocketEffect } from "./extensions/escape/client.ts";
-import { setPitEscapeSocket, setPitEscapeToken } from "./env.ts";
+import { setPitEscapeSocket } from "./env.ts";
+import { createExtensionFactories } from "./extensions/index.ts";
 import { SocketAliveError } from "./errors.ts";
 
 // ── extension args ────────────────────────────────────────────────────────────
@@ -198,6 +199,14 @@ export const bwrapLaunch = (
     "--setenv", "PIT_IS_INNER", "1",
     ...(process.env.TERM ? ["--setenv", "TERM", process.env.TERM] : []),
     ...(process.env.LANG ? ["--setenv", "LANG", process.env.LANG] : []),
+    // Proxy vars: passed by default since they are non-secret and needed for
+    // the undici EnvHttpProxyAgent inside inner.ts to route AI API traffic.
+    ...(process.env.http_proxy  ? ["--setenv", "http_proxy",  process.env.http_proxy]  : []),
+    ...(process.env.https_proxy ? ["--setenv", "https_proxy", process.env.https_proxy] : []),
+    ...(process.env.no_proxy    ? ["--setenv", "no_proxy",    process.env.no_proxy]    : []),
+    ...(process.env.HTTP_PROXY  ? ["--setenv", "HTTP_PROXY",  process.env.HTTP_PROXY]  : []),
+    ...(process.env.HTTPS_PROXY ? ["--setenv", "HTTPS_PROXY", process.env.HTTPS_PROXY] : []),
+    ...(process.env.NO_PROXY    ? ["--setenv", "NO_PROXY",    process.env.NO_PROXY]    : []),
     ...(process.env.PIT_ESCAPE_SOCKET
       ? ["--setenv", "PIT_ESCAPE_SOCKET", process.env.PIT_ESCAPE_SOCKET]
       : []),
@@ -243,9 +252,15 @@ export const launchEffect = (
       }
       yield* Effect.logWarning("pit: bwrap not found — running without sandbox");
     }
-    if (escapeToken) setPitEscapeToken(escapeToken);
+    // Non-sandbox: pass the same factories so extension behaviour is consistent
+    // whether bwrap is available or not.
+    const socketPath = process.env.PIT_ESCAPE_SOCKET ?? "";
     process.chdir(cwd);
-    yield* Effect.promise(() => main(piArgs).catch(() => {}));
+    yield* Effect.promise(() =>
+      main(piArgs, {
+        extensionFactories: createExtensionFactories(socketPath, escapeToken ?? ""),
+      }).catch(() => {})
+    );
   });
 
 // ── pit-escape startup ────────────────────────────────────────────────────────

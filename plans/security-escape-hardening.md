@@ -250,12 +250,17 @@ parent env). `--clearenv` breaks nothing.
 | `PIT_ESCAPE_SOCKET` | escape socket path |
 | `PIT_IS_INNER` | inner-mode signal (deleted immediately) |
 | `PIT_ESCAPE_TOKEN` | auth token (deleted immediately) |
+| `http_proxy`, `https_proxy`, `no_proxy` | proxy routing for AI API calls (undici reads these) |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | uppercase proxy variants |
 
 **Project allowlist** — `allowEnv` in `pit/config.json`:
 
 ```json
-{ "denyPackages": [], "allowEnv": ["http_proxy", "https_proxy"] }
+{ "denyPackages": [], "allowEnv": [] }
 ```
+
+Proxy vars (`http_proxy` etc.) are in the built-in default whitelist and do not
+need to be added to `allowEnv`.
 
 **Selective home mounts** — replace `--ro-bind $HOME $HOME` with:
 - `~/.gitconfig`, `~/.config/git` — git identity

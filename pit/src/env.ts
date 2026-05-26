@@ -9,10 +9,6 @@ export const setPitEscapeSocket = (path: string): void => {
   process.env.PIT_ESCAPE_SOCKET = path;
 };
 
-export const setPitIsInner = (): void => {
-  process.env.PIT_IS_INNER = "1";
-};
-
 export const deletePitIsInner = (): void => {
   delete process.env.PIT_IS_INNER;
 };
