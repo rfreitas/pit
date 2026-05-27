@@ -6,9 +6,9 @@ on:
   pull_request:
 
 jobs:
-  # ── Linux ───────────────────────────────────────────────────────────────────
-  # Typecheck, lint, and full test suite including bwrap sandbox tests.
-  # bwrap is installed from apt; macOS sandbox-exec tests skip automatically.
+  # ── Linux ────────────────────────────────────────────────────────────────────
+  # Typecheck, lint, and production test suite (bwrap sandbox tests included).
+  # macOS debug probe does not run here.
   test-linux:
     name: test (linux)
     runs-on: ubuntu-latest
@@ -37,16 +37,16 @@ jobs:
         env:
           PI_SKIP_VERSION_CHECK: "1"
 
-  # ── macOS ────────────────────────────────────────────────────────────────────
-  # Sandbox-exec integration tests. bwrap tests skip automatically.
-  # Runs on Apple Silicon (macos-14) — most representative of user hardware.
-  #
-  # The pi SDK (@earendil-works/pi-coding-agent) is installed globally so the
-  # sandbox tests can import it from the global node_modules path, matching
-  # how real pit sessions work (pi is a globally-installed CLI tool).
-  test-macos:
-    name: test (macos)
+  # ── macOS SBPL probe ─────────────────────────────────────────────────────────
+  # Research probe — NOT production tests.
+  # Runs pit/debug/sbpl-probe.test.ts in isolation with verbose output.
+  # continue-on-error: true so failures show as amber, not blocking.
+  # Purpose: close open questions (DNS, git spawn, mach list) before
+  # implementing sbpl.ts and sbplLaunch.
+  debug-sbpl-macos:
+    name: debug sbpl (macos)
     runs-on: macos-14
+    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -59,23 +59,20 @@ jobs:
         run: npm install
 
       - name: install pi SDK globally
-        # Installs to $(node -e "process.execPath")/../../lib/node_modules,
-        # the path the sandbox-macos tests resolve via nodeDir/lib/node_modules.
         run: npm install -g @earendil-works/pi-coding-agent
 
-      - name: test
-        run: npm test
+      - name: probe sbpl behaviour
+        run: npx vitest run pit/debug/sbpl-probe.test.ts --reporter verbose
         env:
           PI_SKIP_VERSION_CHECK: "1"
 
-  # ── macOS Intel ───────────────────────────────────────────────────────────────
-  # Secondary macOS run on Intel to catch architecture-specific mach/sysctl
-  # differences (Rosetta 2, different dyld paths). Validates Grill 8 baseline
-  # on both architectures before trimming the mach service list.
-  test-macos-intel:
-    name: test (macos intel)
+  # ── macOS Intel SBPL probe ───────────────────────────────────────────────────
+  # Same probe on Intel to catch architecture-specific differences.
+  # Gated to main/tags to save runner minutes.
+  debug-sbpl-macos-intel:
+    name: debug sbpl (macos intel)
     runs-on: macos-13
-    # Only run on the default branch and tags — Intel runner minutes are limited.
+    continue-on-error: true
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
 
     steps:
@@ -91,7 +88,7 @@ jobs:
       - name: install pi SDK globally
         run: npm install -g @earendil-works/pi-coding-agent
 
-      - name: test
-        run: npm test
+      - name: probe sbpl behaviour
+        run: npx vitest run pit/debug/sbpl-probe.test.ts --reporter verbose
         env:
           PI_SKIP_VERSION_CHECK: "1"

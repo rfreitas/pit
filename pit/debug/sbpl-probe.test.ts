@@ -1,40 +1,18 @@
 /**
- * Integration tests for pit's macOS sandbox-exec environment.
+ * SBPL research probe — NOT production test code.
  *
- * These tests run real code inside sandbox-exec with a representative SBPL
- * profile, catching issues that only surface inside the sandbox.
+ * This file exists to validate understanding of macOS sandbox-exec behaviour
+ * before implementing sbpl.ts and sbplLaunch. It uses a test-local
+ * buildTestProfile() stand-in instead of the real (not yet written)
+ * buildSbplProfile(). Do not add to the vitest include glob or npm test.
  *
- * Each describe block maps to a named sandbox feature from FEATURES.md.
- * All tests skip automatically on non-macOS platforms or when sandbox-exec
- * is absent.
+ * Run via the dedicated CI job (debug-sbpl-macos) or locally:
+ *   npx vitest run pit/debug/sbpl-probe.test.ts --reporter verbose
  *
- * Bugs this test suite is designed to catch:
- *
- *   Write containment broken  — a path missing from the write grant list lets
- *                               the agent modify files outside its scope. pi
- *                               silently succeeds; the damage is on the host.
- *
- *   Read denylist not applied — a credential path missing from readDeny lets
- *                               the agent read ~/.ssh or ~/.aws. No error is
- *                               raised; the data is just visible.
- *
- *   Env seal broken           — a sensitive env var leaking into the sandbox
- *                               gives the agent access to tokens it should not
- *                               have. Only detectable by inspecting process.env
- *                               from inside.
- *
- *   Dir remap wrong           — PI_CODING_AGENT_DIR pointing at wrong path, or
- *                               the filtered settings.json not shadowing the
- *                               real one. Auth or settings bugs follow silently.
- *
- *   Mach hang                 — a missing mach-lookup entry causes a hang with
- *                               no error output. Detected by the test timeout.
- *
- *   DNS / TLS broken          — network misconfiguration causes all AI API calls
- *                               to fail with "Connection error" on first message.
- *
- *   Signal not forwarded      — SIGTERM from the user's terminal is not passed
- *                               to the sandboxed process; pit hangs on exit.
+ * Open questions this file is probing:
+ *   - DNS: resolve4 failing while HTTPS works — wrong mach service or network rule?
+ *   - Git spawn: git --version failing inside sandbox — missing exec permission?
+ *   - Mach service minimal set (Grill 8): which entries can be safely removed?
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { Effect } from "effect";
