@@ -121,11 +121,20 @@ const hasBwrap = !!findBwrap();
 
 /**
  * Check if bwrap can actually create user namespaces on this kernel.
- * On Ubuntu 24.04+, AppArmor may block this even when bwrap is installed.
+ * Uses a minimal but complete bwrap invocation — bwrap 0.11.0 requires at
+ * least a root filesystem before it can exec anything, even for a probe.
  */
 function bwrapCanUnshareUser(): boolean {
   if (!hasBwrap) return false;
-  const r = spawnSync(findBwrap()!, ["--unshare-user", "--", "true"], { encoding: "utf8" });
+  const r = spawnSync(findBwrap()!, [
+    "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
+    "--ro-bind", "/usr", "/usr",
+    "--ro-bind-try", "/bin", "/bin",
+    "--ro-bind-try", "/lib", "/lib",
+    "--ro-bind-try", "/lib64", "/lib64",
+    "--unshare-user",
+    "--", "/bin/true",
+  ], { encoding: "utf8" });
   return r.status === 0;
 }
 const hasBwrapUserNS = bwrapCanUnshareUser();

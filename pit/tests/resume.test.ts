@@ -50,7 +50,15 @@ const hasBwrap = !!findBwrap();
 
 function bwrapCanUnshareUser(): boolean {
   if (!hasBwrap) return false;
-  const r = spawnSync(findBwrap()!, ["--unshare-user", "--", "true"], { encoding: "utf8" });
+  const r = spawnSync(findBwrap()!, [
+    "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
+    "--ro-bind", "/usr", "/usr",
+    "--ro-bind-try", "/bin", "/bin",
+    "--ro-bind-try", "/lib", "/lib",
+    "--ro-bind-try", "/lib64", "/lib64",
+    "--unshare-user",
+    "--", "/bin/true",
+  ], { encoding: "utf8" });
   return r.status === 0;
 }
 const hasBwrapUserNS = bwrapCanUnshareUser();
