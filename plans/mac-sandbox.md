@@ -68,7 +68,7 @@ This is **deny-based, not namespace-based**. The process sees the real filesyste
 
 This is a **meaningful security downgrade** from the Linux model. On Linux the agent cannot exfiltrate `~/.ssh` or `~/.aws` by reading them. On macOS it can. The closed filesystem feature on macOS is better described as a **write-closed filesystem**.
 
-**Plan**: Accept the read-open model — it is the only viable approach without requiring root. Document the downgrade explicitly in the sandbox announcement (see Grill 7).
+**Plan**: Accept the read-open model — it is the only viable approach without requiring root. The `readDeny` field on `SandboxMounts` and the read-policy-driven `formatSandboxNote` ensure the sandbox announcement accurately describes this to the agent.
 
 ---
 
@@ -201,6 +201,117 @@ Currently the network namespace is NOT isolated even on Linux (see security.md).
 
 ---
 
+## Type changes
+
+### `SandboxMounts`
+
+`readDeny` is added as the read-policy discriminator. Its presence (vs `undefined`) signals which mode the formatter and the SBPL builder operate in:
+
+```ts
+interface SandboxMounts {
+  ro: RoMount[]        // whitelist mode: drives ro-bind on Linux; announcement-only on macOS
+  rw: RwMount[]        // both modes: drives bind on Linux, file-write* allow on macOS
+  readDeny?: RoMount[] // undefined  → whitelist mode (Linux)
+                       // []         → blacklist mode, reads fully open (macOS, no denials)
+                       // [...]      → blacklist mode, reads open except listed (macOS default)
+  overlay?: OverlayMount[]
+}
+```
+
+`buildSandboxMountSpec` gains a `platform: 'linux' | 'darwin'` parameter:
+- Linux: populates `ro[]` as today, `readDeny` left `undefined`
+- macOS: populates `ro[]` for announcement purposes only, `readDeny` set to the default credential denylist
+
+### Default macOS `readDeny`
+
+Paths blocked from agent reads by default on macOS:
+
+```
+~/.ssh           private keys
+~/.aws           AWS credentials
+~/.gnupg         GPG private keys
+~/.config/gh     GitHub CLI token
+~/.config/gcloud GCP credentials
+~/.azure         Azure credentials
+~/.config/op     1Password CLI session
+~/.netrc         network credentials
+```
+
+User can extend or override via config (see Config section below).
+
+---
+
+## `formatSandboxNote` redesign
+
+The formatter becomes read-policy-driven, not platform-driven. It reads `mounts.readDeny` to determine the mode. The backend name (bwrap vs sandbox-exec) is passed as a separate parameter since it is enforcement infrastructure, not policy data:
+
+```ts
+formatSandboxNote(mounts: SandboxMounts, backend: 'bwrap' | 'sandbox-exec'): string
+```
+
+Behaviour:
+
+```
+readDeny === undefined  →  whitelist mode:
+  header:  "Sandbox (bwrap): ... allowlist-based"
+  section: "Read-only: <ro[] labels>"
+  footer:  "No access: anything outside the mounts listed above"
+
+readDeny !== undefined  →  blacklist mode:
+  header:  "Sandbox (sandbox-exec): ... write-restricted"
+  section: "Reads unrestricted except: <readDeny[] labels>"  (omitted if readDeny is [])
+  footer:  "No write access: anything outside the listed paths above"
+```
+
+This resolves Grill 7 structurally: the formatter has the correct data to describe the actual policy on both platforms without branching on platform identity.
+
+---
+
+## Config
+
+`~/.pi/pit/config.json` gains a `sandbox` object for user-controlled read/write policy adjustments:
+
+```json
+{
+  "denyPackages": [],
+  "allowEnv": [],
+  "sandbox": {
+    "allowRead": [],
+    "denyRead": [],
+    "allowWrite": []
+  }
+}
+```
+
+| Field | Linux behaviour | macOS behaviour |
+|---|---|---|
+| `allowRead` | Adds paths to the read allowlist (`ro[]`) | Carves exceptions out of the read denylist — paths listed here are removed from `readDeny` |
+| `denyRead` | No-op — reads outside `ro[]` are already inaccessible | Adds paths to the read denylist on top of the defaults |
+| `allowWrite` | Adds paths to the write allowlist (`rw[]`) | Adds paths to the write allowlist (`rw[]`) |
+
+### Making platform specificity clear to users
+
+The asymmetry (`allowRead` means opposite things on each platform, `denyRead` is a no-op on Linux) is real and cannot be hidden without losing expressiveness. The strategy:
+
+1. **`config.example.json`** groups fields with inline comments explaining platform scope:
+   ```json
+   {
+     "sandbox": {
+       "allowWrite": [],     // both platforms: extra writable paths
+       "allowRead": [],      // Linux: extra readable paths; macOS: exceptions from the read denylist
+       "denyRead": []        // macOS only: extra paths to block from reading; no effect on Linux
+     }
+   }
+   ```
+
+2. **README** has a table matching the one above — one row per field, two platform columns.
+
+3. **Sandbox announcement** on macOS explicitly tells the agent which paths are denied and which are open, so the behaviour is observable without reading docs.
+
+The alternative — platform-namespaced keys (`linux.allowRead`, `macos.denyRead`) — is more explicit but forces users to reason about platform at config-write time. The flat design with documentation is the better default; platform namespacing can be added later if users find the flat semantics confusing.
+
+---
+
 ## Implementation architecture
 
 The current code in `launcher.ts` has a clean seam:
@@ -222,22 +333,25 @@ sandboxLaunch(backend, cwd, piArgs, mounts, pitConfig, settingsPath, escapeToken
   Linux:  bwrapLaunch(...)  → never
   macOS:  sbplLaunch(...)   → never
 
-SandboxMounts stays unchanged — it already abstracts the mount spec cleanly.
+SandboxMounts gains readDeny — see Type changes above.
 ```
 
 New file: `pit/src/core/sandbox/sbpl.ts`
-- `buildSbplProfile(mounts: SandboxMounts): string` — pure function, generates SBPL profile text
+- `buildSbplProfile(mounts: SandboxMounts): string` — pure function, generates SBPL profile text from `rw[]` and `readDeny[]`; `ro[]` is ignored (reads are globally open via `(allow file-read*)`)
 - Mirrors `buildSandboxMountSpec` in being pure and fully testable without a Mac
 
 New function in `launcher.ts`:
-- `sbplLaunch(cwd, piArgs, mounts, pitConfig, settingsPath?, escapeToken?)` — builds profile, writes to tmpfile, sets up symlink-mirror agent dir, calls `sandbox-exec -f tmpfile node inner.ts`
+- `sbplLaunch(cwd, piArgs, mounts, pitConfig, settingsPath?, escapeToken?)` — builds profile inline (passed via `-p`, no temp file), sets up symlink-mirror agent dir, calls `spawnSync('sandbox-exec', ['-p', profile, nodeBin, ...], { env: filteredEnv })`
 
-Updated `formatSandboxNote` in `pure.ts`:
-- Replace `**Sandbox (bwrap):**` header text with a platform-specific variant, or parameterise: `formatSandboxNote(mounts, backend: 'bwrap' | 'sandbox-exec')`
+`formatSandboxNote` in `pure.ts`:
+- Signature becomes `formatSandboxNote(mounts: SandboxMounts, backend: 'bwrap' | 'sandbox-exec'): string`
+- Behaviour driven by `mounts.readDeny` — see `formatSandboxNote` redesign above
 
 ---
 
 ## macOS filesystem path differences
+
+The `ro[]` list on macOS is used for the announcement only — no SBPL read rules are emitted. The system path differences table below is retained for context but is no longer implementation-critical (reads are globally open).
 
 The current `buildSandboxMountSpec` hardcodes Linux paths. A macOS variant needs a different system dir set:
 
@@ -354,19 +468,19 @@ Pi calls `ensureTool("fd")` and `ensureTool("rg")` at every interactive session 
 
 Fix: pre-create all known agentDir subdirs in the real agentDir before mirroring (`bin/`, `sessions/`, `themes/`, `prompts/`, `git/`). SDK source confirms these are the only subdirs created during a normal session — package installs (`git/<host>/...`) run via `pi install` which bypasses the sandbox entirely. Unknown subdirs added in future SDK versions remain a residual risk, but impact is limited to transient data.
 
-### Grill 7: Sandbox announcement is wrong on macOS
+### Grill 7: Sandbox announcement — RESOLVED
 
-The announcement currently tells the agent: "Anything not listed is inaccessible." On macOS with `(allow file-read*)`, this is false — the agent can read any file on the host filesystem, including `~/.ssh`, `~/.aws`, and credentials outside the grant list. `formatSandboxNote` generates the same text regardless of platform.
-
-Two options:
-1. Add a `platform` parameter to `formatSandboxNote` and emit macOS-specific text: "Filesystem writes are restricted to listed paths. Reads are unrestricted — all files are readable."
-2. Add a `readOpen: boolean` field to `SandboxMounts` and let the formatter adjust the description automatically.
-
-Neither is hard to implement but both require a decision on how honest to be with the agent about its actual access. The agent operating with a false self-model (thinking it can't read credentials when it can) is a correctness problem, not just a documentation one.
+Resolved by the `readDeny` field on `SandboxMounts` and the read-policy-driven `formatSandboxNote`. The formatter emits accurate text for each mode: whitelist mode says "No access: anything outside the mounts listed above"; blacklist mode says "No write access outside listed paths" and lists the denied read paths. The agent's self-model is correct on both platforms.
 
 ### Grill 8: Mach service list completeness
 
 The mach-lookup list in "Known SBPL requirements" is derived from two reference implementations. They differ slightly from each other. Neither documents which entries are strictly required for Node.js vs defensive extras from other runtimes (Go, Python, Java). A missing entry causes a **hang**, not a crash or an error message — silent failure that is hard to diagnose. The list should be validated empirically on a Mac by running a Node.js process with the candidate profile and confirming no hangs under normal and degraded conditions.
+
+### Grill 5: `sandbox-exec` profile syntax stability
+
+SBPL is private Apple API, not documented in any public developer documentation. Everything known about it comes from reverse-engineering Apple's own profiles and community research. Apple has been moving toward App Sandbox (entitlements-based, requires code signing) and away from `sandbox-exec` for third-party use. A future macOS version may remove or severely restrict `sandbox-exec` for user processes, silently breaking the entire macOS sandbox backend with no fallback. Cannot be mitigated by research — requires a bet on how long Apple tolerates `sandbox-exec` in third-party tooling.
+
+### Grill 6: Lifetime binding
 
 The polling approach (check ppid in a setInterval) has a window: if the parent is killed and the ppid is immediately reassigned to a new process, the child never detects the death. The kqueue approach requires separate thread or event loop integration. Whether Node.js's event loop + kqueue correctly delivers `EVFILT_PROC NOTE_EXIT` for the parent PID in all exit scenarios (SIGKILL, crash, graceful exit) needs empirical verification on macOS. It is not equivalent to `prctl(PR_SET_PDEATHSIG)`, which is synchronous at the kernel level.
 
@@ -377,15 +491,17 @@ The polling approach (check ppid in a setInterval) has a window: if the parent i
 | Feature | macOS plan | Confidence |
 |---|---|---|
 | Closed filesystem | Write-closed only: `(allow file-read*)` globally, write allowlist | High — confirmed by two production implementations |
-| Read grants | Subsumed by `(allow file-read*)` — no SBPL rules needed, used for announcement only | High |
-| Write grants | `(allow file-write* (subpath ...))` per rw[] entry | High |
-| Env seal | `spawnSync({ env: filteredEnv })` | High — standard Node.js, same shape as bwrapLaunch |
+| Read grants | Announcement-only on macOS; SBPL emits no read rules | High |
+| Read denylist | Default credential paths; user-extensible via `sandbox.denyRead` | High — design settled |
+| Write grants | `(allow file-write* (subpath ...))` per `rw[]` entry | High |
+| Env seal | `spawnSync({ env: filteredEnv })` | High — same shape as bwrapLaunch |
 | Network policy | `(allow network*)` or restricted with proxy | High |
 | System path grants | Covered by `(allow file-read*)`; mach/sysctl list derived from ASRT | High — copy from reference, validate on Mac |
+| Sandbox announcement | Read-policy-driven via `readDeny` field; backend name as parameter | High — design settled |
 | Ephemeral layers | APFS clone or skip | Low — both options have hard problems (Grill 3) |
 | Dir remap + package filtering | Symlink mirror in `/private/tmp`; pre-create known subdirs | Medium — unknown future SDK subdirs are residual risk |
 | Identity isolation | Not applicable — no equivalent on macOS | N/A |
 | Process isolation | Not applicable — no PID namespace on macOS | N/A |
 | Lifetime binding | ppid polling or kqueue | Medium — correctness under SIGKILL unclear (Grill 6) |
 | SBPL stability | bet on `sandbox-exec` longevity | Low — private API, deprecation risk (Grill 5) |
-| Sandbox announcement | Needs platform-aware text — macOS is write-closed, not read-closed | Low — design decision required (Grill 7) |
+| Mach service list | Baseline from ASRT; needs empirical trim on Mac | Medium (Grill 8) |
