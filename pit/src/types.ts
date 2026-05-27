@@ -43,6 +43,8 @@ export interface RoMount {
 export interface RwMount {
   path: string;
   label?: string;
+  /** Use --bind-try instead of --bind (silently skipped if source missing). */
+  optional?: boolean;
 }
 
 export interface OverlayMount {

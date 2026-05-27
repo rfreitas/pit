@@ -206,7 +206,7 @@ export const bwrapLaunch = (
   const roArgs = mounts.ro.flatMap(m =>
     [m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path],
   );
-  const rwArgs = mounts.rw.flatMap(m => ["--bind", m.path, m.path]);
+  const rwArgs = mounts.rw.flatMap(m => [m.optional ? "--bind-try" : "--bind", m.path, m.path]);
   const overlayArgs = (mounts.overlay ?? []).flatMap(m => {
     mkdirSync(m.dest, { recursive: true });
     return ["--overlay-src", m.src, "--tmp-overlay", m.dest];
