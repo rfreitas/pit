@@ -470,9 +470,9 @@ Resolved by the `readDeny` field on `SandboxMounts` and the read-policy-driven `
 
 The baseline from ASRT is the starting point. Validation requires running a Node.js process under the candidate profile on a Mac and confirming no hangs across: normal session, TLS outbound, Unix socket (pit-escape), interactive TTY, and tool download (fd/rg). Each mach entry that is removed must be confirmed safe by a passing test, not just assumed. A missing entry causes a silent hang — the test plan must include a hang detection timeout.
 
-### Grill 5: `sandbox-exec` profile syntax stability
+### Grill 5: `sandbox-exec` profile syntax stability — risk accepted
 
-SBPL is private Apple API, not documented in any public developer documentation. Everything known about it comes from reverse-engineering Apple's own profiles and community research. Apple has been moving toward App Sandbox (entitlements-based, requires code signing) and away from `sandbox-exec` for third-party use. A future macOS version may remove or severely restrict `sandbox-exec` for user processes, silently breaking the entire macOS sandbox backend with no fallback. Cannot be mitigated by research — requires a bet on how long Apple tolerates `sandbox-exec` in third-party tooling.
+SBPL is private Apple API. Risk accepted. If Apple removes `sandbox-exec`, the macOS sandbox backend breaks and pit falls back to running unsandboxed (same as today when bwrap is absent on Linux).
 
 ### Grill 6: Lifetime binding — SIGKILL gap accepted
 
@@ -499,5 +499,5 @@ Implementation consequence: `sbplLaunch` must use `spawn` (async), not `spawnSyn
 | Identity isolation | Not applicable — no equivalent on macOS | N/A |
 | Process isolation | Not applicable — no PID namespace on macOS | N/A |
 | Lifetime binding | `spawn` + SIGINT/SIGTERM forwarding; SIGKILL orphans accepted (same as ASRT) | Decided |
-| SBPL stability | bet on `sandbox-exec` longevity | Low — private API, deprecation risk (Grill 5) |
+| SBPL stability | risk accepted | Decided |
 | Mach service list | Baseline from ASRT; needs Mac test plan with hang detection | Needs test plan (Grill 8) |
