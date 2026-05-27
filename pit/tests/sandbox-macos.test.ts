@@ -42,6 +42,7 @@ import { NodeContext } from "@effect/platform-node";
 import { spawnSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { writeFilteredSettings } from "../src/core/sandbox/io.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
@@ -265,8 +266,9 @@ function makeAgentDir(tmpDirs: string[]): string {
 /**
  * Create a symlink mirror of agentDir at mirrorDir.
  * Each top-level entry in agentDir is symlinked. filteredSettingsPath is
- * written as a real file (not a symlink), shadowing the real settings.json.
- * Mirrors the production sbplLaunch dir-remap logic.
+ * hardlinked (not copied) as settings.json — same inode means writes inside
+ * the sandbox to PI_CODING_AGENT_DIR/settings.json update the same file that
+ * pit-escape reads via filteredSettingsPath. Required for /reload to work.
  */
 function createMirror(agentDir: string, mirrorDir: string, filteredSettingsPath: string): void {
   for (const entry of fs.readdirSync(agentDir)) {
@@ -274,10 +276,11 @@ function createMirror(agentDir: string, mirrorDir: string, filteredSettingsPath:
     const link   = path.join(mirrorDir, entry);
     fs.symlinkSync(target, link);
   }
-  // Override settings.json with the filtered copy (real file, not symlink)
+  // Hardlink settings.json: same inode as filteredSettingsPath, so writes
+  // from inside the sandbox are immediately visible via filteredSettingsPath.
   const link = path.join(mirrorDir, "settings.json");
   if (fs.existsSync(link)) fs.unlinkSync(link);
-  fs.copyFileSync(filteredSettingsPath, link);
+  fs.linkSync(filteredSettingsPath, link);
 }
 
 // ── basic sanity ──────────────────────────────────────────────────────────────
@@ -441,15 +444,17 @@ describe("sandbox-exec: read policy", () => {
   });
 
   it.skipIf(!hasSandboxExec)("allowRead exception carves a path back out of denylist", () => {
-    const home = process.env.HOME!;
     const allowedFile = path.join("/private/tmp", `pit-allowread-test-${process.pid}.txt`);
     fs.writeFileSync(allowedFile, "allowed-content");
 
     // Deny all of /private/tmp, then carve back the specific file.
-    // SBPL: later rule wins. deny subpath first, allow literal after.
-    const profile = buildTestProfile({}) + `\n(deny file-read* (subpath "/private/tmp"))\n(allow file-read* (literal ${esc(allowedFile)}))`;
+    // SBPL last-match-wins: deny subpath first, allow literal last.
+    const profile = buildTestProfile({}) +
+      `\n(deny file-read* (subpath "/private/tmp"))\n(allow file-read* (literal ${esc(allowedFile)}))`;
 
-    const scriptFile = path.join("/private/tmp", `pit-re-allow-${process.pid}.mjs`);
+    // Script file must NOT be in /private/tmp — it would be denied by the rule above.
+    // os.tmpdir() on macOS returns /var/folders/… which is a different path.
+    const scriptFile = path.join(os.tmpdir(), `pit-re-allow-${process.pid}.mjs`);
     fs.writeFileSync(scriptFile, `
       import { readFileSync } from "node:fs";
       try {
@@ -467,12 +472,12 @@ describe("sandbox-exec: read policy", () => {
         {
           encoding: "utf8",
           timeout: 10000,
-          env: { HOME: home, PATH: process.env.PATH! },
+          env: { HOME: process.env.HOME!, PATH: process.env.PATH! },
         },
       );
-      // This test validates SBPL rule ordering (last-wins semantics for allow-within-deny).
-      // If it fails, the exception mechanism used for sandbox.allowRead won't work.
-      expect(result.stdout).toBe("allowed-content");
+      // Validates SBPL last-match-wins: (allow literal) after (deny subpath) wins.
+      // If this fails, the sandbox.allowRead exception mechanism won’t work.
+      expect(result.stdout, `stderr: ${result.stderr}`).toBe("allowed-content");
     } finally {
       fs.rmSync(scriptFile, { force: true });
       fs.rmSync(allowedFile, { force: true });
@@ -636,7 +641,7 @@ describe("sandbox-exec: dir remap (PI_CODING_AGENT_DIR mirror)", () => {
         },
       });
 
-      // Mirror's settings.json updated
+      // Mirror's settings.json updated (hardlink — same inode as filteredPath)
       expect(JSON.parse(fs.readFileSync(filteredPath, "utf8")).packages).toEqual(["written-inside"]);
       // Real settings.json untouched
       expect(JSON.parse(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8")).packages)
@@ -763,29 +768,44 @@ describe("sandbox-exec: network", () => {
 
   it.skipIf(!hasSandboxExec)("can connect to a Unix socket (pit-escape pattern)", async () => {
     const tmpDirs: string[] = [];
-    afterEach(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true }); });
     const socketDir = makeTmpDir(tmpDirs);
     const socketPath = path.join(socketDir, "test.sock");
+    const serverScript = path.join("/private/tmp", `pit-sock-server-${process.pid}.mjs`);
 
-    // Start a host-side echo server
-    const net = await import("node:net");
-    await new Promise<void>((resolve) => {
-      const server = net.createServer((c) => { c.pipe(c); });
-      server.listen(socketPath, resolve);
-      tmpDirs.push(socketPath); // ensure cleanup
-    });
-
-    const result = runInSandboxExec(`
-      import { createConnection } from "node:net";
-      await new Promise((resolve, reject) => {
-        const sock = createConnection(${JSON.stringify(socketPath)});
-        sock.on("connect", () => { sock.end(); resolve(undefined); });
-        sock.on("error", reject);
+    // Server must run in a SEPARATE subprocess — runInSandboxExec uses spawnSync
+    // which blocks the event loop, so a server in the same process can never
+    // accept the connection from the sandboxed client.
+    fs.writeFileSync(serverScript, `
+      import { createServer } from "node:net";
+      const server = createServer((c) => { c.pipe(c); });
+      server.listen(${JSON.stringify(socketPath)}, () => {
+        process.stdout.write("ready\\n");
       });
-      process.stdout.write("connected");
     `);
-    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
-    expect(result.stdout).toBe("connected");
+
+    const serverProc = spawn(process.execPath, [serverScript], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    // Wait for the server to signal it is bound and accepting
+    await new Promise<void>((resolve) => { serverProc.stdout!.once("data", () => resolve()); });
+
+    try {
+      const result = runInSandboxExec(`
+        import { createConnection } from "node:net";
+        await new Promise((resolve, reject) => {
+          const sock = createConnection(${JSON.stringify(socketPath)});
+          sock.on("connect", () => { sock.end(); resolve(undefined); });
+          sock.on("error", reject);
+        });
+        process.stdout.write("connected");
+      `);
+      expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+      expect(result.stdout).toBe("connected");
+    } finally {
+      serverProc.kill();
+      fs.rmSync(serverScript, { force: true });
+      for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    }
   });
 });
 
