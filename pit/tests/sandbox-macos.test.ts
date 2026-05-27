@@ -888,26 +888,30 @@ describe("sandbox-exec: lifetime binding", () => {
 
 // ── pi SDK inside sandbox-exec ────────────────────────────────────────────────
 
+const nodeDir = path.dirname(path.dirname(process.execPath));
+const piSdkPath = path.join(
+  nodeDir, "lib", "node_modules",
+  "@earendil-works", "pi-coding-agent", "dist", "index.js",
+);
+const hasPiSdk = fs.existsSync(piSdkPath);
+
 describe("sandbox-exec: pi SDK", () => {
-  it.skipIf(!hasSandboxExec)("AuthStorage is readable and writable inside sandbox", async () => {
+  it.skipIf(!hasSandboxExec || !hasPiSdk)("AuthStorage is readable and writable inside sandbox", async () => {
     const tmpDirs: string[] = [];
     afterEach(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
     const fakeAgentDir = makeTmpDir(tmpDirs);
     fs.writeFileSync(path.join(fakeAgentDir, "auth.json"), JSON.stringify({ copilot: {}, anthropic: {} }));
 
-    const nodeDir = path.dirname(path.dirname(process.execPath));
-    const pkg = path.join(nodeDir, "lib", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
-
     const result = runInSandboxExec(`
-      import { AuthStorage } from "${pkg}";
+      import { AuthStorage } from "${piSdkPath}";
       const auth = AuthStorage.create();
       process.stdout.write(JSON.stringify({ ok: true }));
     `, {
       writePaths: [fakeAgentDir],
       env: {
         HOME: process.env.HOME!,
-        PATH: `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
+        PATH: `${path.dirname(path.dirname(process.execPath))}/bin:/usr/local/bin:/usr/bin:/bin`,
         PI_CODING_AGENT_DIR: fakeAgentDir,
       },
       timeout: 10000,
@@ -917,18 +921,15 @@ describe("sandbox-exec: pi SDK", () => {
     expect(ok).toBe(true);
   });
 
-  it.skipIf(!hasSandboxExec)("models are available via SDK inside sandbox", async () => {
+  it.skipIf(!hasSandboxExec || !hasPiSdk)("models are available via SDK inside sandbox", async () => {
     const tmpDirs: string[] = [];
     afterEach(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
     const fakeAgentDir = makeTmpDir(tmpDirs);
     fs.writeFileSync(path.join(fakeAgentDir, "auth.json"), JSON.stringify({}));
 
-    const nodeDir = path.dirname(path.dirname(process.execPath));
-    const pkg = path.join(nodeDir, "lib", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
-
     const result = runInSandboxExec(`
-      import { AuthStorage, ModelRegistry } from "${pkg}";
+      import { AuthStorage, ModelRegistry } from "${piSdkPath}";
       const auth = AuthStorage.create();
       const registry = ModelRegistry.create(auth);
       const available = await registry.getAvailable();
@@ -937,7 +938,7 @@ describe("sandbox-exec: pi SDK", () => {
       writePaths: [fakeAgentDir],
       env: {
         HOME: process.env.HOME!,
-        PATH: `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
+        PATH: `${path.dirname(path.dirname(process.execPath))}/bin:/usr/local/bin:/usr/bin:/bin`,
         PI_CODING_AGENT_DIR: fakeAgentDir,
       },
       timeout: 15000,
@@ -964,7 +965,7 @@ describe("sandbox-exec: pi SDK", () => {
 // asserts the result. Track which services can be trimmed.
 
 describe("sandbox-exec: mach service baseline (Grill 8)", () => {
-  it.skipIf(!hasSandboxExec)(
+  it.skipIf(!hasSandboxExec || !hasPiSdk)(
     "full baseline mach list: AuthStorage initialises without hanging",
     async () => {
       const tmpDirs: string[] = [];
@@ -973,19 +974,16 @@ describe("sandbox-exec: mach service baseline (Grill 8)", () => {
       const agentDir = makeTmpDir(tmpDirs);
       fs.writeFileSync(path.join(agentDir, "auth.json"), "{}");
 
-      const nodeDir = path.dirname(path.dirname(process.execPath));
-      const pkg = path.join(nodeDir, "lib", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
-
       // timeout: 5s — a missing mach entry hangs; this catches it
       const result = runInSandboxExec(`
-        import { AuthStorage } from "${pkg}";
+        import { AuthStorage } from "${piSdkPath}";
         AuthStorage.create();
         process.stdout.write("ok");
       `, {
         writePaths: [agentDir],
         env: {
           HOME: process.env.HOME!,
-          PATH: `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
+          PATH: `${path.dirname(path.dirname(process.execPath))}/bin:/usr/local/bin:/usr/bin:/bin`,
           PI_CODING_AGENT_DIR: agentDir,
         },
         timeout: 5000,
