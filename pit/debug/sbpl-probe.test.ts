@@ -798,11 +798,21 @@ describe("sandbox-exec: process execution", () => {
   it.skipIf(!hasSandboxExec)("can spawn git --version inside sandbox", () => {
     const result = runInSandboxExec(`
       import { spawnSync } from "node:child_process";
-      const r = spawnSync("git", ["--version"], { encoding: "utf8" });
-      process.stdout.write(r.stdout.trim().startsWith("git") ? "ok" : "fail");
+      const which = spawnSync("which", ["git"], { encoding: "utf8" });
+      const r     = spawnSync("git",   ["--version"], { encoding: "utf8" });
+      process.stdout.write(JSON.stringify({
+        gitPath:    which.stdout?.trim(),
+        whichError: which.error?.code,
+        gitStdout:  r.stdout?.trim(),
+        gitStderr:  r.stderr?.trim(),
+        gitStatus:  r.status,
+        gitError:   r.error?.code,
+        gitSignal:  r.signal,
+      }));
     `);
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
-    expect(result.stdout).toBe("ok");
+    const diag = JSON.parse(result.stdout);
+    expect(diag.gitStdout, `diagnostic: ${JSON.stringify(diag)}`).toMatch(/^git version/);
   });
 
   it.skipIf(!hasSandboxExec)("can spawn a child node process inside sandbox", () => {
