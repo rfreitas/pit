@@ -18,6 +18,7 @@ import { gitEffect } from "./core/ops/git.ts";
 import { opGetState } from "./core/ops/state.ts";
 import { opMergeToParent, opIsMerged } from "./core/ops/merge.ts";
 import { opLocDiff } from "./core/ops/diff.ts";
+import { opBranchStatus } from "./core/ops/branch-status.ts";
 import { opRefreshSettings } from "./core/ops/settings.ts";
 import { handleSubscribe } from "./core/ops/subscribe.ts";
 
@@ -69,6 +70,8 @@ const dispatchEffect = (
           return { result: { error: "merge-to-parent requires parentBranch" }, keepOpen: false };
         }
         return { result: yield* opMergeToParent(req.parentBranch, worktreePath), keepOpen: false };
+      case "branch-status":
+        return { result: yield* opBranchStatus(worktreePath), keepOpen: false };
       case "loc-diff":
         return { result: yield* opLocDiff(worktreePath), keepOpen: false };
       case "is-merged":

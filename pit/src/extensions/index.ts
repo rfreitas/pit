@@ -7,8 +7,7 @@ import { createReloadHook } from "./hooks/reload.ts";
 import { createGitTool } from "./tools/git.ts";
 import { createMergeCommand } from "./commands/merge/index.ts";
 import { createRenameBranchCommand } from "./commands/rename-branch/index.ts";
-import { createLocDiffStatus } from "./status/loc-diff.ts";
-import { createMergeStatus } from "./status/merge-status.ts";
+import { createBranchStatus } from "./status/branch-status.ts";
 
 export const createExtensionFactories = (
   socketPath: string,
@@ -20,7 +19,6 @@ export const createExtensionFactories = (
     createGitTool(socketPath, token),
     createMergeCommand(socketPath, token),
     createRenameBranchCommand(socketPath, token),
-    createLocDiffStatus(socketPath, token),
-    createMergeStatus(socketPath, token),
+    createBranchStatus(socketPath, token),
   ];
 };
