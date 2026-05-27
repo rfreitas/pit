@@ -3,5 +3,11 @@
     "npm:@casualjim/pi-heimdall",
     "npm:@spences10/pi-confirm-destructive",
     "npm:@jerryan/pi-sanity"
-  ]
+  ],
+  "allowEnv": [],
+  "sandbox": {
+    "allowRead": [],
+    "denyRead": [],
+    "allowWrite": []
+  }
 }

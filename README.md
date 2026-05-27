@@ -25,13 +25,18 @@ pit -r                       # resume a session (see below)
 
 All standard Pi flags pass through unchanged.
 
-**Platform:** requires bash + git + Linux. On Windows, use WSL.
+**Platform:** requires bash + git. Linux (including WSL) and macOS are supported.
 
 ---
 
 ## Security model
 
-pit's sandbox is **OS-level** and **allowlist-based**. The Pi session runs inside a `bwrap` user/PID namespace with a minimal filesystem. The agent can read and write its worktree, git metadata, and your home directory (read-only). Everything else is inaccessible.
+pit's sandbox is **OS-level** and **allowlist-based**. The backend depends on the platform:
+
+- **Linux**: [`bwrap`](https://github.com/containers/bubblewrap) (Bubblewrap) user/PID namespace. Closed filesystem — the agent can only read paths in an explicit allowlist.
+- **macOS**: `sandbox-exec` (Seatbelt). Write-closed filesystem — writes outside the allowlist are blocked; reads are globally open except for a default credential denylist (`~/.ssh`, `~/.aws`, `~/.gnupg`, etc.).
+
+On both platforms the agent can read and write its worktree, git metadata, and the Pi config directory. Everything else is restricted.
 
 > **Limitation — IPC channels cross sandbox boundaries.** bwrap enforces filesystem and process isolation, but not IPC. A process running inside the session can reach any Unix socket on the host. See [`security.md`](./security.md).
 
@@ -64,21 +69,31 @@ pit operates at a different layer entirely:
 
 ---
 
-## Extension denylist
+## Config
 
-Suppress specific Pi packages in agent sessions. Create `~/.pi/pit/config.json`:
+Create `~/.pi/pit/config.json` to customise pit's behaviour. All fields are optional.
 
 ```json
 {
   "denyPackages": [
-    "npm:@casualjim/pi-heimdall",
-    "npm:@spences10/pi-confirm-destructive",
-    "npm:@jerryan/pi-sanity"
-  ]
+    "npm:@casualjim/pi-heimdall"
+  ],
+  "allowEnv": [],
+  "sandbox": {
+    "allowRead": [],
+    "denyRead": [],
+    "allowWrite": []
+  }
 }
 ```
 
-Package sources must match the entries in your Pi `settings.json` exactly. The real settings file is never modified.
+| Field | Platform | What it does |
+|---|---|---|
+| `denyPackages` | both | Strip these package sources from `settings.json` before the session starts. Never modifies the real file. |
+| `allowEnv` | both | Extra env var names to forward into the sandbox beyond the built-in defaults. |
+| `sandbox.allowRead` | Linux: adds to read allowlist · macOS: removes from read denylist | Grant read access to specific paths. |
+| `sandbox.denyRead` | macOS only | Block read access to additional credential paths beyond the defaults. No effect on Linux. |
+| `sandbox.allowWrite` | both | Allow the agent to write to additional paths. |
 
 ---
 
@@ -91,7 +106,9 @@ npm install
 export PATH="$HOME/Repos/agent/pit:$PATH"
 ```
 
-Requires: Node.js ≥ 22, git. bwrap is optional but recommended — install via your distro's package manager (`bubblewrap` on Debian/Ubuntu/Arch).
+Requires: Node.js ≥ 22, git.
+- **Linux**: bwrap is optional but recommended — `bubblewrap` on Debian/Ubuntu/Arch.
+- **macOS**: `sandbox-exec` ships with macOS. No extra install needed.
 
 ---
 
