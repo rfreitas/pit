@@ -10,9 +10,12 @@
  *   npx vitest run pit/debug/sbpl-probe.test.ts --reporter verbose
  *
  * Open questions this file is probing:
- *   - Git spawn: confirmed PATH issue (/opt/homebrew/bin missing) — fix applied, verifying
- *   - DNS: confirmed c-ares vs getaddrinfo split — fix applied (use lookup not resolve4)
  *   - Mach service minimal set (Grill 8): which entries can be safely removed?
+ *
+ * Resolved:
+ *   - DNS: c-ares bypasses mDNSResponder; use dns.lookup (getaddrinfo) not dns.resolve4
+ *   - Git spawn: /dev/null needs file-read+file-write, not just file-ioctl
+ *   - PATH: must include /opt/homebrew/bin (Apple Silicon Homebrew prefix)
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { Effect } from "effect";
@@ -141,6 +144,11 @@ function buildTestProfile(opts: TestProfileOptions = {}): string {
     `(allow file-read* file-write* (literal "/dev/ptmx"))`,
     `(allow file-read* file-write* (regex #"^/dev/ttys"))`,
     `(allow file-ioctl (literal "/dev/null") (literal "/dev/tty") (literal "/dev/ptmx"))`,
+    // /dev/null and /dev/tty need read+write, not just ioctl.
+    // git opens /dev/null for read+write on startup; any subprocess that
+    // redirects to /dev/null fails without this. Production finding.
+    `(allow file-read* file-write* (literal "/dev/null"))`,
+    `(allow file-read* file-write* (literal "/dev/tty"))`,
     "",
   ];
 
@@ -798,21 +806,11 @@ describe("sandbox-exec: process execution", () => {
   it.skipIf(!hasSandboxExec)("can spawn git --version inside sandbox", () => {
     const result = runInSandboxExec(`
       import { spawnSync } from "node:child_process";
-      const which = spawnSync("which", ["git"], { encoding: "utf8" });
-      const r     = spawnSync("git",   ["--version"], { encoding: "utf8" });
-      process.stdout.write(JSON.stringify({
-        gitPath:    which.stdout?.trim(),
-        whichError: which.error?.code,
-        gitStdout:  r.stdout?.trim(),
-        gitStderr:  r.stderr?.trim(),
-        gitStatus:  r.status,
-        gitError:   r.error?.code,
-        gitSignal:  r.signal,
-      }));
+      const r = spawnSync("git", ["--version"], { encoding: "utf8" });
+      process.stdout.write(r.stdout.trim().startsWith("git") ? "ok" : "fail");
     `);
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
-    const diag = JSON.parse(result.stdout);
-    expect(diag.gitStdout, `diagnostic: ${JSON.stringify(diag)}`).toMatch(/^git version/);
+    expect(result.stdout).toBe("ok");
   });
 
   it.skipIf(!hasSandboxExec)("can spawn a child node process inside sandbox", () => {
