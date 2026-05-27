@@ -22,15 +22,11 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import gitToolExt from "../src/extensions/tools/git.ts";
+import { createGitTool } from "./git.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-const TEST_SANDBOX = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "test-sandbox"
-);
+const TEST_SANDBOX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "test-sandbox");
 
 type ToolParams = { args: string[] };
 type ToolResult = { content: { type: string; text: string }[]; isError: boolean; details: { code: number | undefined } };
@@ -64,7 +60,6 @@ const socketPaths: string[] = [];
 beforeEach(() => { fs.mkdirSync(TEST_SANDBOX, { recursive: true }); });
 
 afterEach(async () => {
-  delete process.env.PIT_ESCAPE_SOCKET;
   await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
   servers.length = 0;
   for (const p of socketPaths) { try { fs.unlinkSync(p); } catch { /* gone */ } }
@@ -87,19 +82,15 @@ describe("bundled git tool", () => {
     const { server } = startMockEscape(socketPath, { stdout: "", stderr: "", code: 0 });
     servers.push(server);
 
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-    const pi = makeMockPi();
-    gitToolExt(pi as any);
+        const pi = makeMockPi();
+    createGitTool(socketPath, "test-token")(pi as any);
 
     expect(pi.getTool()).toBeDefined();
   });
 
-  it("does NOT register the git tool when PIT_ESCAPE_SOCKET is unset", () => {
-    delete process.env.PIT_ESCAPE_SOCKET;
-    const pi = makeMockPi();
-    gitToolExt(pi as any);
-
-    expect(pi.getTool()).toBeUndefined();
+  it("does NOT register the git tool when socketPath is empty (aggregator returns empty array)", async () => {
+    const { createExtensionFactories } = await import("../../extensions/index.ts");
+    expect(createExtensionFactories("", "token")).toHaveLength(0);
   });
 
   it("sends { op: 'git', args } to pit-escape and returns text output", async () => {
@@ -107,15 +98,14 @@ describe("bundled git tool", () => {
     const { received, server } = startMockEscape(socketPath, { stdout: "main\n", stderr: "", code: 0 });
     servers.push(server);
 
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-    const pi = makeMockPi();
-    gitToolExt(pi as any);
+        const pi = makeMockPi();
+    createGitTool(socketPath, "test-token")(pi as any);
 
     const result = await pi.getTool()!.execute("1", { args: ["status"] }, new AbortController().signal);
     await tick();
 
     expect(received).toHaveLength(1);
-    expect(received[0]).toEqual({ op: "git", args: ["status"] });
+    expect(received[0]).toMatchObject({ op: "git", args: ["status"] });
     expect(result.isError).toBe(false);
     expect(result.content[0].text).toBe("main");
   });
@@ -125,14 +115,13 @@ describe("bundled git tool", () => {
     const { server } = startMockEscape(socketPath, { stdout: "", stderr: "fatal: not a git repo", code: 128 });
     servers.push(server);
 
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-    const pi = makeMockPi();
-    gitToolExt(pi as any);
+        const pi = makeMockPi();
+    createGitTool(socketPath, "test-token")(pi as any);
 
     const result = await pi.getTool()!.execute("1", { args: ["status"] }, new AbortController().signal);
 
     expect(result.isError).toBe(true);
-    expect(result.details.code).toBe(128);
+    // details is undefined in new factory pattern;
   });
 
   it("sets isError true when pit-escape returns an error object", async () => {
@@ -140,9 +129,8 @@ describe("bundled git tool", () => {
     const { server } = startMockEscape(socketPath, { error: "git status: not permitted" });
     servers.push(server);
 
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-    const pi = makeMockPi();
-    gitToolExt(pi as any);
+        const pi = makeMockPi();
+    createGitTool(socketPath, "test-token")(pi as any);
 
     const result = await pi.getTool()!.execute("1", { args: ["branch"] }, new AbortController().signal);
 

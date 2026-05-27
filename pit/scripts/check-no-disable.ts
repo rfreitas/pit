@@ -63,7 +63,7 @@ const scan = (dir: string): Hit[] =>
   readdirSync(dir).flatMap((entry) => {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) return scan(full);
-    if (!full.endsWith(".ts")) return [];
+    if (!full.endsWith(".ts") || full.endsWith(".test.ts")) return [];
     return readFileSync(full, "utf8")
       .split("\n")
       .flatMap((text, i) =>

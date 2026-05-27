@@ -59,6 +59,7 @@ export const probeSocket = (
  */
 export const sendEffect = (
   socketPath: string,
+  token: string,
   req: object,
 ): Effect.Effect<EscapeResult> =>
   Effect.gen(function* () {
@@ -72,8 +73,8 @@ export const sendEffect = (
     );
     if (!sock) return { error: "pit-escape unavailable: connection refused" } as EscapeResult;
 
-    // Write request
-    sock.write(JSON.stringify(req) + "\n");
+    // Write request with token
+    sock.write(JSON.stringify({ ...req, token }) + "\n");
 
     // Read one newline-delimited response — no manual buffer needed
     const line = yield* socketLines(sock).pipe(
@@ -91,8 +92,8 @@ export const sendEffect = (
   });
 
 /** Run sendEffect as a Promise (for use in async extension handlers). */
-export const send = (socketPath: string, req: object): Promise<EscapeResult> => {
-  return Effect.runPromise(sendEffect(socketPath, req));
+export const send = (socketPath: string, token: string, req: object): Promise<EscapeResult> => {
+  return Effect.runPromise(sendEffect(socketPath, token, req));
 };
 
 // ── result helpers ────────────────────────────────────────────────────────────

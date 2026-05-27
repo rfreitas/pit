@@ -27,15 +27,11 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import reloadExt from "../src/extensions/hooks/reload.ts";
+import { createReloadHook } from "./reload.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-const TEST_SANDBOX = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "test-sandbox"
-);
+const TEST_SANDBOX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "test-sandbox");
 
 type ShutdownReason = "quit" | "reload" | "new" | "resume" | "fork";
 
@@ -107,19 +103,18 @@ describe("bundled reload extension", () => {
     const { server } = startMockEscape(socketPath);
     servers.push(server);
 
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-    const pi = makeMockPi();
-    reloadExt(pi as any);
+        const pi = makeMockPi();
+    createReloadHook(socketPath, "test-token")(pi as any);
 
     expect(pi.hasHandler("session_shutdown")).toBe(true);
   });
 
-  it("does NOT register any handler when PIT_ESCAPE_SOCKET is unset", () => {
-    delete process.env.PIT_ESCAPE_SOCKET;
-    const pi = makeMockPi();
-    reloadExt(pi as any);
-
-    expect(pi.hasHandler("session_shutdown")).toBe(false);
+  it("does NOT register any handler when created with empty socketPath", async () => {
+    // With the factory pattern, callers should simply not call the factory
+    // when there is no escape socket. The factory always registers if called.
+    // This test verifies the index.ts aggregator returns [] for empty socket.
+    const { createExtensionFactories } = await import("../../extensions/index.ts");
+    expect(createExtensionFactories("", "token")).toHaveLength(0);
   });
 
   it("sends { op: 'refresh-settings' } to the socket on reason 'reload'", async () => {
@@ -127,15 +122,14 @@ describe("bundled reload extension", () => {
     const { received, server } = startMockEscape(socketPath);
     servers.push(server);
 
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-    const pi = makeMockPi();
-    reloadExt(pi as any);
+        const pi = makeMockPi();
+    createReloadHook(socketPath, "test-token")(pi as any);
 
     await pi.trigger("session_shutdown", { type: "session_shutdown", reason: "reload" });
     await tick();
 
     expect(received).toHaveLength(1);
-    expect(received[0]).toEqual({ op: "refresh-settings" });
+    expect(received[0]).toMatchObject({ op: "refresh-settings" });
   });
 
   it("does NOT send to the socket on reason 'quit'", async () => {
@@ -143,9 +137,8 @@ describe("bundled reload extension", () => {
     const { received, server } = startMockEscape(socketPath);
     servers.push(server);
 
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-    const pi = makeMockPi();
-    reloadExt(pi as any);
+        const pi = makeMockPi();
+    createReloadHook(socketPath, "test-token")(pi as any);
 
     await pi.trigger("session_shutdown", { type: "session_shutdown", reason: "quit" });
     await tick();
@@ -160,9 +153,8 @@ describe("bundled reload extension", () => {
       const { received, server } = startMockEscape(socketPath);
       servers.push(server);
 
-      process.env.PIT_ESCAPE_SOCKET = socketPath;
-      const pi = makeMockPi();
-      reloadExt(pi as any);
+            const pi = makeMockPi();
+      createReloadHook(socketPath, "test-token")(pi as any);
 
       await pi.trigger("session_shutdown", { type: "session_shutdown", reason });
       await tick();
@@ -176,9 +168,8 @@ describe("bundled reload extension", () => {
     const { server } = startMockEscape(socketPath, { error: "something went wrong" });
     servers.push(server);
 
-    process.env.PIT_ESCAPE_SOCKET = socketPath;
-    const pi = makeMockPi();
-    reloadExt(pi as any);
+        const pi = makeMockPi();
+    createReloadHook(socketPath, "test-token")(pi as any);
 
     await expect(
       pi.trigger("session_shutdown", { type: "session_shutdown", reason: "reload" })
@@ -186,9 +177,9 @@ describe("bundled reload extension", () => {
   });
 
   it("completes without throwing when the socket is unreachable", async () => {
-    process.env.PIT_ESCAPE_SOCKET = path.join(TEST_SANDBOX, "no-such-socket.sock");
+    const badSocketPath = path.join(TEST_SANDBOX, "no-such-socket.sock");
     const pi = makeMockPi();
-    reloadExt(pi as any);
+    createReloadHook(badSocketPath, "test-token")(pi as any);
 
     await expect(
       pi.trigger("session_shutdown", { type: "session_shutdown", reason: "reload" })

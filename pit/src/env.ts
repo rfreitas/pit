@@ -8,3 +8,16 @@
 export const setPitEscapeSocket = (path: string): void => {
   process.env.PIT_ESCAPE_SOCKET = path;
 };
+
+export const deletePitIsInner = (): void => {
+  delete process.env.PIT_IS_INNER;
+};
+
+export const deletePitEscapeToken = (): void => {
+  delete process.env.PIT_ESCAPE_TOKEN;
+};
+
+export const bootstrapProcess = (): void => {
+  process.title = "pi";
+  process.emitWarning = () => {};
+};

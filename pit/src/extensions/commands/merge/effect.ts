@@ -22,10 +22,11 @@ export const mergeEffect = (
   ctx: ExtensionCommandContext,
   pi: ExtensionAPI,
   socketPath: string,
+  token: string,
   parentBranchArg: string,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const stateResp = yield* sendEffect(socketPath, { op: "get-state" });
+    const stateResp = yield* sendEffect(socketPath, token, { op: "get-state" });
     if ("error" in stateResp) {
       ctx.ui.notify(`pit-escape error: ${stateResp.error}`, "error");
       return;
@@ -57,10 +58,10 @@ export const mergeEffect = (
     // ── Phase 2: worktree behind parent — merge parent in ───────────────
     if (state.behindParent) {
       ctx.ui.notify(`Merging ${parentBranch} into branch...`, "info");
-      const fwd = yield* sendEffect(socketPath, { op: "git", args: ["merge", parentBranch] });
+      const fwd = yield* sendEffect(socketPath, token, { op: "git", args: ["merge", parentBranch] });
 
       if (!isOk(fwd)) {
-        const afterResp = yield* sendEffect(socketPath, { op: "get-state" });
+        const afterResp = yield* sendEffect(socketPath, token, { op: "get-state" });
         const after = afterResp as unknown as StateResponse;
         if (after.mergeInProgress && after.conflicts.length > 0) {
           ctx.ui.notify("Forward merge has conflicts — agent notified", "warning");
@@ -77,7 +78,7 @@ export const mergeEffect = (
 
     // ── Phase 3: fast-forward parent branch to worktree branch ──────────
     ctx.ui.notify(`Merging ${state.branch ?? "branch"} into ${parentBranch}...`, "info");
-    const result: EscapeResult = yield* sendEffect(socketPath, {
+    const result: EscapeResult = yield* sendEffect(socketPath, token, {
       op: "merge-to-parent",
       parentBranch,
     });

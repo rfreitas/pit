@@ -17,19 +17,12 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { probeSocket } from "../src/extensions/escape/client.ts";
+import { probeSocket } from "./client.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-const TEST_SANDBOX = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "test-sandbox"
-);
-const PIT_ESCAPE = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..","src","escape","server.ts"
-);
+const TEST_SANDBOX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "test-sandbox");
+const PIT_ESCAPE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "escape", "server.ts");
 
 const tmpDirs: string[] = [];
 const children: ChildProcess[] = [];
@@ -57,6 +50,7 @@ async function spawnEscape(socketPath: string): Promise<void> {
       "--experimental-strip-types",
       "--no-warnings",
       PIT_ESCAPE,
+      "probe-test-token",  // token (arbitrary — probe tests don't send ops)
       socketPath,
       dir,          // worktreePath (dummy)
       dir,          // agentDir (dummy)

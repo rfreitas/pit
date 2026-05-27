@@ -8,7 +8,7 @@
  * Only active when PIT_ESCAPE_SOCKET is set (running under pit with a worktree session).
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { useEscapeStatus } from "./helpers.ts";
 
 type LocDiffResponse =
@@ -30,13 +30,13 @@ export const formatLoc = (
   return `+${insertions} \u2212${deletions}`;
 }
 
-export default function (pi: ExtensionAPI) {
-  const socketPath = process.env.PIT_ESCAPE_SOCKET;
-  if (!socketPath) return;
-
-  useEscapeStatus(pi, socketPath, "loc-diff", "pit-loc", (resp) => {
+export const createLocDiffStatus = (
+  socketPath: string,
+  token: string,
+): ExtensionFactory => (pi: ExtensionAPI) => {
+  useEscapeStatus(pi, socketPath, token, "loc-diff", "pit-loc", (resp) => {
     const r = resp as LocDiffResponse;
     if ("error" in r) return undefined;
     return formatLoc(r.insertions, r.deletions);
   });
-}
+};

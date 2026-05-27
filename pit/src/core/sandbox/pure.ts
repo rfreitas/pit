@@ -4,7 +4,7 @@
  */
 
 import { join } from "node:path";
-import type { SandboxMounts, OverlayMount } from "../../types.ts";
+import type { SandboxMounts, OverlayMount, PitConfig } from "../../types.ts";
 
 // ── sandbox announcement ──────────────────────────────────────────────────────
 
@@ -28,6 +28,20 @@ export const formatSandboxNote = (mounts: Readonly<SandboxMounts>): string  => {
 - No access: anything outside the mounts listed above`;
 }
 
+// ── env whitelist ────────────────────────────────────────────────────────────
+
+/**
+ * Build --setenv pairs for each name in config.allowEnv that is present in env.
+ * Pure — no IO, no side effects.
+ */
+export const allowedEnvArgs = (
+  config: Readonly<PitConfig>,
+  env: Readonly<Record<string, string | undefined>>,
+): string[] =>
+  (config.allowEnv ?? []).flatMap((name) =>
+    env[name] !== undefined ? ["--setenv", name, env[name]!] : [],
+  );
+
 // ── mount spec builder ────────────────────────────────────────────────────────
 
 /**
@@ -38,16 +52,22 @@ export const formatSandboxNote = (mounts: Readonly<SandboxMounts>): string  => {
 export const buildSandboxMountSpec = (params: Readonly<{
   home: string;
   cwd: string;
+  agentDir: string;
   agentDirReal: string;
   extensionMounts: string[];
   nodeDir: string;
   gitRwMounts: Array<{ path: string; label?: string }>;
   overlayDirs: OverlayMount[];
 }>): SandboxMounts  => {
-  const { home, cwd, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs } = params;
+  const { home, cwd, agentDir, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs } = params;
   return {
     ro: [
-      { path: home, label: "home directory" },
+      // Selective home dotfiles — full home is NOT bind-mounted.
+      // Only what git, npm and mise need; credential stores excluded.
+      { path: join(home, ".gitconfig"),                         label: "home dotfiles", optional: true },
+      { path: join(home, ".config", "git"),                     label: "home dotfiles", optional: true },
+      { path: join(home, ".npmrc"),                              label: "home dotfiles", optional: true },
+      { path: join(home, ".local", "share", "mise", "installs"), label: "home dotfiles", optional: true },
       { path: "/usr",     label: "system dirs" },
       { path: "/etc",     label: "system dirs" },
       { path: "/mnt/wsl", label: "system dirs", optional: true },
@@ -61,6 +81,7 @@ export const buildSandboxMountSpec = (params: Readonly<{
       ...gitRwMounts,
       { path: cwd },
       { path: agentDirReal,                               label: "Pi config dir" },
+      ...(agentDir !== agentDirReal ? [{ path: agentDir, label: "Pi config dir (symlink)" }] : []),
       { path: join(home, ".npm"),                    label: "npm cache" },
       { path: join(home, ".local/share/mise/shims"), label: "mise shims" },
       { path: join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },

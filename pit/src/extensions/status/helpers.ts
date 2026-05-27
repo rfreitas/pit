@@ -25,6 +25,7 @@ const FALLBACK_POLL_MS = 5 * 60_000;
 export const useEscapeStatus = (
   pi: ExtensionAPI,
   socketPath: string,
+  token: string,
   op: string,
   statusKey: string,
   format: (resp: unknown) => string | undefined,
@@ -36,7 +37,7 @@ export const useEscapeStatus = (
     setStatus: (text: string | undefined) => void,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const resp = yield* sendEffect(socketPath, { op });
+      const resp = yield* sendEffect(socketPath, token, { op });
       setStatus(format(resp));
     });
 
@@ -47,7 +48,7 @@ export const useEscapeStatus = (
     subSocket = sock;
 
     sock.once("connect", () =>
-      sock.write(JSON.stringify({ op: "subscribe" }) + "\n"),
+      sock.write(JSON.stringify({ op: "subscribe", token }) + "\n"),
     );
 
     void Effect.runPromise(

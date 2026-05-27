@@ -22,7 +22,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ── mocks (hoisted) ───────────────────────────────────────────────────────────
 
-vi.mock("../src/extensions/escape/client.ts", () => ({
+vi.mock("../escape/client.ts", () => ({
   sendEffect: vi.fn(),
 }));
 
@@ -30,14 +30,14 @@ vi.mock("node:net", () => ({
   createConnection: vi.fn(),
 }));
 
-vi.mock("../src/extensions/escape/frames.ts", () => ({
+vi.mock("../escape/frames.ts", () => ({
   socketLines: vi.fn(),
 }));
 
-import { sendEffect } from "../src/extensions/escape/client.ts";
+import { sendEffect } from "../escape/client.ts";
 import { createConnection } from "node:net";
-import { socketLines } from "../src/extensions/escape/frames.ts";
-import { useEscapeStatus } from "../src/extensions/status/helpers.ts";
+import { socketLines } from "../escape/frames.ts";
+import { useEscapeStatus } from "./helpers.ts";
 
 // ── fake socket ───────────────────────────────────────────────────────────────
 
@@ -114,22 +114,22 @@ describe("useEscapeStatus", () => {
   describe("initial fetch on session_start", () => {
     it("calls sendEffect with the correct op", async () => {
       const { pi, trigger } = makeFakePi();
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, echoFormat);
       await trigger("session_start");
-      expect(vi.mocked(sendEffect)).toHaveBeenCalledWith(SOCKET_PATH, { op: OP });
+      expect(vi.mocked(sendEffect)).toHaveBeenCalledWith(SOCKET_PATH, "test-token", { op: OP });
     });
 
     it("passes sendEffect response through format and into setStatus", async () => {
       const { pi, ctx, trigger } = makeFakePi();
       vi.mocked(sendEffect).mockReturnValue(Effect.succeed({ insertions: 42, deletions: 7 }) as any);
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, (r: any) => `+${r.insertions} −${r.deletions}`);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, (r: any) => `+${r.insertions} −${r.deletions}`);
       await trigger("session_start");
       expect(ctx.ui.setStatus).toHaveBeenCalledWith(KEY, "+42 −7");
     });
 
     it("calls setStatus with undefined when format returns undefined", async () => {
       const { pi, ctx, trigger } = makeFakePi();
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, () => undefined);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, () => undefined);
       await trigger("session_start");
       expect(ctx.ui.setStatus).toHaveBeenCalledWith(KEY, undefined);
     });
@@ -138,7 +138,7 @@ describe("useEscapeStatus", () => {
   describe("subscribe socket", () => {
     it("opens a subscribe connection on session_start", async () => {
       const { pi, trigger } = makeFakePi();
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, echoFormat);
       await trigger("session_start");
       expect(vi.mocked(createConnection)).toHaveBeenCalledWith(SOCKET_PATH);
     });
@@ -147,10 +147,13 @@ describe("useEscapeStatus", () => {
       const fakeSocket = new FakeSocket();
       vi.mocked(createConnection).mockReturnValue(fakeSocket as any);
       const { pi, trigger } = makeFakePi();
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, echoFormat);
       await trigger("session_start");
       fakeSocket.emit("connect");
-      expect(fakeSocket.written).toContain(JSON.stringify({ op: "subscribe" }) + "\n");
+      expect(fakeSocket.written.some((w: string) => {
+        try { const p = JSON.parse(w); return p.op === "subscribe" && p.token === "test-token"; }
+        catch { return false; }
+      })).toBe(true);
     });
 
     it("re-fetches when ref-change arrives", async () => {
@@ -161,7 +164,7 @@ describe("useEscapeStatus", () => {
         .mockReturnValueOnce(Effect.succeed({ v: 1 }) as any)
         .mockReturnValue(Effect.succeed({ v: 2 }) as any);
       const { pi, ctx, trigger } = makeFakePi();
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, (r: any) => String(r.v));
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, (r: any) => String(r.v));
       await trigger("session_start");
       await flushPromises();
 
@@ -174,7 +177,7 @@ describe("useEscapeStatus", () => {
         Stream.make(JSON.stringify({ ok: true, watching: "main" })),
       );
       const { pi, trigger } = makeFakePi();
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, echoFormat);
       await trigger("session_start");
       await flushPromises();
 
@@ -184,7 +187,7 @@ describe("useEscapeStatus", () => {
     it("ignores malformed JSON", async () => {
       vi.mocked(socketLines).mockReturnValue(Stream.make("not json"));
       const { pi, trigger } = makeFakePi();
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, echoFormat);
       await trigger("session_start");
       await flushPromises();
 
@@ -198,7 +201,7 @@ describe("useEscapeStatus", () => {
       vi.mocked(sendEffect)
         .mockReturnValueOnce(Effect.succeed({ v: "initial" }) as any)
         .mockReturnValue(Effect.succeed({ v: "polled" }) as any);
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, (r: any) => r.v);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, (r: any) => r.v);
       await trigger("session_start");
 
       await vi.advanceTimersByTimeAsync(5 * 60_000);
@@ -212,7 +215,7 @@ describe("useEscapeStatus", () => {
       const fakeSocket = new FakeSocket();
       vi.mocked(createConnection).mockReturnValue(fakeSocket as any);
       const { pi, trigger } = makeFakePi();
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, echoFormat);
       await trigger("session_start");
       await trigger("session_shutdown");
       expect(fakeSocket.isDestroyed).toBe(true);
@@ -221,7 +224,7 @@ describe("useEscapeStatus", () => {
     it("stops the fallback timer after shutdown", async () => {
       const { pi, trigger } = makeFakePi();
       vi.mocked(sendEffect).mockReturnValue(Effect.succeed({}) as any);
-      useEscapeStatus(pi, SOCKET_PATH, OP, KEY, echoFormat);
+      useEscapeStatus(pi, SOCKET_PATH, "test-token", OP, KEY, echoFormat);
       await trigger("session_start");
       const callsAfterStart = vi.mocked(sendEffect).mock.calls.length;
 

@@ -28,15 +28,33 @@ import {
   gitRepoRoot,
 } from "./core/git/utils.ts";
 import {
-  extensionArgs,
   launchEffect,
   resolveSandboxMountsEffect,
   startPitEscapeEffect,
+  type EscapeHandle,
 } from "./launcher.ts";
 import { setPitEscapeSocket } from "./env.ts";
+import { SocketAliveError } from "./errors.ts";
 import { spawnSync } from "node:child_process";
 
-// ── constants ─────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Start pit-escape, register the socket path in env, and return the handle.
+ * Returns undefined when not applicable (main worktree, etc.).
+ */
+const applyEscapeEffect = (
+  cwd: string,
+  sessionId: string,
+  settingsPath: string,
+): Effect.Effect<EscapeHandle | undefined, SocketAliveError, NodeContext> =>
+  Effect.gen(function* () {
+    const opt = yield* startPitEscapeEffect(cwd, sessionId, settingsPath);
+    if (Option.isSome(opt)) setPitEscapeSocket(opt.value.socketPath);
+    return Option.getOrUndefined(opt);
+  });
+
+// ── constants ─────────────────────────────────────────────────────────────
 
 const PI_SUBCOMMANDS = new Set([
   "install", "remove", "uninstall", "update", "list", "config",
@@ -175,6 +193,7 @@ const argv = process.argv.slice(2);
 
 export const program = Effect.gen(function* () {
   const { sandbox, noTree, filteredArgv } = parseFlags(argv);
+  const pitConfig = yield* readPitConfig(PIT_DIR);
 
   if (filteredArgv.length > 0 && PI_SUBCOMMANDS.has(filteredArgv[0])) {
     const r = spawnSync("pi", filteredArgv, { stdio: "inherit", shell: false });
@@ -194,14 +213,13 @@ export const program = Effect.gen(function* () {
 
     const result = yield* worktreeCheckEffect(picked.meta);
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
-    const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
-    const socketOpt = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
-    if (Option.isSome(socketOpt)) setPitEscapeSocket(socketOpt.value);
+    const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
+    const escape = yield* applyEscapeEffect(result.cwd, result.meta.id, settingsPath);
 
     yield* launchEffect(
       result.cwd,
-      ["--session", picked.sessionFile, ...extensionArgs(), ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs],
-      sandbox, settingsPath, sandboxMounts,
+      ["--session", picked.sessionFile, ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs],
+      sandbox, settingsPath, sandboxMounts, pitConfig, escape,
     );
     yield* unlinkSilent(settingsPath);
     return;
@@ -222,14 +240,13 @@ export const program = Effect.gen(function* () {
     if (session.kind === "new") {
     console.error("pit: already in a git worktree — no pit session found, running no-tree");
     }
-    const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
-    const socketOpt2 = yield* startPitEscapeEffect(cwd, session.meta.id, settingsPath);
-    if (Option.isSome(socketOpt2)) setPitEscapeSocket(socketOpt2.value);
+    const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
+    const escape2 = yield* applyEscapeEffect(cwd, session.meta.id, settingsPath);
 
     yield* launchEffect(
       cwd,
-      ["--session", session.sessionFile, ...extensionArgs(), ...systemPromptArgs(session.meta, sandboxMounts), ...filteredArgv],
-      sandbox, settingsPath, sandboxMounts,
+      ["--session", session.sessionFile, ...systemPromptArgs(session.meta, sandboxMounts), ...filteredArgv],
+      sandbox, settingsPath, sandboxMounts, pitConfig, escape2,
     );
     yield* unlinkSilent(settingsPath);
     return;
@@ -237,21 +254,19 @@ export const program = Effect.gen(function* () {
 
   // ── new session ───────────────────────────────────────────────────────────
   const result = yield* worktreeCheckEffect(undefined, noTree);
-  const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, yield* readPitConfig(PIT_DIR));
-  const socketOpt3 = yield* startPitEscapeEffect(result.cwd, result.meta.id, settingsPath);
-  if (Option.isSome(socketOpt3)) setPitEscapeSocket(socketOpt3.value);
+  const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
+  const escape3 = yield* applyEscapeEffect(result.cwd, result.meta.id, settingsPath);
 
   if (userManagingSession) {
-    yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath);
+    yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath, undefined, pitConfig, escape3);
   } else {
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const sessionFile = yield* setupNewSession(result, AGENT_DIR, sandboxMounts);
     yield* launchEffect(result.cwd, [
       "--session", sessionFile,
-      ...extensionArgs(),
       ...systemPromptArgs(result.meta, sandboxMounts),
       ...filteredArgv,
-    ], sandbox, settingsPath, sandboxMounts);
+    ], sandbox, settingsPath, sandboxMounts, pitConfig, escape3);
   }
   yield* unlinkSilent(settingsPath);
 });

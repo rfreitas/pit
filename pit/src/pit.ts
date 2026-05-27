@@ -6,6 +6,13 @@
  * No domain logic lives here.
  */
 
+// Inner mode: running inside bwrap as the sandboxed pi process.
+// Delegates entirely to inner.ts which calls main() with pit's factories.
+if (process.env.PIT_IS_INNER === "1") {
+  await import("./inner.ts");
+  process.exit(0);
+}
+
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
