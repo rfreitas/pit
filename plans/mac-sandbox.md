@@ -25,19 +25,25 @@ macOS does not have Linux namespaces. The available primitives are:
 
 ### `sandbox-exec` / Seatbelt (SBPL)
 
-`/usr/bin/sandbox-exec -f profile.sb <cmd>` installs a MAC (Mandatory Access Control) policy via the TrustedBSD kernel hook (same mechanism Apple uses for App Sandbox). The SBPL profile language is Scheme-like:
+`/usr/bin/sandbox-exec -p <profile> <cmd>` installs a MAC (Mandatory Access Control) policy via the TrustedBSD kernel hook (same mechanism Apple uses for App Sandbox). The profile is passed inline via `-p`; no temp file needed. The SBPL profile language is Scheme-like.
+
+Both `@nqbao/pi-sandbox` and `@anthropic-ai/sandbox-runtime` (Anthropic's production sandbox for Claude Code) have been reviewed as reference implementations. Both use the same read model:
 
 ```scheme
 (version 1)
-(deny default)                              ; deny everything not explicitly allowed
-(allow file-read* (subpath "/usr"))
-(allow file-write* (subpath "/home/user/my-worktree"))
-(allow network-outbound)
-(allow process-exec*)
-(allow signal (target self))
+(deny default)
+(allow file-read*)          ; reads are globally open
+(allow file-write*
+  (subpath "/home/user/worktree")
+  (subpath "/home/user/.pi/agent"))
+(allow process-exec)
+(allow process-fork)
+; mach, sysctl, ipc-posix-shm, iokit — see profile notes below
 ```
 
-This is **deny-based, not namespace-based**. The process sees the real filesystem layout but ACCESS is controlled. There is no isolated mount table.
+Reads are **globally open**. This sidesteps dyld shared cache enumeration, Gatekeeper xattr reads, and all system path discovery. Only writes are controlled. This is the correct pattern for sandboxing arbitrary binaries on macOS.
+
+This is **deny-based, not namespace-based**. The process sees the real filesystem layout but write ACCESS is controlled. There is no isolated mount table.
 
 ### APFS `clonefile` (CoW)
 
@@ -56,11 +62,13 @@ This is **deny-based, not namespace-based**. The process sees the real filesyste
 
 ### 1. Closed filesystem (`--tmpfs /`)
 
-**Linux**: empty tmpfs at `/`; nothing visible unless explicitly mounted in.
+**Linux**: empty tmpfs at `/`; nothing visible unless explicitly mounted in. Reads AND writes to unlisted paths are blocked.
 
-**macOS**: no equivalent. `sandbox-exec (deny default)` blocks access to unlisted paths but the filesystem layout is still visible (stat succeeds, content is denied). You cannot present an empty `/`.
+**macOS**: no mount namespace equivalent. The production approach (confirmed by both reference implementations) is `(deny default)` + `(allow file-read*)`: reads are globally open, writes are restricted to an explicit allowlist. The agent can read any file on the filesystem — credentials, other projects, home directory. Only writes are controlled.
 
-**Plan**: Accept this. With `(deny default)` the agent can't read unlisted paths. Visibility of path names (stat) is a weaker guarantee, acceptable for this threat model (see security.md: IPC is already unplugged).
+This is a **meaningful security downgrade** from the Linux model. On Linux the agent cannot exfiltrate `~/.ssh` or `~/.aws` by reading them. On macOS it can. The closed filesystem feature on macOS is better described as a **write-closed filesystem**.
+
+**Plan**: Accept the read-open model — it is the only viable approach without requiring root. Document the downgrade explicitly in the sandbox announcement (see Grill 7).
 
 ---
 
@@ -74,7 +82,7 @@ This is **deny-based, not namespace-based**. The process sees the real filesyste
 (allow file-read* (subpath "/etc"))
 ```
 
-**Plan**: `buildSandboxMountSpec` already produces `SandboxMounts.ro[]`. A new `sbplLaunch` function iterates that list and emits `(allow file-read* (subpath "…"))` rules. Paths marked `optional` need to be wrapped in `(when (file-exists? "…") ...)` — but SBPL has no such conditional. They must be unconditionally allowed; missing paths just never match any access. This is fine.
+**Plan**: `buildSandboxMountSpec` already produces `SandboxMounts.ro[]`. On macOS, read grants are redundant — `(allow file-read*)` covers everything. The ro[] list is still used to build the sandbox announcement (so the agent knows its nominal read scope) but does not drive SBPL rules.
 
 ---
 
@@ -265,21 +273,70 @@ SBPL operates on resolved (real) paths. On macOS `/tmp` → `/private/tmp`, `/va
 
 ---
 
+### Known SBPL requirements for Node.js
+
+Derived from `@anthropic-ai/sandbox-runtime` (production Claude Code sandbox) and `@nqbao/pi-sandbox`. Copy as baseline; trim empirically.
+
+**Mach services** (`allow mach-lookup`):
+```
+com.apple.logd  com.apple.system.logger
+com.apple.system.opendirectoryd.libinfo
+com.apple.system.opendirectoryd.membership
+com.apple.bsd.dirhelper  com.apple.securityd.xpc
+com.apple.coreservices.launchservicesd
+com.apple.FontObjectsServer  com.apple.fonts
+com.apple.lsd.mapdb  com.apple.PowerManagement.control
+com.apple.system.notification_center  com.apple.SecurityServer
+com.apple.cfprefsd.daemon  com.apple.cfprefsd.agent
+com.apple.audio.systemsoundserver
+com.apple.mDNSResponder  com.apple.mDNSResponderHelper  (network only)
+com.apple.trustd.agent  (TLS cert verification, Go runtimes)
+```
+
+**IPC and kernel**:
+```scheme
+(allow ipc-posix-shm)              ; V8 shared memory
+(allow ipc-posix-sem)              ; Python multiprocessing
+(allow sysctl-read ...)            ; ~50 hw./kern./machdep. names — copy from ASRT
+(allow sysctl-write (sysctl-name "kern.tcsm_enable"))  ; V8 thread calc
+(allow user-preference-read)
+(allow distributed-notification-post)
+(allow iokit-open
+  (iokit-registry-entry-class "IOSurfaceRootUserClient")
+  (iokit-registry-entry-class "RootDomainUserClient")
+  (iokit-user-client-class "IOSurfaceSendRight"))
+(allow iokit-get-properties)
+(allow system-socket
+  (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
+```
+
+**Unix sockets** (needed for pit-escape socket):
+```scheme
+(allow system-socket (socket-domain AF_UNIX))
+(allow network-outbound
+  (remote unix-socket (subpath "/path/to/pit-escape.sock")))
+```
+
+**Pseudo-TTY** (needed for Node.js interactive mode):
+```scheme
+(allow pseudo-tty)
+(allow file-ioctl file-read* file-write*
+  (literal "/dev/ptmx") (regex #"^/dev/ttys"))
+```
+
+**A missing mach entry causes a hang, not a crash.** Start from the full list above and trim only with confirmed empirical testing on a Mac.
+
+---
+
 ## Where you cannot research your way out — open grills
 
-### Grill 1: SBPL `(deny default)` and dyld shared cache
+### Grill 1: SBPL `(deny default)` and dyld shared cache — RESOLVED
 
-When `(deny default)` is active, dyld must be able to read the shared cache at `/private/var/db/dyld/dyld_shared_cache_arm64e` (Apple Silicon) or equivalent. If this read is blocked, the process cannot start at all — every binary fails to exec. The exact paths dyld needs to read cannot be fully determined from documentation because:
+Resolved by adopting `(allow file-read*)`. Reads are globally open; dyld cache paths, Gatekeeper xattr reads, and system framework paths require no enumeration. Both reference implementations confirm this is the correct approach.
 
-- The dyld shared cache path changes with macOS versions
-- Rosetta 2 adds another cache at a different path
-- dyld also reads from `/System/Volumes/Preboot/...` on some configurations
+### Grill 2: SBPL + notarization and Gatekeeper — RESOLVED
 
-Need to run a real Node.js process under `sandbox-exec (deny default)` on macOS and capture every denied path via `fs_usage` or `sandbox-exec` trace mode. This is empirical work that cannot be done from a Linux environment. Risk: a Node.js update or macOS update silently adds a new dyld path and the sandbox breaks on upgrade.
-
-### Grill 2: SBPL + notarization and Gatekeeper
-
-On macOS 13+ with SIP enabled, running `sandbox-exec` on a sandboxed `node` binary may interact with Gatekeeper and Notarization checks. If `(deny default)` blocks `xattr` reads on the node binary (used for quarantine attribute checks), the exec might be denied. The exact set of `xattr-read` and `file-read-metadata` permissions needed is not documented and differs between Homebrew-installed Node, mise-installed Node, and system Node. Cannot be resolved without empirical testing on a real Mac.
+Resolved by the same `(allow file-read*)` model. xattr reads for quarantine attribute checks are covered. No Gatekeeper interaction with denied paths.
 
 ### Grill 3: The overlay problem has no clean solution
 
@@ -297,11 +354,19 @@ Pi calls `ensureTool("fd")` and `ensureTool("rg")` at every interactive session 
 
 Fix: pre-create all known agentDir subdirs in the real agentDir before mirroring (`bin/`, `sessions/`, `themes/`, `prompts/`, `git/`). SDK source confirms these are the only subdirs created during a normal session — package installs (`git/<host>/...`) run via `pi install` which bypasses the sandbox entirely. Unknown subdirs added in future SDK versions remain a residual risk, but impact is limited to transient data.
 
-### Grill 5: `sandbox-exec` profile syntax stability
+### Grill 7: Sandbox announcement is wrong on macOS
 
-SBPL is private Apple API, not documented in any public developer documentation. Everything known about it comes from reverse-engineering Apple's own profiles and community research. Apple has been moving toward App Sandbox (entitlements-based, requires code signing) and away from `sandbox-exec` for third-party use. A future macOS version may remove or severely restrict `sandbox-exec` for user processes, silently breaking the entire macOS sandbox backend with no fallback. Cannot be mitigated by research — requires a bet on how long Apple tolerates `sandbox-exec` in third-party tooling.
+The announcement currently tells the agent: "Anything not listed is inaccessible." On macOS with `(allow file-read*)`, this is false — the agent can read any file on the host filesystem, including `~/.ssh`, `~/.aws`, and credentials outside the grant list. `formatSandboxNote` generates the same text regardless of platform.
 
-### Grill 6: `--die-with-parent` correctness
+Two options:
+1. Add a `platform` parameter to `formatSandboxNote` and emit macOS-specific text: "Filesystem writes are restricted to listed paths. Reads are unrestricted — all files are readable."
+2. Add a `readOpen: boolean` field to `SandboxMounts` and let the formatter adjust the description automatically.
+
+Neither is hard to implement but both require a decision on how honest to be with the agent about its actual access. The agent operating with a false self-model (thinking it can't read credentials when it can) is a correctness problem, not just a documentation one.
+
+### Grill 8: Mach service list completeness
+
+The mach-lookup list in "Known SBPL requirements" is derived from two reference implementations. They differ slightly from each other. Neither documents which entries are strictly required for Node.js vs defensive extras from other runtimes (Go, Python, Java). A missing entry causes a **hang**, not a crash or an error message — silent failure that is hard to diagnose. The list should be validated empirically on a Mac by running a Node.js process with the candidate profile and confirming no hangs under normal and degraded conditions.
 
 The polling approach (check ppid in a setInterval) has a window: if the parent is killed and the ppid is immediately reassigned to a new process, the child never detects the death. The kqueue approach requires separate thread or event loop integration. Whether Node.js's event loop + kqueue correctly delivers `EVFILT_PROC NOTE_EXIT` for the parent PID in all exit scenarios (SIGKILL, crash, graceful exit) needs empirical verification on macOS. It is not equivalent to `prctl(PR_SET_PDEATHSIG)`, which is synchronous at the kernel level.
 
@@ -311,16 +376,16 @@ The polling approach (check ppid in a setInterval) has a window: if the parent i
 
 | Feature | macOS plan | Confidence |
 |---|---|---|
-| Closed filesystem | `(deny default)` — weaker: layout visible, content blocked | High |
-| Read grants | `(allow file-read* (subpath ...))` | High — SBPL syntax well-known |
-| Write grants | `(allow file-read*/file-write* ...)` | High |
+| Closed filesystem | Write-closed only: `(allow file-read*)` globally, write allowlist | High — confirmed by two production implementations |
+| Read grants | Subsumed by `(allow file-read*)` — no SBPL rules needed, used for announcement only | High |
+| Write grants | `(allow file-write* (subpath ...))` per rw[] entry | High |
 | Env seal | `spawnSync({ env: filteredEnv })` | High — standard Node.js, same shape as bwrapLaunch |
-| Network policy | `(allow network-outbound)` | High |
-| System path grants (macOS paths) | `/System/Library`, `/private/var/db/dyld` etc. | Medium — exact set needs empirical testing (Grill 1) |
+| Network policy | `(allow network*)` or restricted with proxy | High |
+| System path grants | Covered by `(allow file-read*)`; mach/sysctl list derived from ASRT | High — copy from reference, validate on Mac |
 | Ephemeral layers | APFS clone or skip | Low — both options have hard problems (Grill 3) |
 | Dir remap + package filtering | Symlink mirror in `/private/tmp`; pre-create known subdirs | Medium — unknown future SDK subdirs are residual risk |
 | Identity isolation | Not applicable — no equivalent on macOS | N/A |
 | Process isolation | Not applicable — no PID namespace on macOS | N/A |
 | Lifetime binding | ppid polling or kqueue | Medium — correctness under SIGKILL unclear (Grill 6) |
 | SBPL stability | bet on `sandbox-exec` longevity | Low — private API, deprecation risk (Grill 5) |
-| SBPL + dyld | unknown exact paths | Low — cannot determine without Mac hardware (Grill 1+2) |
+| Sandbox announcement | Needs platform-aware text — macOS is write-closed, not read-closed | Low — design decision required (Grill 7) |
