@@ -121,16 +121,17 @@ The SBPL approach to overlays is not possible at all — sandbox-exec is purely 
 **macOS**: Cannot create `/pit-agent` as a new path without root. Cannot layer a file bind on top of a directory bind.
 
 **Plan (symlink mirror)**:
-1. `mkdtemp()` → `/tmp/pit-agent-XXXX/`
-2. For each entry in the real `agentDir` (sessions/, auth.json, etc.), create a symlink pointing to the real path. So `/tmp/pit-agent-XXXX/sessions` → `/real/agent/sessions`.
-3. Write the filtered `settings.json` directly into `/tmp/pit-agent-XXXX/settings.json` (a real file, not a symlink).
-4. Set `PI_CODING_AGENT_DIR=/tmp/pit-agent-XXXX`.
-5. sandbox-exec allows rw on `/tmp/pit-agent-XXXX/` and on the real `agentDir` (so symlink targets are accessible).
-6. On exit, delete `/tmp/pit-agent-XXXX/`.
+1. Pre-create all known agentDir subdirs in the real agentDir before mirroring: `bin/`, `sessions/` (already created by pit), `themes/`, `prompts/`, `git/`. This ensures they exist at mirror time and are symlinked correctly.
+2. `mkdtempSync('/private/tmp/pit-agent-XXXX')` — use `/private/tmp` explicitly, not `os.tmpdir()`, so the path is stable and narrow (see SBPL path notes below).
+3. For each entry in the real `agentDir`, create a symlink: `/private/tmp/pit-agent-XXXX/sessions` → `/real/agent/sessions`, etc.
+4. Write the filtered `settings.json` directly into the mirror as a real file (not a symlink).
+5. Set `PI_CODING_AGENT_DIR=/private/tmp/pit-agent-XXXX`.
+6. SBPL profile allows rw on `/private/tmp/pit-agent-XXXX/` and on the real `agentDir` (so symlink targets are accessible).
+7. On exit, delete the mirror dir.
 
 Writes to `sessions/` follow the symlink → go to real agent dir. Writes to `settings.json` go to the temp file. The guarantee is preserved.
 
-Subtlety: only symlink subdirs that exist at launch time. New files created by pi in `agentDir` go through the symlinks into the real dir fine, but new subdirectories created inside the temp mirror won't propagate to the real dir (see Grill 4).
+Subdirectory gap: Pi calls `ensureTool("fd")` and `ensureTool("rg")` at every interactive session startup, creating `agentDir/bin/` via `mkdirSync` if it doesn't exist. Step 1 covers this. Unknown subdirs added in future SDK versions remain a risk — they'd be created in the mirror, not the real agentDir, and lost on exit. Impact is low (tools re-downloaded, not data loss).
 
 ---
 
@@ -140,7 +141,7 @@ Subtlety: only symlink subdirs that exist at launch time. New files created by p
 
 **macOS**: `sandbox-exec` does NOT control the environment. It just runs the command with the current environment.
 
-**Plan**: Use `child_process.spawn` (not `spawnSync` + bwrap) for macOS. Build a filtered `env` object and pass it as `options.env` to `spawn`. This replaces `--clearenv`/`--setenv` exactly. The `allowedEnvArgs` logic in `pure.ts` can be reused — just populate an object instead of building `--setenv` pairs.
+**Plan**: Pass `{ env: filteredEnv }` to `spawnSync` — the same call used for bwrap on Linux. `spawnSync` accepts `options.env` identically to `spawn`. This keeps `sbplLaunch` returning `never` (same shape as `bwrapLaunch`) and handles env seal cleanly. The `allowedEnvArgs` logic in `pure.ts` can be reused — just populate an object instead of building `--setenv` pairs.
 
 ---
 
@@ -252,6 +253,18 @@ New entries needed on macOS:
 
 ---
 
+## Implementation notes
+
+### SBPL rules must use real paths
+
+SBPL operates on resolved (real) paths. On macOS `/tmp` → `/private/tmp`, `/var` → `/private/var`, `/etc` → `/private/etc`. `(allow file-write* (subpath "/tmp"))` will not match an access to `/private/tmp/pit-agent-XXXX/`. The `buildSbplProfile` function must call `realpathSync()` on every path before emitting a rule — agentDir, worktree, mirror dir, and all system paths in the grant lists.
+
+### Mirror dir and `$TMPDIR`
+
+`os.tmpdir()` on macOS returns `$TMPDIR`, which launchd sets per-user per-login to `/var/folders/xx/yyy/T/`. Using `mkdtemp()` would place the mirror there, requiring a broad `(allow file-write* (subpath "/var/folders"))` rule. Instead, create the mirror with `mkdtempSync('/private/tmp/pit-XXXX')` — a fixed, world-writable path, covered by a single narrow `(allow file-write* (subpath "/private/tmp"))` rule.
+
+---
+
 ## Where you cannot research your way out — open grills
 
 ### Grill 1: SBPL `(deny default)` and dyld shared cache
@@ -278,11 +291,11 @@ On macOS 13+ with SIP enabled, running `sandbox-exec` on a sandboxed `node` bina
 
 - **macFUSE overlayfs**: requires user to install a third-party signed kernel extension. macOS aggressively prompts and re-prompts for approval. Completely impractical as a default.
 
-### Grill 4: Shadow agent dir symlink race
+### Grill 4: Shadow agent dir symlink gap — resolved for known dirs
 
-The mirror-with-symlinks approach has a race: if pi creates a new subdirectory inside `PI_CODING_AGENT_DIR` during a session (e.g. a new provider's auth cache), it will be created in `/tmp/pit-agent-XXXX/new-subdir/` — not in the real agent dir, because there is no symlink for a dir that didn't exist at mirror creation time. That data vanishes when the temp dir is cleaned up.
+Pi calls `ensureTool("fd")` and `ensureTool("rg")` at every interactive session startup, creating `agentDir/bin/` if it doesn't exist. If `bin/` is absent at mirror creation time, it gets created inside the temp mirror and the downloaded binaries vanish on exit (re-downloaded next session — annoying, not data loss).
 
-Unknown: does pi create new subdirectories inside AGENT_DIR during a session? Requires auditing `@earendil-works/pi-coding-agent` internals. Cannot be resolved without reading SDK source or empirical testing.
+Fix: pre-create all known agentDir subdirs in the real agentDir before mirroring (`bin/`, `sessions/`, `themes/`, `prompts/`, `git/`). SDK source confirms these are the only subdirs created during a normal session — package installs (`git/<host>/...`) run via `pi install` which bypasses the sandbox entirely. Unknown subdirs added in future SDK versions remain a residual risk, but impact is limited to transient data.
 
 ### Grill 5: `sandbox-exec` profile syntax stability
 
@@ -301,11 +314,11 @@ The polling approach (check ppid in a setInterval) has a window: if the parent i
 | Closed filesystem | `(deny default)` — weaker: layout visible, content blocked | High |
 | Read grants | `(allow file-read* (subpath ...))` | High — SBPL syntax well-known |
 | Write grants | `(allow file-read*/file-write* ...)` | High |
-| Env seal | `spawn({ env: filteredEnv })` | High — standard Node.js |
+| Env seal | `spawnSync({ env: filteredEnv })` | High — standard Node.js, same shape as bwrapLaunch |
 | Network policy | `(allow network-outbound)` | High |
 | System path grants (macOS paths) | `/System/Library`, `/private/var/db/dyld` etc. | Medium — exact set needs empirical testing (Grill 1) |
 | Ephemeral layers | APFS clone or skip | Low — both options have hard problems (Grill 3) |
-| Dir remap + package filtering | Symlink mirror in tmpdir | Medium — new-subdir race (Grill 4) |
+| Dir remap + package filtering | Symlink mirror in `/private/tmp`; pre-create known subdirs | Medium — unknown future SDK subdirs are residual risk |
 | Identity isolation | Not applicable — no equivalent on macOS | N/A |
 | Process isolation | Not applicable — no PID namespace on macOS | N/A |
 | Lifetime binding | ppid polling or kqueue | Medium — correctness under SIGKILL unclear (Grill 6) |
