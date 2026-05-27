@@ -123,13 +123,13 @@ export const formatBranchStatus = (
     segments.push(`in sync with ${s.parentBranch}`);
   } else if (s.aheadCount > 0 && s.behindCount === 0) {
     segments.push(
-      `${s.aheadCount} ${aheadNoun} ahead (${formatAheadLoc(s.aheadInsertions, s.aheadDeletions, s.aheadBinaryFiles)}) of ${s.parentBranch}`,
+      `${s.aheadCount} ${aheadNoun} (${formatAheadLoc(s.aheadInsertions, s.aheadDeletions, s.aheadBinaryFiles)}) ahead of ${s.parentBranch}`,
     );
   } else if (s.aheadCount === 0 && s.behindCount > 0) {
     segments.push(`${s.behindCount} ${behindNoun} behind ${s.parentBranch}`);
   } else {
     segments.push(
-      `${s.aheadCount} ${aheadNoun} ahead (${formatAheadLoc(s.aheadInsertions, s.aheadDeletions, s.aheadBinaryFiles)}) of ${s.parentBranch}, ${s.behindCount} behind`,
+      `${s.aheadCount} ${aheadNoun} (${formatAheadLoc(s.aheadInsertions, s.aheadDeletions, s.aheadBinaryFiles)}) ahead of ${s.parentBranch}, ${s.behindCount} behind`,
     );
   }
 

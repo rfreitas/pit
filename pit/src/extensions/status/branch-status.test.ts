@@ -66,7 +66,7 @@ describe("formatBranchStatus", () => {
 
     it("2. ahead only", () => {
       expect(formatBranchStatus(s({ aheadCount: 2, aheadInsertions: 42, aheadDeletions: 7 })))
-        .toBe("2 commits ahead (+42 \u22127) of main");
+        .toBe("2 commits (+42 \u22127) ahead of main");
     });
 
     it("3. behind only", () => {
@@ -75,7 +75,7 @@ describe("formatBranchStatus", () => {
 
     it("4. ahead and behind", () => {
       expect(formatBranchStatus(s({ aheadCount: 2, aheadInsertions: 42, aheadDeletions: 7, behindCount: 3 })))
-        .toBe("2 commits ahead (+42 \u22127) of main, 3 behind");
+        .toBe("2 commits (+42 \u22127) ahead of main, 3 behind");
     });
 
     it("5. in sync + staged", () => {
@@ -94,7 +94,7 @@ describe("formatBranchStatus", () => {
 
     it("8. ahead + staged", () => {
       expect(formatBranchStatus(s({ aheadCount: 2, aheadInsertions: 42, aheadDeletions: 7, stagedInsertions: 5 })))
-        .toBe("2 commits ahead (+42 \u22127) of main \u00b7 staged (+5)");
+        .toBe("2 commits (+42 \u22127) ahead of main \u00b7 staged (+5)");
     });
 
     it("9. behind + staged + unstaged", () => {
@@ -107,23 +107,23 @@ describe("formatBranchStatus", () => {
         aheadCount: 2, aheadInsertions: 42, aheadDeletions: 7,
         behindCount: 3, stagedInsertions: 5,
         unstagedInsertions: 3, unstagedDeletions: 1,
-      }))).toBe("2 commits ahead (+42 \u22127) of main, 3 behind \u00b7 staged (+5) \u00b7 unstaged (+3 \u22121)");
+      }))).toBe("2 commits (+42 \u22127) ahead of main, 3 behind \u00b7 staged (+5) \u00b7 unstaged (+3 \u22121)");
     });
   });
 
   describe("LOC edge cases", () => {
     it("11. ahead with zero LOC and zero binary → explicit +0", () => {
-      expect(formatBranchStatus(s({ aheadCount: 2 }))).toBe("2 commits ahead (+0) of main");
+      expect(formatBranchStatus(s({ aheadCount: 2 }))).toBe("2 commits (+0) ahead of main");
     });
 
     it("12. ahead with binary only", () => {
       expect(formatBranchStatus(s({ aheadCount: 2, aheadBinaryFiles: 2 })))
-        .toBe("2 commits ahead (2 binary files) of main");
+        .toBe("2 commits (2 binary files) ahead of main");
     });
 
     it("13. ahead with text and binary", () => {
       expect(formatBranchStatus(s({ aheadCount: 2, aheadInsertions: 42, aheadDeletions: 7, aheadBinaryFiles: 2 })))
-        .toBe("2 commits ahead (+42 \u22127, 2 binary files) of main");
+        .toBe("2 commits (+42 \u22127, 2 binary files) ahead of main");
     });
 
     it("14. staged insertions only", () => {
@@ -155,7 +155,7 @@ describe("formatBranchStatus", () => {
         aheadCount: 2, aheadInsertions: 42, aheadDeletions: 7,
         behindCount: 3, stagedInsertions: 5,
         unstagedInsertions: 3, unstagedDeletions: 1,
-      }))).toBe("merge in progress \u00b7 2 commits ahead (+42 \u22127) of main, 3 behind \u00b7 staged (+5) \u00b7 unstaged (+3 \u22121)");
+      }))).toBe("merge in progress \u00b7 2 commits (+42 \u22127) ahead of main, 3 behind \u00b7 staged (+5) \u00b7 unstaged (+3 \u22121)");
     });
 
     it("20. no parent branch, clean → hidden", () => {
@@ -180,12 +180,12 @@ describe("formatBranchStatus", () => {
   describe("singular/plural", () => {
     it("24. 1 commit ahead", () => {
       expect(formatBranchStatus(s({ aheadCount: 1, aheadInsertions: 5 })))
-        .toBe("1 commit ahead (+5) of main");
+        .toBe("1 commit (+5) ahead of main");
     });
 
     it("25. 2 commits ahead", () => {
       expect(formatBranchStatus(s({ aheadCount: 2, aheadInsertions: 5 })))
-        .toBe("2 commits ahead (+5) of main");
+        .toBe("2 commits (+5) ahead of main");
     });
 
     it("26. 1 commit behind", () => {
@@ -198,17 +198,17 @@ describe("formatBranchStatus", () => {
 
     it("28. 1 commit ahead, 1 binary file", () => {
       expect(formatBranchStatus(s({ aheadCount: 1, aheadBinaryFiles: 1 })))
-        .toBe("1 commit ahead (1 binary file) of main");
+        .toBe("1 commit (1 binary file) ahead of main");
     });
 
     it("29. 1 commit ahead, 2 binary files", () => {
       expect(formatBranchStatus(s({ aheadCount: 1, aheadBinaryFiles: 2 })))
-        .toBe("1 commit ahead (2 binary files) of main");
+        .toBe("1 commit (2 binary files) ahead of main");
     });
 
     it("30. combined, singular behind", () => {
       expect(formatBranchStatus(s({ aheadCount: 2, aheadInsertions: 42, aheadDeletions: 7, behindCount: 1 })))
-        .toBe("2 commits ahead (+42 \u22127) of main, 1 behind");
+        .toBe("2 commits (+42 \u22127) ahead of main, 1 behind");
     });
   });
 
@@ -220,7 +220,7 @@ describe("formatBranchStatus", () => {
 
     it("32. parent branch name flows through — develop", () => {
       expect(formatBranchStatus(s({ parentBranch: "develop", aheadCount: 1, aheadInsertions: 5 })))
-        .toBe("1 commit ahead (+5) of develop");
+        .toBe("1 commit (+5) ahead of develop");
     });
   });
 });
