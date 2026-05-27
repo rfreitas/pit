@@ -8,7 +8,6 @@ on:
 jobs:
   # ── Linux ────────────────────────────────────────────────────────────────────
   # Typecheck, lint, and production test suite (bwrap sandbox tests included).
-  # macOS debug probe does not run here.
   test-linux:
     name: test (linux)
     runs-on: ubuntu-latest
@@ -37,12 +36,32 @@ jobs:
         env:
           PI_SKIP_VERSION_CHECK: "1"
 
+  # ── macOS production tests ───────────────────────────────────────────────────
+  # Runs npm test on macOS — exercises sbplLaunch, buildSbplProfile, and the
+  # darwin path in buildSandboxMountSpec through actual production code.
+  # E2E tests run with sandbox-exec as the active backend on this platform.
+  test-macos:
+    name: test (macos)
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: install dependencies
+        run: npm install
+
+      - name: test
+        run: npm test
+        env:
+          PI_SKIP_VERSION_CHECK: "1"
+
   # ── macOS SBPL probe ─────────────────────────────────────────────────────────
-  # Research probe — NOT production tests.
-  # Runs pit/debug/sbpl-probe.test.ts in isolation with verbose output.
-  # continue-on-error: true so failures show as amber, not blocking.
-  # Purpose: close open questions (DNS, git spawn, mach list) before
-  # implementing sbpl.ts and sbplLaunch.
+  # Research probe — NOT production tests. See pit/debug/sbpl-probe.test.ts.
+  # continue-on-error: true so failures are amber, not blocking.
   debug-sbpl-macos:
     name: debug sbpl (macos)
     runs-on: macos-14
@@ -67,8 +86,7 @@ jobs:
           PI_SKIP_VERSION_CHECK: "1"
 
   # ── macOS Intel SBPL probe ───────────────────────────────────────────────────
-  # Same probe on Intel to catch architecture-specific differences.
-  # Gated to main/tags to save runner minutes.
+  # Same probe on Intel. Gated to main/tags to save runner minutes.
   debug-sbpl-macos-intel:
     name: debug sbpl (macos intel)
     runs-on: macos-13
