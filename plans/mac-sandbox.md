@@ -369,9 +369,19 @@ New entries needed on macOS:
 - `/private/var/db/dyld` — dyld shared cache (critical for ANY binary on macOS)
 - `/private/var/tmp` — temp files
 - `/Library/Developer/CommandLineTools` — if using CLT git
-- Homebrew prefix: `/opt/homebrew` (Apple Silicon) or `/usr/local` (Intel)
+- Homebrew prefix: `/opt/homebrew` (Apple Silicon) or `/usr/local` (Intel) — **confirmed required**: Homebrew is at `/opt/homebrew` on GitHub Actions macos-14; without it the agent cannot find git, node, or any Homebrew-installed tool
 
 `buildSandboxMountSpec` should accept a `platform: 'linux' | 'darwin'` parameter (or split into two functions) to select the right system dir set.
+
+### Sandbox PATH
+
+The sandboxed process PATH must include Homebrew prefixes or the agent's bash tool cannot find any Homebrew-installed binary:
+
+```
+${nodeDir}/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+```
+
+Confirmed on GitHub Actions macos-14 (Apple Silicon): git is at `/opt/homebrew/bin/git`. Without this PATH, `git --version` and all Homebrew tools silently fail.
 
 ---
 
@@ -431,11 +441,17 @@ com.apple.trustd.agent  (TLS cert verification, Go runtimes)
   (remote unix-socket (subpath "/path/to/pit-escape.sock")))
 ```
 
-**Pseudo-TTY** (needed for Node.js interactive mode):
+**Pseudo-TTY and device nodes** (confirmed required):
 ```scheme
 (allow pseudo-tty)
-(allow file-ioctl file-read* file-write*
-  (literal "/dev/ptmx") (regex #"^/dev/ttys"))
+(allow file-read* file-write* (literal "/dev/ptmx"))
+(allow file-read* file-write* (regex #"^/dev/ttys"))
+(allow file-ioctl (literal "/dev/null") (literal "/dev/tty") (literal "/dev/ptmx"))
+; /dev/null and /dev/tty MUST have file-read* + file-write*, not just file-ioctl.
+; git opens /dev/null for read+write on startup. Any subprocess that
+; redirects stdin/stdout to /dev/null fails without this. Confirmed on macos-14.
+(allow file-read* file-write* (literal "/dev/null"))
+(allow file-read* file-write* (literal "/dev/tty"))
 ```
 
 **A missing mach entry causes a hang, not a crash.** Start from the full list above and trim only with confirmed empirical testing on a Mac.
@@ -466,9 +482,17 @@ Fix: pre-create all known agentDir subdirs in the real agentDir before mirroring
 
 Resolved by the `readDeny` field on `SandboxMounts` and the read-policy-driven `formatSandboxNote`. The formatter emits accurate text for each mode: whitelist mode says "No access: anything outside the mounts listed above"; blacklist mode says "No write access outside listed paths" and lists the denied read paths. The agent's self-model is correct on both platforms.
 
-### Grill 8: Mach service list — needs Mac test plan
+### DNS resolution inside the sandbox
 
-The baseline from ASRT is the starting point. Validation requires running a Node.js process under the candidate profile on a Mac and confirming no hangs across: normal session, TLS outbound, Unix socket (pit-escape), interactive TTY, and tool download (fd/rg). Each mach entry that is removed must be confirmed safe by a passing test, not just assumed. A missing entry causes a silent hang — the test plan must include a hang detection timeout.
+`dns.resolve4` and the c-ares family use raw UDP sockets to the nameserver address from `/etc/resolv.conf`. On macOS, DNS is handled exclusively by mDNSResponder via mach IPC — there is no DNS daemon on `127.0.0.1:53`. c-ares gets `ECONNREFUSED`. Confirmed on GitHub Actions macos-14.
+
+**Rule**: do not use `dns.resolve*` (c-ares) inside the sandbox. Use `dns.lookup` which goes through `getaddrinfo` → mDNSResponder via `com.apple.mDNSResponder` mach service. Node.js's `https.request` already uses this path, so AI API calls work correctly.
+
+### Grill 8: Mach service list — baseline confirmed, trimming deferred
+
+The full ASRT baseline has been validated on GitHub Actions macos-14 (Apple Silicon): `AuthStorage.create()` completes in under 700ms with no hang, DNS resolves, HTTPS reaches both AI providers, Unix socket (pit-escape pattern) connects, and git spawns correctly. All 32 probe scenarios pass.
+
+Trimming individual entries to find the minimal set is deferred until after the production implementation exists. A missing entry causes a silent hang — each removal must be validated by a passing run of the full probe, not assumed safe.
 
 ### Grill 5: `sandbox-exec` profile syntax stability — risk accepted
 
@@ -492,12 +516,12 @@ Implementation consequence: `sbplLaunch` must use `spawn` (async), not `spawnSyn
 | Write grants | `(allow file-write* (subpath ...))` per `rw[]` entry | High |
 | Env seal | `spawnSync({ env: filteredEnv })` | High — same shape as bwrapLaunch |
 | Network policy | `(allow network*)` or restricted with proxy | High |
-| System path grants | Covered by `(allow file-read*)`; mach/sysctl list derived from ASRT | High — copy from reference, validate on Mac |
+| System path grants | Covered by `(allow file-read*)`; mach/sysctl/device list validated on macos-14 | High — confirmed |
 | Sandbox announcement | Read-policy-driven via `readDeny` field; backend name as parameter | High — design settled |
 | Ephemeral layers | Feature gap on macOS — not implemented | Decided |
-| Dir remap + package filtering | Symlink mirror in `/private/tmp`; pre-create known subdirs | Medium — unknown future SDK subdirs are residual risk |
+| Dir remap + package filtering | Symlink mirror in `/private/tmp`; hardlink for settings.json; pre-create known subdirs | High — validated on macos-14 |
 | Identity isolation | Not applicable — no equivalent on macOS | N/A |
 | Process isolation | Not applicable — no PID namespace on macOS | N/A |
-| Lifetime binding | `spawn` + SIGINT/SIGTERM forwarding; SIGKILL orphans accepted (same as ASRT) | Decided |
+| Lifetime binding | `spawn` + SIGTERM/SIGINT forwarding; SIGKILL orphans accepted (same as ASRT) | Decided |
 | SBPL stability | risk accepted | Decided |
-| Mach service list | Baseline from ASRT; needs Mac test plan with hang detection | Needs test plan (Grill 8) |
+| Mach service list | ASRT baseline confirmed on macos-14; trimming deferred | High for baseline |
