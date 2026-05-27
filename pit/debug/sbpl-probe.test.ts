@@ -10,8 +10,8 @@
  *   npx vitest run pit/debug/sbpl-probe.test.ts --reporter verbose
  *
  * Open questions this file is probing:
- *   - DNS: resolve4 failing while HTTPS works — wrong mach service or network rule?
- *   - Git spawn: git --version failing inside sandbox — missing exec permission?
+ *   - Git spawn: confirmed PATH issue (/opt/homebrew/bin missing) — fix applied, verifying
+ *   - DNS: confirmed c-ares vs getaddrinfo split — fix applied (use lookup not resolve4)
  *   - Mach service minimal set (Grill 8): which entries can be safely removed?
  */
 import { describe, it, expect, afterEach } from "vitest";
@@ -210,7 +210,9 @@ function runInSandboxExec(
 
   const defaultEnv: Record<string, string> = {
     HOME: process.env.HOME!,
-    PATH: `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
+    // Include Homebrew prefix (Apple Silicon /opt/homebrew, Intel /usr/local)
+    // so the sandboxed process can find tools like git installed there.
+    PATH: `${nodeDir}/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
   };
 
   try {
@@ -698,14 +700,17 @@ describe("sandbox-exec: dir remap (PI_CODING_AGENT_DIR mirror)", () => {
 
 describe("sandbox-exec: network", () => {
   it.skipIf(!hasSandboxExec)("resolves DNS inside sandbox-exec", async () => {
+    // dns.lookup uses getaddrinfo → mDNSResponder via mach IPC → works.
+    // dns.resolve4 uses c-ares → raw UDP to /etc/resolv.conf nameserver →
+    // ECONNREFUSED on GitHub Actions (no DNS daemon on 127.0.0.1:53 on macOS).
     const result = runInSandboxExec(`
-      import { resolve4 } from "node:dns/promises";
-      const addrs = await resolve4("github.com");
-      process.stdout.write(JSON.stringify({ addrs }));
+      import { lookup } from "node:dns/promises";
+      const { address } = await lookup("github.com");
+      process.stdout.write(JSON.stringify({ address }));
     `);
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
-    const { addrs } = JSON.parse(result.stdout);
-    expect(addrs.length).toBeGreaterThan(0);
+    const { address } = JSON.parse(result.stdout);
+    expect(address.length).toBeGreaterThan(0);
   });
 
   it.skipIf(!hasSandboxExec)("reaches api.anthropic.com over HTTPS", async () => {
