@@ -341,7 +341,7 @@ New file: `pit/src/core/sandbox/sbpl.ts`
 - Mirrors `buildSandboxMountSpec` in being pure and fully testable without a Mac
 
 New function in `launcher.ts`:
-- `sbplLaunch(cwd, piArgs, mounts, pitConfig, settingsPath?, escapeToken?)` — builds profile inline (passed via `-p`, no temp file), sets up symlink-mirror agent dir, calls `spawnSync('sandbox-exec', ['-p', profile, nodeBin, ...], { env: filteredEnv })`
+- `sbplLaunch(cwd, piArgs, mounts, pitConfig, settingsPath?, escapeToken?): Promise<void>` — async (unlike `bwrapLaunch` which is sync). Builds the SBPL profile string, passes it inline via `-p`, sets up symlink-mirror agent dir, spawns the child with `spawn('sandbox-exec', ['-p', profile, nodeBin, ...], { stdio: 'inherit', env: filteredEnv })`, forwards SIGINT/SIGTERM to child, awaits child exit, then calls `process.exit()`. SIGKILL of the parent orphans the child — accepted, same behaviour as `@anthropic-ai/sandbox-runtime`.
 
 `formatSandboxNote` in `pure.ts`:
 - Signature becomes `formatSandboxNote(mounts: SandboxMounts, backend: 'bwrap' | 'sandbox-exec'): string`
@@ -452,15 +452,9 @@ Resolved by adopting `(allow file-read*)`. Reads are globally open; dyld cache p
 
 Resolved by the same `(allow file-read*)` model. xattr reads for quarantine attribute checks are covered. No Gatekeeper interaction with denied paths.
 
-### Grill 3: The overlay problem has no clean solution
+### Grill 3: Ephemeral layers — feature gap on macOS
 
-`sandbox-exec` cannot do overlayfs. Full stop. The three options all have hard problems:
-
-- **APFS CoW clone**: fast, but leaves real filesystem state. Crash = stale directories in the worktree that the agent can see and git-add. The "writes vanish on exit" guarantee from the session announcement would be a lie if the process is hard-killed. Cannot guarantee cleanup without a companion process outside the sandbox. Also: non-APFS volumes (HFS+, network shares, SMB-mounted repos) don't support `clonefile`, so `cp -c` silently falls back to a full copy, which is slow for large `node_modules`.
-
-- **Skip overlays (warn)**: functionally correct but the agent loses access to parent's node_modules / dist / etc. Whether that matters depends on what Pi is asked to do. If the agent needs to run scripts or tests that rely on node_modules existing at the worktree root, it will fail in a confusing way. This needs a UX decision, not just an engineering choice.
-
-- **macFUSE overlayfs**: requires user to install a third-party signed kernel extension. macOS aggressively prompts and re-prompts for approval. Completely impractical as a default.
+Not implemented on macOS. `sandbox-exec` cannot do overlayfs and the alternatives (APFS CoW clone, macFUSE) are either unreliable under crash or require a third-party kernel extension. The agent on macOS will not have access to parent repo's unversioned directories (e.g. `node_modules`) at the worktree path. The sandbox announcement on macOS omits the ephemeral overlay section.
 
 ### Grill 4: Shadow agent dir symlink gap — resolved for known dirs
 
@@ -472,17 +466,19 @@ Fix: pre-create all known agentDir subdirs in the real agentDir before mirroring
 
 Resolved by the `readDeny` field on `SandboxMounts` and the read-policy-driven `formatSandboxNote`. The formatter emits accurate text for each mode: whitelist mode says "No access: anything outside the mounts listed above"; blacklist mode says "No write access outside listed paths" and lists the denied read paths. The agent's self-model is correct on both platforms.
 
-### Grill 8: Mach service list completeness
+### Grill 8: Mach service list — needs Mac test plan
 
-The mach-lookup list in "Known SBPL requirements" is derived from two reference implementations. They differ slightly from each other. Neither documents which entries are strictly required for Node.js vs defensive extras from other runtimes (Go, Python, Java). A missing entry causes a **hang**, not a crash or an error message — silent failure that is hard to diagnose. The list should be validated empirically on a Mac by running a Node.js process with the candidate profile and confirming no hangs under normal and degraded conditions.
+The baseline from ASRT is the starting point. Validation requires running a Node.js process under the candidate profile on a Mac and confirming no hangs across: normal session, TLS outbound, Unix socket (pit-escape), interactive TTY, and tool download (fd/rg). Each mach entry that is removed must be confirmed safe by a passing test, not just assumed. A missing entry causes a silent hang — the test plan must include a hang detection timeout.
 
 ### Grill 5: `sandbox-exec` profile syntax stability
 
 SBPL is private Apple API, not documented in any public developer documentation. Everything known about it comes from reverse-engineering Apple's own profiles and community research. Apple has been moving toward App Sandbox (entitlements-based, requires code signing) and away from `sandbox-exec` for third-party use. A future macOS version may remove or severely restrict `sandbox-exec` for user processes, silently breaking the entire macOS sandbox backend with no fallback. Cannot be mitigated by research — requires a bet on how long Apple tolerates `sandbox-exec` in third-party tooling.
 
-### Grill 6: Lifetime binding
+### Grill 6: Lifetime binding — SIGKILL gap accepted
 
-The polling approach (check ppid in a setInterval) has a window: if the parent is killed and the ppid is immediately reassigned to a new process, the child never detects the death. The kqueue approach requires separate thread or event loop integration. Whether Node.js's event loop + kqueue correctly delivers `EVFILT_PROC NOTE_EXIT` for the parent PID in all exit scenarios (SIGKILL, crash, graceful exit) needs empirical verification on macOS. It is not equivalent to `prctl(PR_SET_PDEATHSIG)`, which is synchronous at the kernel level.
+`@anthropic-ai/sandbox-runtime` has the same gap: they use `spawn` + SIGINT/SIGTERM forwarding; a SIGKILL of the parent orphans the child. No macOS-native solution exists short of a privileged watchdog process. Accepted.
+
+Implementation consequence: `sbplLaunch` must use `spawn` (async), not `spawnSync`. `spawnSync` returns no child handle, making signal forwarding impossible. `sbplLaunch` is async, spawns the child, forwards SIGINT/SIGTERM, and awaits child exit before calling `process.exit()`. This differs from `bwrapLaunch` which uses `spawnSync` (bwrap's `--die-with-parent` makes signal forwarding unnecessary on Linux).
 
 ---
 
@@ -498,10 +494,10 @@ The polling approach (check ppid in a setInterval) has a window: if the parent i
 | Network policy | `(allow network*)` or restricted with proxy | High |
 | System path grants | Covered by `(allow file-read*)`; mach/sysctl list derived from ASRT | High — copy from reference, validate on Mac |
 | Sandbox announcement | Read-policy-driven via `readDeny` field; backend name as parameter | High — design settled |
-| Ephemeral layers | APFS clone or skip | Low — both options have hard problems (Grill 3) |
+| Ephemeral layers | Feature gap on macOS — not implemented | Decided |
 | Dir remap + package filtering | Symlink mirror in `/private/tmp`; pre-create known subdirs | Medium — unknown future SDK subdirs are residual risk |
 | Identity isolation | Not applicable — no equivalent on macOS | N/A |
 | Process isolation | Not applicable — no PID namespace on macOS | N/A |
-| Lifetime binding | ppid polling or kqueue | Medium — correctness under SIGKILL unclear (Grill 6) |
+| Lifetime binding | `spawn` + SIGINT/SIGTERM forwarding; SIGKILL orphans accepted (same as ASRT) | Decided |
 | SBPL stability | bet on `sandbox-exec` longevity | Low — private API, deprecation risk (Grill 5) |
-| Mach service list | Baseline from ASRT; needs empirical trim on Mac | Medium (Grill 8) |
+| Mach service list | Baseline from ASRT; needs Mac test plan with hang detection | Needs test plan (Grill 8) |
