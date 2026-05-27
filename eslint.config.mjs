@@ -122,6 +122,7 @@ export default [
       "pit/src/**/*.test.ts",
       "pit/src/tests/**",
       "pit/src/extensions/**",
+      "pit/debug/**",
     ],
     plugins: {
       ...base.plugins,

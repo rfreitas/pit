@@ -19,6 +19,15 @@ npm run lint        # must pass — zero errors
 npm test            # must pass
 ```
 
+These run automatically on commit via the pre-commit hook in `.githooks/`. If
+the hook isn't active yet, enable it once:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Or run `npm install` — the `prepare` script sets this up automatically.
+
 ## Writing docs
 
 Be concise, factual, and to the point. README.md is authoritative. AGENTS.md points to it — no duplication.
