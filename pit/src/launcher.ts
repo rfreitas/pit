@@ -144,9 +144,15 @@ const passEnv = (name: string): string[] =>
  * Resolve the pit source directory and its node_modules for mounting.
  * Returns null when running from a globally-installed path (already mounted).
  */
-const resolvePitMounts = (scriptPath: string): { pitDir: string; pitNodeModules: string } | null => {
+const resolvePitMounts = (scriptPath: string, cwd: string): { pitDir: string; pitNodeModules: string } | null => {
   const scriptDir = resolve(dirname(scriptPath));
   if (scriptDir.includes("/lib/node_modules/")) return null;
+  
+  // If the script is physically located inside the current working directory,
+  // it is already covered by the read-write workspace mount. Adding a ro-bind
+  // here would prevent the agent from developing pit itself.
+  if (scriptDir.startsWith(cwd)) return null;
+
   const pitDir = scriptDir;
   const findNm = (curr: string): string | null => {
     const nm = join(curr, "node_modules");
@@ -186,7 +192,7 @@ export const bwrapLaunch = (
     return ["--overlay-src", m.src, "--tmp-overlay", m.dest];
   });
 
-  const pitMounts = resolvePitMounts(scriptPath);
+  const pitMounts = resolvePitMounts(scriptPath, cwd);
   const dynamicMountArgs = pitMounts
     ? ["--ro-bind", pitMounts.pitDir, pitMounts.pitDir,
        "--ro-bind", pitMounts.pitNodeModules, pitMounts.pitNodeModules]
