@@ -39,7 +39,7 @@ const hasBwrap = !!findBwrap();
 
 /** Create a minimal git repo with one committed file. */
 function makeGitRepo(tmpDirs: string[]): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pit-e2e-repo-"));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pit-e2e-repo-")));
   tmpDirs.push(dir);
   execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["-C", dir, "config", "user.email", "test@pit.test"], { stdio: "ignore" });
@@ -52,7 +52,7 @@ function makeGitRepo(tmpDirs: string[]): string {
 
 /** Create a plain (non-git) temp dir. */
 function makePlainDir(tmpDirs: string[]): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pit-e2e-plain-"));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pit-e2e-plain-")));
   tmpDirs.push(dir);
   return dir;
 }
@@ -342,10 +342,12 @@ describe("pit E2E — sandbox", () => {
 
   // ── test 8 (sandbox) ───────────────────────────────────────────────────────
 
-  // This test only runs when bwrap is genuinely absent.
-  // findBwrap() uses fs.existsSync on hardcoded paths, not PATH lookup,
-  // so we cannot fake its absence via environment when it is installed.
-  it.skipIf(hasBwrap)("bwrap not found: warns on stderr and still launches pi", () => {
+  // This test only runs when NO sandbox tool is found on the current platform.
+  // On Linux: skipped when bwrap is present.
+  // On macOS: skipped when sandbox-exec is present (which is always true in practice).
+  const hasSandboxTool = hasBwrap ||
+    (process.platform === "darwin" && fs.existsSync("/usr/bin/sandbox-exec"));
+  it.skipIf(hasSandboxTool)("no sandbox tool found: warns on stderr and still launches pi", () => {
     const repo = makeGitRepo(tmpDirs);
     const agentDir = makeAgentDir(tmpDirs);
 
@@ -354,8 +356,8 @@ describe("pit E2E — sandbox", () => {
       agentDir,
     });
 
-    // pit warns on stderr
-    expect(stderr).toContain("bwrap not found");
+    // pit warns on stderr that no sandbox tool was found
+    expect(stderr).toContain("running without sandbox");
 
     // pi still starts — session header appears on stdout
     const lines = parseJsonLines(stdout);
