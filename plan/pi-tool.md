@@ -2,15 +2,19 @@
 
 ## Problem
 
-Agent-written bash scripts can't call pi tools. `git` is sandboxed (real
-`/usr/bin/git` hits bwrap restrictions). `subagent` needs the pi runtime.
-No composable escape hatch exists.
+Agent-written bash scripts can't call pi tools. `subagent` needs the pi
+runtime. In sandboxed environments (e.g. pit), `/usr/bin/git` is blocked but
+the `git` tool registered by the host extension works fine — scripts have no
+way to reach it. No composable escape hatch exists.
 
 ## Solution
 
-A Pi extension that runs a unix socket server and a `pi-tool` CLI shim that
-talks to it. Agent scripts call `pi-tool`, the extension dispatches to real
-tool implementations and returns JSON on stdout.
+A general Pi extension that runs a unix socket server and a `pi-tool` CLI
+shim that talks to it. Agent scripts call `pi-tool`, the extension dispatches
+to whatever tools are registered in the session and returns JSON on stdout.
+
+Works in vanilla pi (subagent, custom tools) and in pit (additionally exposes
+pit's git tool, which routes through pit's escape server automatically).
 
 ## Architecture
 
