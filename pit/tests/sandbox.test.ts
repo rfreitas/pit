@@ -86,9 +86,10 @@ function runInBwrap(script: string, opts: BwrapRunOptions = {}): { stdout: strin
         "--proc", "/proc",
         "--ro-bind", "/usr", "/usr",
         "--ro-bind", "/etc", "/etc",
-        // /etc/resolv.conf → /mnt/wsl/resolv.conf on WSL; must be mounted
-        // or DNS fails with EAI_AGAIN inside the sandbox.
+        // /etc/resolv.conf → /mnt/wsl/resolv.conf on WSL (EAI_AGAIN without this)
         "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
+        // /etc/resolv.conf → /run/systemd/resolve/stub-resolv.conf on Ubuntu 24.04+
+        "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
         "--ro-bind-try", "/lib", "/lib",
         "--ro-bind-try", "/lib64", "/lib64",
         "--ro-bind-try", "/bin", "/bin",
@@ -164,6 +165,12 @@ function bwrapSupportsOverlay(): boolean {
 }
 const hasBwrapOverlay = bwrapSupportsOverlay();
 
+const piSdkPath = path.join(
+  path.dirname(path.dirname(process.execPath)),
+  "lib", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js",
+);
+const hasPiSdk = fs.existsSync(piSdkPath);
+
 describe("pit bwrap sandbox", () => {
   const tmpDirs: string[] = [];
   afterEach(() => {
@@ -171,17 +178,19 @@ describe("pit bwrap sandbox", () => {
     tmpDirs.length = 0;
   });
   it.skipIf(!hasBwrapUserNS)("resolves DNS inside bwrap", async () => {
-    // Bug: /etc/resolv.conf is a symlink to /mnt/wsl/resolv.conf on WSL.
-    // Without --ro-bind-try /mnt/wsl /mnt/wsl the symlink is dangling and
-    // all DNS queries fail. Fix: mount /mnt/wsl inside the sandbox.
+    // /etc/resolv.conf is a symlink on both WSL (/mnt/wsl/resolv.conf) and
+    // Ubuntu 24.04+ (/run/systemd/resolve/stub-resolv.conf). Both targets are
+    // mounted via --ro-bind-try in runInBwrap. Uses dns.lookup (getaddrinfo)
+    // not resolve4 (c-ares) — c-ares bypasses the system resolver and can fail
+    // when the stub DNS server isn't reachable via raw UDP.
     const result = runInBwrap(`
-      import { resolve4 } from "node:dns/promises";
-      const addrs = await resolve4("github.com");
-      process.stdout.write(JSON.stringify({ addrs }));
+      import { lookup } from "node:dns/promises";
+      const { address } = await lookup("github.com");
+      process.stdout.write(JSON.stringify({ address }));
     `);
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
-    const { addrs } = JSON.parse(result.stdout);
-    expect(addrs.length).toBeGreaterThan(0);
+    const { address } = JSON.parse(result.stdout);
+    expect(address.length).toBeGreaterThan(0);
   });
 
   it.skipIf(!hasBwrapUserNS)("reaches api.anthropic.com over HTTPS inside bwrap", async () => {
@@ -253,14 +262,12 @@ describe("pit bwrap sandbox", () => {
     expect(providers.length).toBeGreaterThan(0);
   });
 
-  it.skipIf(!hasBwrapUserNS)("models are available via SDK inside bwrap", async () => {
+  it.skipIf(!hasBwrapUserNS || !hasPiSdk)("models are available via SDK inside bwrap", async () => {
     // End-to-end check: if either the DNS fix or the auth fix regresses,
     // getAvailable() returns [] and this test fails before the user even
     // tries to send a message.
-    const nodeDir = path.dirname(path.dirname(process.execPath));
-    const pkg = path.join(nodeDir, "lib", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
     const result = runInBwrap(`
-      import { AuthStorage, ModelRegistry } from "${pkg}";
+      import { AuthStorage, ModelRegistry } from "${piSdkPath}";
       const auth = AuthStorage.create();
       const registry = ModelRegistry.create(auth);
       const available = await registry.getAvailable();
@@ -323,6 +330,7 @@ describe("shadow agent dir bwrap wiring", () => {
           "--ro-bind",     "/usr",     "/usr",
           "--ro-bind",     "/etc",     "/etc",
           "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
+          "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
           "--ro-bind-try", "/lib",     "/lib",
           "--ro-bind-try", "/lib64",   "/lib64",
           "--ro-bind-try", "/bin",     "/bin",
@@ -506,6 +514,7 @@ describe("tmp-overlay sandbox mounts", () => {
           "--ro-bind",     "/usr",    "/usr",
           "--ro-bind",     "/etc",    "/etc",
           "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
+          "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
           "--ro-bind-try", "/lib",    "/lib",
           "--ro-bind-try", "/lib64",  "/lib64",
           "--ro-bind-try", "/bin",    "/bin",

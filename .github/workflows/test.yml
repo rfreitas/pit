@@ -44,6 +44,11 @@ jobs:
           cd /tmp/bwrap && meson setup build --prefix=/usr && ninja -C build && sudo ninja -C build install
           bwrap --version
 
+      - name: install pi SDK globally
+        # The SDK bwrap test imports from the global node_modules path,
+        # matching the production environment where pi is globally installed.
+        run: npm install -g @earendil-works/pi-coding-agent
+
       - name: test
         run: npm test
         env:
