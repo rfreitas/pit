@@ -331,9 +331,11 @@ export const sbplLaunch = (
   };
 
   const profile = buildSbplProfile(resolvedMounts);
-  const env = buildSealedEnv(pitConfig, process.env as Record<string, string | undefined>, nodeDir);
-  if (escapeToken) env.PIT_ESCAPE_TOKEN = escapeToken;
-  Object.assign(env, mirrorEnv);
+  const env = {
+    ...buildSealedEnv(pitConfig, process.env as Record<string, string | undefined>, nodeDir),
+    ...(escapeToken ? { PIT_ESCAPE_TOKEN: escapeToken } : {}),
+    ...mirrorEnv,
+  };
 
   const cleanup = () => {
     if (settingsPath) try { unlinkSync(settingsPath); } catch { /* gone */ }

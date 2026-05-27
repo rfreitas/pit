@@ -85,17 +85,17 @@ export const buildSealedEnv = (
     "PI_CODING_AGENT_DIR", "PI_SKIP_VERSION_CHECK",
   ];
   const extra = config.allowEnv ?? [];
-  const result: Record<string, string> = {
+  const base: Record<string, string> = {
     // PATH must include Homebrew (Apple Silicon /opt/homebrew, Intel /usr/local)
     // so the agent can find git, node, and any Homebrew-installed tool.
     PATH: `${nodeDir}/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
     PI_CODING_AGENT: "true",
     PIT_IS_INNER: "1",
   };
-  for (const name of [...builtins, ...extra]) {
-    if (env[name] !== undefined) result[name] = env[name]!;
-  }
-  return result;
+  return [...builtins, ...extra].reduce<Record<string, string>>((acc, name) =>
+    env[name] !== undefined ? { ...acc, [name]: env[name]! } : acc,
+    base,
+  );
 };
 
 // ── mount spec builder ────────────────────────────────────────────────────────

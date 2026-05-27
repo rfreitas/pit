@@ -42,7 +42,7 @@ export default [
   {
     ...base,
     files: ["pit/**/*.ts"],
-    ignores: ["pit/tests/**", "pit/src/**/*.test.ts", "pit/src/tests/**"],
+    ignores: ["pit/tests/**", "pit/src/**/*.test.ts", "pit/src/tests/**", "pit/debug/**"],
     rules: {
       "functional/immutable-data": "error",
       "prefer-arrow-callback": "error",
@@ -90,7 +90,7 @@ export default [
   {
     ...base,
     files: ["pit/**/*.ts"],
-    ignores: ["pit/tests/**", "pit/src/**/*.test.ts", "pit/src/tests/**"],
+    ignores: ["pit/tests/**", "pit/src/**/*.test.ts", "pit/src/tests/**", "pit/debug/**"],
     plugins: {
       ...base.plugins,
       local: localPlugin,

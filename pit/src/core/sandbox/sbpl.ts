@@ -59,7 +59,7 @@ const esc = (p: string): string => JSON.stringify(p);
  * it requires an HTTP proxy approach (see security.md).
  */
 export const buildSbplProfile = (mounts: Readonly<SandboxMounts>): string => {
-  const lines: string[] = [
+  const header = [
     "(version 1)",
     "(deny default)",
     "",
@@ -115,33 +115,32 @@ export const buildSbplProfile = (mounts: Readonly<SandboxMounts>): string => {
     "",
   ];
 
-  // write grants from rw[]
-  if (mounts.rw.length > 0) {
-    lines.push("; write grants");
-    lines.push("(allow file-write*");
-    for (const m of mounts.rw) lines.push(`  (subpath ${esc(m.path)})`);
-    lines.push(")");
-    lines.push("");
-  }
+  const writeSection = mounts.rw.length > 0
+    ? [
+        "; write grants",
+        "(allow file-write*",
+        ...mounts.rw.map(m => `  (subpath ${esc(m.path)})`),
+        ")",
+        "",
+      ]
+    : [];
 
-  // read denylist from readDeny[]
   const denied = mounts.readDeny ?? [];
-  if (denied.length > 0) {
-    lines.push("; read denylist — credential and sensitive paths");
-    for (const m of denied) {
-      lines.push(`(deny file-read* (subpath ${esc(m.path)}))`);
-    }
-    lines.push("");
-  }
+  const denySection = denied.length > 0
+    ? [
+        "; read denylist — credential and sensitive paths",
+        ...denied.map(m => `(deny file-read* (subpath ${esc(m.path)}))`),
+        "",
+      ]
+    : [];
 
-  // network — always open (pit needs AI API access; restriction via proxy is future work)
-  lines.push(
-    "; network",
+  const network = [
+    "; network — always open (restriction via proxy is future work)",
     "(allow network*)",
     "(allow system-socket (socket-domain AF_UNIX))",
     `(allow network-outbound (remote unix-socket (path-regex #"^/")))`,
     `(allow network-inbound  (local  ip "*:*"))`,
-  );
+  ];
 
-  return lines.join("\n");
+  return [...header, ...writeSection, ...denySection, ...network].join("\n");
 };
