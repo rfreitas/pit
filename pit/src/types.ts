@@ -10,8 +10,6 @@ export interface PitMetadata {
   id: string;
   /** repo root, or original cwd for no-tree sessions */
   repo: string;
-  /** worktree path, or original cwd for no-tree sessions */
-  worktree: string;
   /** git branch name; empty string for no-tree sessions */
   branch: string;
   created: string;

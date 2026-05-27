@@ -68,14 +68,13 @@ async function makePitSession(worktree: string, agentDir: string) {
     meta: {
       id: "a1b2c3d4",
       repo: path.dirname(worktree),
-      worktree,
       branch: "pi/a1b2c3d4",
       created: new Date().toISOString(),
       mode: "worktree",
     },
   };
   const sessionFile = await run(setupNewSession(result, agentDir));
-  return { sessionFile, meta: result.meta };
+  return { sessionFile, meta: result.meta, cwd: result.cwd };
 }
 
 // ── session metadata extraction ───────────────────────────────────────────────
@@ -92,7 +91,7 @@ function readPitMeta(sessionFile: string) {
 }
 
 describe("session metadata extraction for pit -r", () => {
-  it("reads the worktree path from a pit session's CustomEntry", async () => {
+  it("reads the branch and mode from a pit session's CustomEntry", async () => {
     const agentDir = makeTmpDir();
     const worktree = makeTmpDir();
     const { sessionFile, meta } = await makePitSession(worktree, agentDir);
@@ -100,9 +99,10 @@ describe("session metadata extraction for pit -r", () => {
     const extracted = readPitMeta(sessionFile);
 
     expect(extracted).not.toBeNull();
-    expect(extracted.worktree).toBe(meta.worktree);
     expect(extracted.branch).toBe(meta.branch);
     expect(extracted.mode).toBe("worktree");
+    // worktree path is NOT stored in metadata — it lives in the session header
+    expect(extracted.worktree).toBeUndefined();
   });
 
   it("returns null for a non-pit session (no CustomEntry)", () => {
@@ -121,18 +121,18 @@ describe("session metadata extraction for pit -r", () => {
     expect(extracted).toBeNull();
   });
 
-  it("worktree path from metadata matches the session file's bucket cwd", async () => {
-    // The session bucket is derived from the worktree path. If metadata and
-    // bucket disagree, pit -r would sandbox to the wrong directory.
+  it("session header cwd matches the session file's bucket", async () => {
+    // The session bucket is derived from the cwd. The header cwd and bucket
+    // must agree or pit -r would sandbox to the wrong directory.
     const agentDir = makeTmpDir();
     const worktree = makeTmpDir();
-    const { sessionFile, meta } = await makePitSession(worktree, agentDir);
+    const { sessionFile, cwd } = await makePitSession(worktree, agentDir);
 
-    const extracted = readPitMeta(sessionFile);
-    const expectedBucket = cwdToBucket(meta.worktree);
+    const sm = SessionManager.open(sessionFile);
+    const expectedBucket = cwdToBucket(cwd);
 
     expect(sessionFile).toContain(expectedBucket);
-    expect(extracted.worktree).toBe(meta.worktree);
+    expect(sm.getCwd()).toBe(cwd);
   });
 });
 

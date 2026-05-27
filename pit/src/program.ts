@@ -16,7 +16,7 @@ import { unlinkSync } from "node:fs";
 import type { PitMetadata, SandboxMounts } from "./types.ts";
 import { AGENT_DIR, PIT_DIR } from "./core/constants.ts";
 import { parseFlags } from "./core/worktree/pure.ts";
-import { worktreeCheckEffect } from "./core/worktree/io.ts";
+import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { systemPromptArgs } from "./core/session/pure.ts";
 import { setupNewSession, findOrCreateLinkedSession } from "./core/session/io.ts";
 import { readPitConfig, createTempSettingsFileEffect } from "./core/sandbox/io.ts";
@@ -76,7 +76,7 @@ export const unlinkSilent = (p: string): Effect.Effect<void, never, never> =>
 export const showPicker = async (
   piArgs: string[],
   sandbox: boolean,
-): Promise<{ sessionFile: string; meta: PitMetadata } | null> => {
+): Promise<{ sessionFile: string; meta: PitMetadata; sessionCwd: string } | null> => {
   const { TUI, ProcessTerminal } = await import("@earendil-works/pi-tui");
   initTheme();
 
@@ -175,7 +175,7 @@ export const showPicker = async (
       );
       return null;
     }
-    return { sessionFile: selectedPath, meta: pitEntry.data };
+    return { sessionFile: selectedPath, meta: pitEntry.data, sessionCwd: sm.getCwd() ?? selectedPath };
   } catch {
     console.warn("pit: could not read session metadata — opening session directly");
     await Effect.runPromise(
@@ -211,14 +211,14 @@ export const program = Effect.gen(function* () {
     const picked = yield* Effect.promise(() => showPicker(piArgs, sandbox));
     if (!picked) return;
 
-    const result = yield* worktreeCheckEffect(picked.meta);
+    const result = yield* worktreeCheckEffect({ meta: picked.meta, cwd: picked.sessionCwd });
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
     const escape = yield* applyEscapeEffect(result.cwd, result.meta.id, settingsPath);
 
     yield* launchEffect(
       result.cwd,
-      ["--session", picked.sessionFile, ...systemPromptArgs(result.meta, sandboxMounts), ...piArgs],
+      ["--session", picked.sessionFile, ...systemPromptArgs(result.meta, result.cwd, sandboxMounts), ...piArgs],
       sandbox, settingsPath, sandboxMounts, pitConfig, escape,
     );
     yield* unlinkSilent(settingsPath);
@@ -245,7 +245,7 @@ export const program = Effect.gen(function* () {
 
     yield* launchEffect(
       cwd,
-      ["--session", session.sessionFile, ...systemPromptArgs(session.meta, sandboxMounts), ...filteredArgv],
+      ["--session", session.sessionFile, ...systemPromptArgs(session.meta, cwd, sandboxMounts), ...filteredArgv],
       sandbox, settingsPath, sandboxMounts, pitConfig, escape2,
     );
     yield* unlinkSilent(settingsPath);
@@ -264,7 +264,7 @@ export const program = Effect.gen(function* () {
     const sessionFile = yield* setupNewSession(result, AGENT_DIR, sandboxMounts);
     yield* launchEffect(result.cwd, [
       "--session", sessionFile,
-      ...systemPromptArgs(result.meta, sandboxMounts),
+      ...systemPromptArgs(result.meta, result.cwd, sandboxMounts),
       ...filteredArgv,
     ], sandbox, settingsPath, sandboxMounts, pitConfig, escape3);
   }

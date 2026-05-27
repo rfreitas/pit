@@ -13,7 +13,7 @@ const makeResult = (overrides: Partial<WorktreeResult> = {}): WorktreeResult => 
   mode: "worktree",
   cwd: "/tmp/test-repo-wt-a1b2c3d4",
   meta: {
-    id: "a1b2c3d4", repo: "/tmp/test-repo", worktree: "/tmp/test-repo-wt-a1b2c3d4",
+    id: "a1b2c3d4", repo: "/tmp/test-repo",
     branch: "pi/a1b2c3d4", created: "2026-01-01T00:00:00.000Z", mode: "worktree",
   },
   ...overrides,
@@ -61,8 +61,9 @@ describe("setupNewSession", () => {
     expect(e.parentId).toBeNull();
     expect(e.data.id).toBe(result.meta.id);
     expect(e.data.branch).toBe(result.meta.branch);
-    expect(e.data.worktree).toBe(result.meta.worktree);
     expect(e.data.mode).toBe("worktree");
+    // worktree path is NOT stored in metadata — it lives in the session header cwd
+    expect(e.data.worktree).toBeUndefined();
   });
   it("session file can be opened by SessionManager (pi compatibility check)", async () => {
     const agentDir = makeSandbox("pit-session-agent-");
@@ -109,7 +110,7 @@ describe("setupNewSession", () => {
     const agentDir = makeSandbox("pit-session-agent-");
     const result: WorktreeResult = {
       mode: "no-tree", cwd: "/tmp/some-dir",
-      meta: { id: "b2c3d4e5", repo: "/tmp/some-dir", worktree: "/tmp/some-dir",
+      meta: { id: "b2c3d4e5", repo: "/tmp/some-dir",
               branch: "", created: "2026-01-01T00:00:00.000Z", mode: "no-tree" },
     };
     const lines = fs.readFileSync(await run(setupNewSession(result, agentDir)), "utf8").trim().split("\n");

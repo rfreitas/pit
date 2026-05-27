@@ -17,6 +17,13 @@ export const genId = (): string  => {
 // ── metadata builders ─────────────────────────────────────────────────────────
 
 /**
+ * Compute the worktree directory path for a given repo and id.
+ * The path is stored in the session header's cwd, not in PitMetadata.
+ */
+export const worktreePathFor = (repo: string, id: string): string =>
+  join(dirname(repo), `${basename(repo)}-wt-${id}`);
+
+/**
  * Build a no-tree PitMetadata struct.
  * Callers supply id + created so the IO boundary (genId, new Date) stays outside.
  */
@@ -27,12 +34,16 @@ export const buildNoTreeMeta = (
   id: string,
   created: string,
 ): PitMetadata  => {
-  return { id, repo, created, worktree: cwd, branch: "", mode: "no-tree", noTreeReason: reason };
+  // cwd is kept as parameter for callers that need it, but not stored in meta.
+  // The session header's cwd field is the authoritative location.
+  void cwd;
+  return { id, repo, created, branch: "", mode: "no-tree", noTreeReason: reason };
 }
 
 /**
  * Build a worktree PitMetadata struct.
- * Derives the worktree path and branch name from repo + id.
+ * The worktree path is NOT stored in metadata — it lives in the session header's cwd.
+ * Use worktreePathFor(repo, id) to get the path.
  * Callers supply id + created so the IO boundary stays outside.
  */
 export const buildWorktreeMeta = (repo: string, id: string, created: string): PitMetadata  => {
@@ -40,7 +51,6 @@ export const buildWorktreeMeta = (repo: string, id: string, created: string): Pi
     id,
     repo,
     created,
-    worktree: join(dirname(repo), `${basename(repo)}-wt-${id}`),
     branch: `pi/${id}`,
     mode: "worktree",
   };

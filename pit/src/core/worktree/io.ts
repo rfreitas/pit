@@ -8,7 +8,7 @@ import { make as makeCommand, exitCode as commandExitCode } from "@effect/platfo
 import { FileSystem } from "@effect/platform/FileSystem";
 import { CommandExecutor } from "@effect/platform/CommandExecutor";
 import { gitRepoRoot, branchExists } from "../git/utils.ts";
-import { genId, buildNoTreeMeta, buildWorktreeMeta } from "./pure.ts";
+import { genId, buildNoTreeMeta, buildWorktreeMeta, worktreePathFor } from "./pure.ts";
 import type { PitMetadata, WorktreeResult } from "../../types.ts";
 import { WorktreeCreationError, WorktreeMissingError } from "../../errors.ts";
 
@@ -81,8 +81,20 @@ export const recreateWorktreeEffect = ({
 
 // ── worktree check ────────────────────────────────────────────────────────────
 
+/**
+ * When resuming an existing pit session, callers pass both the stored metadata
+ * and the cwd from the session file header. The session header cwd is
+ * authoritative — it may differ from any worktree field in old session files
+ * (e.g. after a /handoff moved the session to a different directory).
+ */
+export interface ExistingSession {
+  meta: PitMetadata;
+  /** cwd from the session file header (SessionManager.getCwd()). */
+  cwd: string;
+}
+
 export const worktreeCheckEffect = (
-  existingMeta?: PitMetadata,
+  existing?: ExistingSession,
   forceNoTree = false,
 ): Effect.Effect<
   WorktreeResult,
@@ -90,14 +102,15 @@ export const worktreeCheckEffect = (
   CommandExecutor | FileSystem
 > =>
   Effect.gen(function* () {
-    if (existingMeta) {
-      if (existingMeta.mode === "no-tree") {
-        return { mode: "no-tree" as const, cwd: existingMeta.worktree, meta: existingMeta };
+    if (existing) {
+      const { meta, cwd } = existing;
+      if (meta.mode === "no-tree") {
+        return { mode: "no-tree" as const, cwd, meta };
       }
-      if (!existsSync(existingMeta.worktree)) {
-        yield* recreateWorktreeEffect(existingMeta);
+      if (!existsSync(cwd)) {
+        yield* recreateWorktreeEffect({ repo: meta.repo, branch: meta.branch, worktree: cwd });
       }
-      return { mode: "worktree" as const, cwd: existingMeta.worktree, meta: existingMeta };
+      return { mode: "worktree" as const, cwd, meta };
     }
 
     const repo = yield* gitRepoRoot();
@@ -120,7 +133,8 @@ export const worktreeCheckEffect = (
       };
     }
 
+    const worktreePath = worktreePathFor(repo, id);
     const meta = buildWorktreeMeta(repo, id, created);
-    yield* createWorktreeEffect(meta);
-    return { mode: "worktree" as const, cwd: meta.worktree, meta };
+    yield* createWorktreeEffect({ branch: meta.branch, worktree: worktreePath });
+    return { mode: "worktree" as const, cwd: worktreePath, meta };
   });

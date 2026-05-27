@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseFlags, buildNoTreeMeta, buildWorktreeMeta } from "./pure.ts";
+import { parseFlags, buildNoTreeMeta, buildWorktreeMeta, worktreePathFor } from "./pure.ts";
 
 describe("parseFlags", () => {
   it("sandbox defaults to true", () => {
@@ -71,13 +71,16 @@ describe("buildNoTreeMeta", () => {
     expect(m.id).toBe("deadbeef");
     expect(m.created).toBe("2026-06-01T12:00:00.000Z");
   });
-  it("sets worktree and repo", () => {
+  it("sets repo", () => {
     const m = buildNoTreeMeta("/my/cwd", "/my/repo", "forced", "id", "ts");
-    expect(m.worktree).toBe("/my/cwd");
     expect(m.repo).toBe("/my/repo");
   });
   it("branch is always empty", () => {
     expect(buildNoTreeMeta("/cwd", "/repo", "no-repo", "id", "ts").branch).toBe("");
+  });
+  it("does not store worktree (cwd lives in session header)", () => {
+    const m = buildNoTreeMeta("/my/cwd", "/my/repo", "forced", "id", "ts");
+    expect((m as unknown as Record<string, unknown>)["worktree"]).toBeUndefined();
   });
 });
 
@@ -88,9 +91,9 @@ describe("buildWorktreeMeta", () => {
   it("derives branch as pi/<id>", () => {
     expect(buildWorktreeMeta("/repo", "abc12345", "ts").branch).toBe("pi/abc12345");
   });
-  it("derives worktree path as <parent>/<basename>-wt-<id>", () => {
-    expect(buildWorktreeMeta("/home/user/repo", "abc12345", "ts").worktree)
-      .toBe("/home/user/repo-wt-abc12345");
+  it("does not store worktree path (lives in session header cwd)", () => {
+    const m = buildWorktreeMeta("/home/user/repo", "abc12345", "ts");
+    expect((m as unknown as Record<string, unknown>)["worktree"]).toBeUndefined();
   });
   it("uses supplied id and timestamp", () => {
     const m = buildWorktreeMeta("/repo", "deadbeef", "2026-06-01T00:00:00.000Z");
@@ -99,5 +102,15 @@ describe("buildWorktreeMeta", () => {
   });
   it("sets repo", () => {
     expect(buildWorktreeMeta("/my/repo", "id", "ts").repo).toBe("/my/repo");
+  });
+});
+
+describe("worktreePathFor", () => {
+  it("derives path as <parent>/<basename>-wt-<id>", () => {
+    expect(worktreePathFor("/home/user/repo", "abc12345"))
+      .toBe("/home/user/repo-wt-abc12345");
+  });
+  it("uses the repo basename, not the full path", () => {
+    expect(worktreePathFor("/a/b/myrepo", "ff00")).toBe("/a/b/myrepo-wt-ff00");
   });
 });

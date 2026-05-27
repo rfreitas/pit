@@ -60,7 +60,6 @@ async function seedSession(cwd: string, agentDir: string, id = "a1b2c3d4"): Prom
     meta: {
       id,
       repo: path.dirname(cwd),
-      worktree: cwd,
       branch: `pi/${id}`,
       created: new Date().toISOString(),
       mode: "worktree",
@@ -88,15 +87,10 @@ describe("findOrCreateLinkedSession — no existing session", () => {
     expect(session.meta.noTreeReason).toBe("linked-worktree");
   });
 
-  it("meta.worktree and meta.repo are set to cwd", async () => {
+  it("meta.repo is set to cwd, branch is empty", async () => {
     const cwd = makeDir("cwd-");
     const session = await run(findOrCreateLinkedSession(cwd, makeAgentDir()));
-    expect(session.meta.worktree).toBe(cwd);
     expect(session.meta.repo).toBe(cwd);
-  });
-
-  it("meta.branch is empty string", async () => {
-    const session = await run(findOrCreateLinkedSession(makeDir("cwd-"), makeAgentDir()));
     expect(session.meta.branch).toBe("");
   });
 

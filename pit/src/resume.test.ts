@@ -7,15 +7,17 @@
  *   2. bwrapLaunch passes --session through to inner.ts args
  *   3. The existing session file is accessible inside bwrap (agent dir mounted)
  *   4. The existing session content survives — no overwrite / blank session
+ *   5. worktreeCheckEffect uses session header cwd, not stale pit metadata (handoff compat)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
 import { Effect } from "effect";
 import { NodeContext } from "@effect/platform-node";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { spawnSync } from "node:child_process";
+import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { useTmpDirs, run } from "./tests/helpers.ts";
+import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { setupNewSession } from "./core/session/io.ts";
 import type { WorktreeResult } from "./types.ts";
 
@@ -68,14 +70,13 @@ async function makeWorktreeSession(worktree: string, agentDir: string) {
     meta: {
       id: "test-session-id",
       repo: path.dirname(worktree),
-      worktree,
       branch: "pi/test-session-id",
       created: new Date().toISOString(),
       mode: "worktree",
     },
   };
   const sessionFile = await run(setupNewSession(result, agentDir));
-  return { sessionFile, meta: result.meta };
+  return { sessionFile, meta: result.meta, cwd: result.cwd };
 }
 
 /** Append a fake user message to a session file to act as a sentinel. */
@@ -302,15 +303,12 @@ describe("pit -r: existing session content is preserved", () => {
   });
 
   it("session cwd stored in header equals the worktree path", async () => {
-    // If getCwd() returns null, pi falls back to process.cwd().
-    // If that differs from the worktree, getMissingSessionCwdIssue() fires
-    // and may prompt for a new cwd or abort — causing the user to see a blank context.
     const agentDir = makeTmp("pit-agent-");
     const worktree  = makeTmp("pit-wt-");
-    const { sessionFile, meta } = await makeWorktreeSession(worktree, agentDir);
+    const { sessionFile, cwd } = await makeWorktreeSession(worktree, agentDir);
 
     const sm = SessionManager.open(sessionFile);
-    expect(sm.getCwd()).toBe(meta.worktree);
+    expect(sm.getCwd()).toBe(cwd);
   });
 
   it("session cwd exists inside bwrap (does not trigger getMissingSessionCwdIssue)", async () => {
@@ -326,5 +324,92 @@ describe("pit -r: existing session content is preserved", () => {
     expect(sessionCwd).toBeDefined();
     // The worktree directory itself must exist (it's the makeTmp dir)
     expect(fs.existsSync(sessionCwd!)).toBe(true);
+  });
+});
+
+// ── 5. Handoff compatibility: session header cwd is authoritative ─────────────
+//
+// /handoff updates the session header's cwd but leaves pit metadata unchanged.
+// worktreeCheckEffect must use the session header cwd (passed as existing.cwd),
+// not any stale worktree field that old session files may carry.
+
+describe("worktreeCheckEffect: uses session header cwd, not stale pit metadata", () => {
+  /**
+   * Build a session file that looks like a post-handoff session:
+   *   - header cwd = handoffTarget (the directory the session was moved to)
+   *   - pit CustomEntry worktree = originalCwd (stale, as left by the old code)
+   *
+   * This mirrors the real artifact produced by /handoff on sessions created
+   * before the worktree field was removed from PitMetadata.
+   */
+  function writeHandoffSession(
+    sessionFile: string,
+    originalCwd: string,
+    handoffTarget: string,
+  ): void {
+    const header = {
+      type: "session", version: CURRENT_SESSION_VERSION,
+      id: "handoff-test-id", timestamp: new Date().toISOString(),
+      cwd: handoffTarget,  // updated by /handoff
+    };
+    // Old-format pit entry: still has the stale worktree field
+    const pitEntry = {
+      type: "custom", id: "pit-entry-id", parentId: null,
+      timestamp: new Date().toISOString(), customType: "pit",
+      data: {
+        id: "abc12345", repo: originalCwd,
+        worktree: originalCwd,  // stale — handoff didn't update this
+        branch: "", created: new Date().toISOString(),
+        mode: "no-tree", noTreeReason: "no-repo",
+      },
+    };
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [header, pitEntry].map(e => JSON.stringify(e)).join("\n") + "\n");
+  }
+
+  it("returns the session header cwd, not the stale meta worktree", async () => {
+    const originalCwd  = makeTmp("handoff-src-");
+    const handoffTarget = makeTmp("handoff-dst-");
+    const sessionFile  = path.join(makeTmp("handoff-sess-"), "session.jsonl");
+    writeHandoffSession(sessionFile, originalCwd, handoffTarget);
+
+    const sm = SessionManager.open(sessionFile);
+    const pitEntry = sm.getEntries().find(
+      (e) => e.type === "custom" && (e as { customType?: string }).customType === "pit",
+    ) as { data: { mode: string; worktree?: string } } | undefined;
+
+    expect(pitEntry?.data.mode).toBe("no-tree");
+    // The stale field is present in the raw JSON (old session compat)
+    expect(pitEntry?.data.worktree).toBe(originalCwd);
+    // But worktreeCheckEffect must use the session header cwd, not the stale worktree
+    const result = await Effect.runPromise(
+      worktreeCheckEffect({ meta: pitEntry!.data as ExistingSession["meta"], cwd: sm.getCwd()! })
+        .pipe(Effect.provide(NodeContext.layer)),
+    );
+    expect(result.cwd).toBe(handoffTarget);
+    expect(result.cwd).not.toBe(originalCwd);
+  });
+
+  it("no-tree: does not attempt git operations when cwd exists", async () => {
+    // worktreeCheckEffect(no-tree) must return immediately with the given cwd.
+    // If it accidentally used the stale worktree field and tried to recreate
+    // a git worktree, it would fail (no repo). This test confirms it does not.
+    const originalCwd  = makeTmp("handoff-src-");
+    const handoffTarget = makeTmp("handoff-dst-");
+    const sessionFile  = path.join(makeTmp("handoff-sess-"), "session.jsonl");
+    writeHandoffSession(sessionFile, originalCwd, handoffTarget);
+
+    const sm = SessionManager.open(sessionFile);
+    const pitEntry = sm.getEntries().find(
+      (e) => e.type === "custom" && (e as { customType?: string }).customType === "pit",
+    ) as { data: ExistingSession["meta"] } | undefined;
+
+    // Must not throw even though neither dir is a git repo
+    await expect(
+      Effect.runPromise(
+        worktreeCheckEffect({ meta: pitEntry!.data, cwd: sm.getCwd()! })
+          .pipe(Effect.provide(NodeContext.layer)),
+      ),
+    ).resolves.toMatchObject({ mode: "no-tree", cwd: handoffTarget });
   });
 });

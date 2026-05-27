@@ -23,13 +23,13 @@ export const cwdToBucket = (cwd: string): string  => {
 
 /**
  * Build the mode announcement shown to the agent at session start.
- * Pure — output depends only on the worktree metadata and sandbox mounts.
+ * Pure — output depends only on the worktree metadata, the session cwd, and sandbox mounts.
  */
-export const buildAnnouncement = (meta: Readonly<PitMetadata>, sandboxMounts?: Readonly<SandboxMounts>): string  => {
+export const buildAnnouncement = (meta: Readonly<PitMetadata>, cwd: string, sandboxMounts?: Readonly<SandboxMounts>): string  => {
   const sandboxSection = sandboxMounts ? `\n\n${formatSandboxNote(sandboxMounts)}` : "";
   if (meta.mode === "worktree") {
     return `**pit — worktree mode**
-branch: \`${meta.branch}\`   worktree: \`${meta.worktree}\`
+branch: \`${meta.branch}\`   worktree: \`${cwd}\`
 
 **Worktree:** You are working in an isolated git worktree on branch \`${meta.branch}\`, not on the main branch. Your changes stay here until the user reviews and merges them. The main working tree is untouched.${sandboxSection}`;
   }
@@ -70,7 +70,7 @@ export const buildSessionLines = (
   return [
     { type: "session", version: CURRENT_SESSION_VERSION, id: sessionId, timestamp: isoTs, cwd: result.cwd },
     { type: "custom", id: id1, parentId: null, timestamp: isoTs, customType: "pit", data: meta },
-    { type: "custom_message", id: id2, parentId: id1, timestamp: isoTs, customType: "pit", content: buildAnnouncement(meta, sandboxMounts), display: true },
+    { type: "custom_message", id: id2, parentId: id1, timestamp: isoTs, customType: "pit", content: buildAnnouncement(meta, result.cwd, sandboxMounts), display: true },
   ]
     .map((o) => JSON.stringify(o))
     .join("\n") + "\n";
@@ -82,6 +82,6 @@ export const buildSessionLines = (
  * Build the --append-system-prompt args to pass to pi on every launch.
  * Delivers current pit mode and sandbox state without touching the session file.
  */
-export const systemPromptArgs = (meta: Readonly<PitMetadata>, sandboxMounts: Readonly<SandboxMounts> | undefined): string[]  => {
-  return ["--append-system-prompt", buildAnnouncement(meta, sandboxMounts)];
+export const systemPromptArgs = (meta: Readonly<PitMetadata>, cwd: string, sandboxMounts: Readonly<SandboxMounts> | undefined): string[]  => {
+  return ["--append-system-prompt", buildAnnouncement(meta, cwd, sandboxMounts)];
 }

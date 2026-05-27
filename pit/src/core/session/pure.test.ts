@@ -49,74 +49,77 @@ describe("cwdToBucket", () => {
 
 describe("buildAnnouncement", () => {
   const worktreeMeta: PitMetadata = {
-    id: "a1b2c3d4", repo: "/tmp/repo", worktree: "/tmp/repo-wt-a1b2c3d4",
+    id: "a1b2c3d4", repo: "/tmp/repo",
     branch: "pi/a1b2c3d4", created: "2026-01-01T00:00:00.000Z", mode: "worktree",
   };
   const forcedMeta: PitMetadata = {
-    id: "b2c3d4e5", repo: "/tmp/repo", worktree: "/tmp/repo",
+    id: "b2c3d4e5", repo: "/tmp/repo",
     branch: "", created: "2026-01-01T00:00:00.000Z", mode: "no-tree", noTreeReason: "forced",
   };
   const noRepoMeta: PitMetadata = {
-    id: "c3d4e5f6", repo: "/tmp/somedir", worktree: "/tmp/somedir",
+    id: "c3d4e5f6", repo: "/tmp/somedir",
     branch: "", created: "2026-01-01T00:00:00.000Z", mode: "no-tree", noTreeReason: "no-repo",
   };
+  const worktreeCwd = "/tmp/repo-wt-a1b2c3d4";
   const mounts: SandboxMounts = {
     ro: [{ path: "/home/user", label: "home directory" }],
-    rw: [{ path: "/tmp/repo-wt-a1b2c3d4" }, { path: "/home/user/.pi/agent", label: "Pi config dir" }],
+    rw: [{ path: worktreeCwd }, { path: "/home/user/.pi/agent", label: "Pi config dir" }],
   };
 
   it("worktree mode: contains the pit worktree mode header", () => {
-    expect(buildAnnouncement(worktreeMeta)).toContain("**pit — worktree mode**");
+    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).toContain("**pit — worktree mode**");
   });
   it("worktree mode: contains the branch name", () => {
-    expect(buildAnnouncement(worktreeMeta)).toContain("`pi/a1b2c3d4`");
+    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).toContain("`pi/a1b2c3d4`");
   });
   it("worktree mode: contains the worktree path", () => {
-    expect(buildAnnouncement(worktreeMeta)).toContain("`/tmp/repo-wt-a1b2c3d4`");
+    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).toContain("`/tmp/repo-wt-a1b2c3d4`");
   });
   it("worktree mode: explains branch isolation to the agent", () => {
-    const t = buildAnnouncement(worktreeMeta);
+    const t = buildAnnouncement(worktreeMeta, worktreeCwd);
     expect(t).toContain("not on the main branch");
     expect(t).toContain("The main working tree is untouched");
   });
   it("no-tree forced: contains the no-tree skipped header", () => {
-    expect(buildAnnouncement(forcedMeta)).toContain("worktree creation skipped");
+    expect(buildAnnouncement(forcedMeta, "/tmp/repo")).toContain("worktree creation skipped");
   });
   it("no-tree forced: explains -nt flag", () => {
-    expect(buildAnnouncement(forcedMeta)).toContain("-nt");
+    expect(buildAnnouncement(forcedMeta, "/tmp/repo")).toContain("-nt");
   });
   it("no-tree forced: warns about missing git isolation", () => {
-    expect(buildAnnouncement(forcedMeta)).toContain("No git isolation");
+    expect(buildAnnouncement(forcedMeta, "/tmp/repo")).toContain("No git isolation");
   });
   it("no-tree no-repo: contains the no-tree header", () => {
-    expect(buildAnnouncement(noRepoMeta)).toContain("**pit — no-tree mode**");
+    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir")).toContain("**pit — no-tree mode**");
   });
   it("no-tree no-repo: explains the absence of a git repository", () => {
-    expect(buildAnnouncement(noRepoMeta)).toContain("Not inside a git repository");
+    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir")).toContain("Not inside a git repository");
   });
   it("no-tree no-repo: warns about missing git isolation", () => {
-    expect(buildAnnouncement(noRepoMeta)).toContain("No git isolation");
+    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir")).toContain("No git isolation");
   });
   it("no sandbox mounts: announcement contains no sandbox section", () => {
-    expect(buildAnnouncement(worktreeMeta)).not.toContain("Sandbox (bwrap)");
+    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).not.toContain("Sandbox (bwrap)");
   });
   it("with sandbox mounts: announcement contains the sandbox section", () => {
-    expect(buildAnnouncement(worktreeMeta, mounts)).toContain("Sandbox (bwrap)");
+    expect(buildAnnouncement(worktreeMeta, worktreeCwd, mounts)).toContain("Sandbox (bwrap)");
   });
   it("sandbox section appears after the mode content", () => {
-    const t = buildAnnouncement(worktreeMeta, mounts);
+    const t = buildAnnouncement(worktreeMeta, worktreeCwd, mounts);
     expect(t.indexOf("Sandbox (bwrap)")).toBeGreaterThan(t.indexOf("worktree mode"));
   });
   it("sandbox section is identical to formatSandboxNote output", () => {
-    expect(buildAnnouncement(worktreeMeta, mounts)).toContain(formatSandboxNote(mounts));
+    expect(buildAnnouncement(worktreeMeta, worktreeCwd, mounts)).toContain(formatSandboxNote(mounts));
   });
   it("all three modes include the sandbox section when mounts are provided", () => {
-    for (const meta of [worktreeMeta, forcedMeta, noRepoMeta])
-      expect(buildAnnouncement(meta, mounts)).toContain("Sandbox (bwrap)");
+    expect(buildAnnouncement(worktreeMeta, worktreeCwd, mounts)).toContain("Sandbox (bwrap)");
+    expect(buildAnnouncement(forcedMeta, "/tmp/repo", mounts)).toContain("Sandbox (bwrap)");
+    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir", mounts)).toContain("Sandbox (bwrap)");
   });
   it("all three modes omit the sandbox section when mounts are absent", () => {
-    for (const meta of [worktreeMeta, forcedMeta, noRepoMeta])
-      expect(buildAnnouncement(meta)).not.toContain("Sandbox (bwrap)");
+    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).not.toContain("Sandbox (bwrap)");
+    expect(buildAnnouncement(forcedMeta, "/tmp/repo")).not.toContain("Sandbox (bwrap)");
+    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir")).not.toContain("Sandbox (bwrap)");
   });
 });
 
@@ -128,7 +131,7 @@ describe("buildAnnouncement", () => {
 describe("buildSessionLines", () => {
   const result: WorktreeResult = {
     mode: "worktree", cwd: "/tmp/repo-wt-abc",
-    meta: { id: "abc12345", repo: "/tmp/repo", worktree: "/tmp/repo-wt-abc",
+    meta: { id: "abc12345", repo: "/tmp/repo",
             branch: "pi/abc12345", created: "2026-01-01T00:00:00.000Z", mode: "worktree" },
   };
 
@@ -183,20 +186,21 @@ describe("buildSessionLines", () => {
 
 describe("systemPromptArgs", () => {
   const meta: PitMetadata = {
-    id: "abc", repo: "/repo", worktree: "/repo-wt-abc",
+    id: "abc", repo: "/repo",
     branch: "pi/abc", created: "2026-01-01T00:00:00.000Z", mode: "worktree",
   };
+  const cwd = "/repo-wt-abc";
   it("returns a two-element array", () => {
-    expect(systemPromptArgs(meta, undefined)).toHaveLength(2);
+    expect(systemPromptArgs(meta, cwd, undefined)).toHaveLength(2);
   });
   it("first element is --append-system-prompt", () => {
-    expect(systemPromptArgs(meta, undefined)[0]).toBe("--append-system-prompt");
+    expect(systemPromptArgs(meta, cwd, undefined)[0]).toBe("--append-system-prompt");
   });
   it("second element is the buildAnnouncement output", () => {
-    expect(systemPromptArgs(meta, undefined)[1]).toBe(buildAnnouncement(meta, undefined));
+    expect(systemPromptArgs(meta, cwd, undefined)[1]).toBe(buildAnnouncement(meta, cwd, undefined));
   });
   it("sandbox section is included when mounts are provided", () => {
     const mounts: SandboxMounts = { ro: [{ path: "/home" }], rw: [{ path: "/work" }] };
-    expect(systemPromptArgs(meta, mounts)[1]).toContain("Sandbox (bwrap)");
+    expect(systemPromptArgs(meta, cwd, mounts)[1]).toContain("Sandbox (bwrap)");
   });
 });

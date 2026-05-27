@@ -49,7 +49,6 @@ function makeWorktreeResult(cwd: string, id = "a1b2c3d4"): WorktreeResult {
     meta: {
       id,
       repo: path.dirname(cwd),
-      worktree: cwd,
       branch: `pi/${id}`,
       created: new Date().toISOString(),
       mode: "worktree",
@@ -120,7 +119,6 @@ describe("findPitSession", () => {
     expect(found!.sessionFile).toBe(sessionFile);
     expect(found!.meta.id).toBe("deadbeef");
     expect(found!.meta.branch).toBe("pi/deadbeef");
-    expect(found!.meta.worktree).toBe(cwd);
   });
 
   it("returns the most recently modified session when multiple exist", async () => {
