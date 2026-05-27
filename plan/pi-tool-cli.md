@@ -82,24 +82,33 @@ Error: invalid input for tool 'subagent'
 
 ## Output
 
-### Stdout — plain text (default)
+### Stdout — JSON (always)
 
-`content[]` joined as plain text. Suitable for `$()` capture:
+Output is always a JSON object. Predictable regardless of tool or runtime
+state — no content sniffing, no mode switching.
 
-```bash
-result=$(pi-tool git status)
+Success:
+```json
+{ "ok": true, "content": "On branch main...", "details": {} }
 ```
 
-### Stdout — JSON envelope (`--output json`)
-
+Error:
 ```json
-{ "ok": true, "content": "...", "details": {} }
-{ "ok": false, "error": "Tool 'foo' not found", "code": "TOOL_NOT_FOUND" }
+{ "ok": false, "content": "fatal: not a git repo", "details": {}, "error": "tool execution failed" }
+```
+
+`content` is `content[]` text blocks joined as a string. `details` is the
+tool's raw details object passed through verbatim (empty object if none).
+
+Extract text with `jq`:
+```bash
+result=$(pi-tool git -- status | jq -r .content)
 ```
 
 ### Stderr
 
-Human-readable diagnostics only. Never mixed with result content.
+Human-readable diagnostics only (socket errors, unknown tool, CLI misuse).
+Never mixed with result content.
 
 ### Exit codes
 
@@ -160,7 +169,7 @@ pi-tool git add .
 pi-tool git commit -m "checkpoint"
 
 # delegate to subagent, capture output
-summary=$(echo '{"agent":"summariser","task":"summarise src/"}' | pi-tool subagent)
+summary=$(echo '{"agent":"summariser","task":"summarise src/"}' | pi-tool subagent | jq -r .content)
 echo "$summary" > SUMMARY.md
 
 # dynamic args
@@ -171,7 +180,7 @@ jq -n --arg task "review $changed_files" '{agent:"reviewer",task:$task}' \
 echo '{"agent":"builder","task":"build and test"}' | pi-tool subagent --stream
 
 # error handling
-if ! pi-tool git commit -m "auto"; then
+if ! pi-tool git -- commit -m "auto" | jq -e .ok > /dev/null; then
   echo "commit failed" >&2
   exit 1
 fi
