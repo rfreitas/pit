@@ -31,6 +31,7 @@ When pit cannot or should not create a worktree, it runs Pi in the current direc
 |---|---|
 | Session creation | Writes a session file before starting Pi, pre-seeded with pit metadata: mode, worktree path, branch, session id, and a mode announcement. |
 | [Session resume](#session-resume) | `pit -r` opens a full-screen picker aggregating sessions from the current repo and all its linked worktrees. |
+| Mode announcement | At session start, pit injects a description of the current pit mode (worktree branch and path, or no-tree reason) into the system prompt so the agent knows where it is. On resume, the announcement is refreshed with the current state. |
 
 ### Session resume
 
@@ -53,6 +54,7 @@ The sandbox features below use implementation-neutral names. Each has a platform
 | [Write grants](#write-grants) | A curated set of paths the agent may read and write: the worktree, Pi config dir, npm cache, mise shims, Node.js binaries. |
 | [Ephemeral layers](#ephemeral-layers) | Unversioned directories from the parent repo (e.g. `node_modules`) are overlaid onto the worktree. Writes to them are discarded when the session ends. |
 | [Dir remap](#dir-remap) | Pi's config directory is presented at a controlled path with a filtered `settings.json` substituted in. The real `settings.json` is never visible inside the sandbox. |
+| [Package filtering](#package-filtering) | Strips specified Pi packages from `settings.json` before the session starts. The real `settings.json` is never modified. |
 | [Env seal](#env-seal) | The agent starts with a clean environment. Only an explicit allowlist of variables is passed in; shell credentials and tokens are not forwarded. |
 | Process isolation | The agent runs in its own process namespace. Orphaned child processes are reaped when the session ends. |
 | Lifetime binding | The sandbox process is tied to pit's lifetime. If pit exits or the terminal closes, the sandbox is killed. |
@@ -90,19 +92,11 @@ This lets the agent run tests, execute build scripts, and import packages withou
 
 ### Dir remap
 
-Pi's config directory is presented to the agent at a controlled path. Inside that path, `settings.json` is replaced with a filtered copy (see [Extension denylist](#extension-denylist)). The real `settings.json` on the host is never exposed. All other config files (sessions, auth, etc.) are accessible through the remap and changes to them persist normally.
+Pi's config directory is presented to the agent at a controlled path. Inside that path, `settings.json` is replaced with a filtered copy (see [Package filtering](#package-filtering)). The real `settings.json` on the host is never exposed. All other config files (sessions, auth, etc.) are accessible through the remap and changes to them persist normally.
 
-### Env seal
+### Package filtering
 
-The agent process starts with a clean environment. Variables forwarded by default: `HOME`, `PATH`, `TERM`, `LANG`, HTTP proxy variables (`http_proxy`, `https_proxy`, `no_proxy`, and uppercase variants). Variables present in your shell that are not on the allowlist — API tokens, credentials, tool-specific env — are not forwarded. Additional variables can be added via `allowEnv` in [config](#config).
-
----
-
-## Extension denylist
-
-| Feature | What pit does |
-|---|---|
-| Package filtering | Strips specified Pi packages from `settings.json` before the session starts. The real `settings.json` is never modified; a filtered copy is injected via [dir remap](#dir-remap). |
+Specific Pi packages can be prevented from loading inside sandbox sessions. A filtered copy of `settings.json` is written at session start and injected via [dir remap](#dir-remap). The real `settings.json` is never modified.
 
 Configure in `~/.pi/pit/config.json`:
 
@@ -114,6 +108,10 @@ Configure in `~/.pi/pit/config.json`:
 
 Entries must match the package source strings in your Pi `settings.json` exactly.
 
+### Env seal
+
+The agent process starts with a clean environment. Variables forwarded by default: `HOME`, `PATH`, `TERM`, `LANG`, HTTP proxy variables (`http_proxy`, `https_proxy`, `no_proxy`, and uppercase variants). Variables present in your shell that are not on the allowlist — API tokens, credentials, tool-specific env — are not forwarded. Additional variables can be added via `allowEnv` in [config](#config).
+
 ---
 
 ## Config
@@ -122,8 +120,8 @@ Entries must match the package source strings in your Pi `settings.json` exactly
 
 | Field | Type | What it does |
 |---|---|---|
-| `denyPackages` | `string[]` | Package sources to strip from settings inside the sandbox |
-| `allowEnv` | `string[]` | Extra env var names to forward into the sandbox beyond the built-in defaults |
+| `denyPackages` | `string[]` | Package sources to strip from settings inside the sandbox — see [Package filtering](#package-filtering) |
+| `allowEnv` | `string[]` | Extra env var names to forward into the sandbox — see [Env seal](#env-seal) |
 
 ---
 
