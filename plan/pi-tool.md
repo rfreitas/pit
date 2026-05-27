@@ -1,42 +1,178 @@
-# pi-tool: Architecture
+# pi-tool
 
 ## Problem
+
 Agent-written bash scripts can't call pi tools. `git` is sandboxed (real
 `/usr/bin/git` hits bwrap restrictions). `subagent` needs the pi runtime.
 No composable escape hatch exists.
 
 ## Solution
-A `pi-tool` CLI that routes calls through a unix socket to a Pi extension,
-which executes real tool implementations and returns results on stdout.
 
-## Components
+A Pi extension that runs a unix socket server and a `pi-tool` CLI shim that
+talks to it. Agent scripts call `pi-tool`, the extension dispatches to real
+tool implementations and returns JSON on stdout.
 
-### 1. Extension (`packages/pi-tool/`)
+## Architecture
+
+### Extension (`packages/pi-tool/`)
 - On `session_start`: writes `pi-tool` shim to `<worktree>/.pi/bin/pi-tool`,
   starts unix socket server at `<worktree>/.pi/tool.sock`
-- Intercepts every `bash` tool_call and prepends env vars (see below)
-- Receives `{ tool, args }` JSON requests over the socket
-- Dispatches to real tool implementations
-- Returns result as JSON over the socket
+- Intercepts every `bash` tool_call, prepends env vars so scripts get them
+  automatically
+- Receives requests over the socket, dispatches to real tool implementations,
+  returns JSON result
+- On `session_shutdown`: removes socket
 
-### 2. CLI shim (`pi-tool`)
-- Written to `.pi/bin/pi-tool` at session start (not installed globally)
-- Connects to `PI_TOOL_SOCK`, sends request, blocks for response
-- See `spec-cli.md` for full interface
+### CLI shim (`pi-tool`)
+- Written to `.pi/bin/pi-tool` at session start — not installed globally
+- Connects to `PI_TOOL_SOCK`, sends request, blocks for response, exits
 
-### 3. Socket lifecycle
-- Created at `session_start`, removed at `session_shutdown`
-- Path: `<worktree>/.pi/tool.sock`
-
-### 4. Environment injection
-Extension mutates every `bash` tool_call input:
-```
+### Environment injection
+Prepended to every `bash` tool_call automatically:
+```bash
 export PI_TOOL_SOCK=<worktree>/.pi/tool.sock
 export PATH=<worktree>/.pi/bin:$PATH
 ```
-Scripts do not need to set these manually.
 
-## Tools exposed
-Non-builtin extension tools (auto-discovered via `getAllTools()`) plus `git`
-(builtin but sandboxed). Default builtin tools (read, write, edit, bash, etc.)
-are excluded — they work fine via filesystem ops in the sandbox.
+### Tools exposed
+All tools are exposed **except** the builtins that work fine via
+filesystem/shell in the sandbox:
+
+```
+read, write, edit, bash, find, grep, ls
+```
+
+Everything else — `git`, `subagent`, any custom extension tool — is exposed
+automatically. New extension tools appear immediately without configuration.
+
+## CLI
+
+```
+pi-tool <tool> [args]
+pi-tool --list
+pi-tool --describe <tool>
+pi-tool --help
+```
+
+### Input
+
+Input is read from stdin and branched on shape:
+
+```
+stdin received
+  │
+  ├── valid JSON object  →  JSON mode
+  │     validate against schema (TypeBox)
+  │     report field errors if invalid
+  │
+  └── anything else      →  positional mode
+        schema has one required key, type string    →  join args as string
+        schema has one required key, type string[]  →  split args as array
+        anything else  →  error with full schema + generated jq example
+```
+
+**JSON mode** — primary mode for structured tools:
+
+```bash
+# static
+echo '{"agent":"reviewer","task":"review src/"}' | pi-tool subagent
+
+# dynamic args via jq — no quoting issues
+jq -n --arg agent "reviewer" --arg task "review $path" \
+  '{agent:$agent,task:$task}' | pi-tool subagent
+```
+
+**Positional mode** — for tools with a single required `string` or `string[]`
+parameter. Optional fields do not disqualify positional mode.
+
+```bash
+pi-tool git status
+pi-tool git commit -m "fix: thing"
+```
+
+**Error messages** include the full schema and a generated `jq` invocation:
+
+```
+Error: tool 'subagent' requires structured input.
+
+Schema:
+  agent  string  (required)  Agent name to delegate to
+  task   string  (required)  Task for the agent to perform
+
+Usage:
+  jq -n --arg agent "..." --arg task "..." '{agent:$agent,task:$task}' | pi-tool subagent
+```
+
+### Output
+
+Always a JSON object — predictable regardless of tool or runtime state:
+
+```json
+{ "ok": true,  "content": "On branch main...", "details": {} }
+{ "ok": false, "content": "fatal: not a git repo", "details": {}, "error": "tool execution failed" }
+```
+
+`content` is `content[]` text blocks joined as a string. `details` is the
+tool's raw details object passed through verbatim (empty object if none).
+
+```bash
+result=$(pi-tool git -- status | jq -r .content)
+```
+
+Stderr carries human-readable diagnostics only — never mixed with result content.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Tool execution error |
+| 2 | CLI usage error (bad args, unknown tool) |
+| 3 | Socket error (pi not running, timeout) |
+
+### Streaming
+
+```bash
+echo '{"agent":"builder","task":"build and test"}' | pi-tool subagent --stream
+```
+
+Emits JSON-lines until complete:
+
+```
+{"type":"update","content":"Planning..."}
+{"type":"result","ok":true,"content":"Done.","details":{}}
+```
+
+Without `--stream`, blocks silently until complete.
+
+### Discovery
+
+```bash
+pi-tool --list              # all exposed tools with descriptions
+pi-tool --describe subagent # full input schema for a tool
+```
+
+## Examples
+
+```bash
+# git in a sandboxed script
+pi-tool git add .
+pi-tool git commit -m "checkpoint"
+
+# delegate to subagent, capture output
+summary=$(
+  jq -n --arg task "summarise src/" '{agent:"summariser",task:$task}' \
+  | pi-tool subagent \
+  | jq -r .content
+)
+echo "$summary" > SUMMARY.md
+
+# stream progress
+echo '{"agent":"builder","task":"build and test"}' | pi-tool subagent --stream
+
+# error handling
+if ! pi-tool git -- commit -m "auto" | jq -e .ok > /dev/null; then
+  echo "commit failed" >&2
+  exit 1
+fi
+```
