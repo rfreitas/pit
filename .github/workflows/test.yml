@@ -36,7 +36,13 @@ jobs:
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
 
       - name: install bwrap
-        run: sudo apt-get install -y bubblewrap
+        # Ubuntu 24.04 ships bwrap 0.9.0 which lacks --overlay-src (added in 0.10.0).
+        # Build from source to get a version that supports all features the tests use.
+        run: |
+          sudo apt-get install -y meson libcap-dev libseccomp-dev
+          git clone --depth 1 --branch v0.11.0 https://github.com/containers/bubblewrap.git /tmp/bwrap
+          cd /tmp/bwrap && meson setup build --prefix=/usr && ninja -C build && sudo ninja -C build install
+          bwrap --version
 
       - name: test
         run: npm test
