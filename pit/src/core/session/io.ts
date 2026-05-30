@@ -65,41 +65,53 @@ export const scanSessionsByRepo = async (
   agentDir: string,
 ): Promise<Array<{ path: string; modified: Date }>> => {
   const sessionsDir = join(agentDir, "sessions");
-  const found: Array<{ path: string; modified: Date }> = [];
+  const { readdir, readFile, stat } = await import("node:fs/promises");
 
   let buckets: string[] = [];
-  try { buckets = await (await import("node:fs/promises")).readdir(sessionsDir); } catch { return []; }
+  try { buckets = await readdir(sessionsDir); } catch { return []; }
+
+  let found: Array<{ path: string; modified: Date }> = [];
 
   for (const bucket of buckets) {
     const bucketDir = join(sessionsDir, bucket);
     let files: string[] = [];
-    try { files = await (await import("node:fs/promises")).readdir(bucketDir); } catch { continue; }
+    try { files = await readdir(bucketDir); } catch { continue; }
 
-    const jsonlFiles = files
-      .filter((f) => f.endsWith(".jsonl"))
-      .map((f) => ({ name: f, stat: (() => { try { return require("node:fs").statSync(join(bucketDir, f)); } catch { return null; } })() }))
-      .filter((x): x is { name: string; stat: import("node:fs").Stats } => x.stat !== null)
-      .sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
+    const jsonlFiles = (await Promise.all(
+      files.map(async (f) => {
+        if (!f.endsWith(".jsonl")) return null;
+        try {
+          const s = await stat(join(bucketDir, f));
+          return { name: f, mtime: s.mtime };
+        } catch { return null; }
+      }),
+    )).filter((x): x is { name: string; mtime: Date } => x !== null)
+      .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
     if (!jsonlFiles.length) continue;
+
     const mostRecent = join(bucketDir, jsonlFiles[0]!.name);
 
-    try {
-      const { readFileSync } = require("node:fs");
-      const lines = readFileSync(mostRecent, "utf8").split("\n");
-      const pitLine = lines.find((l: string) => {
-        if (!l.trim()) return false;
-        try {
-          const e = JSON.parse(l) as Record<string, unknown>;
-          return e["type"] === "custom" && e["customType"] === "pit";
-        } catch { return false; }
-      });
-      if (!pitLine) continue;
-      const entry = JSON.parse(pitLine) as { data?: { repo?: string } };
-      if (entry.data?.repo === repo) {
-        found.push({ path: mostRecent, modified: jsonlFiles[0]!.stat.mtime });
-      }
-    } catch { /* skip corrupt */ }
+    const shouldInclude = await (async () => {
+      try {
+        const content = await readFile(mostRecent, "utf8");
+        const lines = content.split("\n");
+        const pitLine = lines.find((l) => {
+          if (!l.trim()) return false;
+          try {
+            const e = JSON.parse(l) as Record<string, unknown>;
+            return e["type"] === "custom" && e["customType"] === "pit";
+          } catch { return false; }
+        });
+        if (!pitLine) return false;
+        const entry = JSON.parse(pitLine) as { data?: { repo?: string } };
+        return entry.data?.repo === repo;
+      } catch { return false; }
+    })();
+
+    if (shouldInclude) {
+      found = [...found, { path: mostRecent, modified: jsonlFiles[0]!.mtime }];
+    }
   }
 
   return found;

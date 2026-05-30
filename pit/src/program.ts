@@ -199,7 +199,7 @@ export const showPicker = async (
           : [];
 
         const { existsSync } = await import("node:fs");
-        return discoverSessionsForPicker(
+        const sessions = await discoverSessionsForPicker(
           { cwd, repo, isLinked, worktrees, agentDir: AGENT_DIR },
           {
             listSessions: (p) => SessionManager.list(p, undefined, progress).catch(() => []),
@@ -209,6 +209,7 @@ export const showPicker = async (
             scanSessionsByRepo,
           },
         );
+        return sessions as unknown as Awaited<ReturnType<typeof SessionManager.list>>;
       },
       (progress) => SessionManager.listAll(progress),
       (sessionPath) => { tui.stop(); resolve(sessionPath); },
