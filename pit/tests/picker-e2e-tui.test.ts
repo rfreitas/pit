@@ -82,11 +82,13 @@ function createGitE2EFixture(): GitE2EFixture {
       data: result.meta,
     });
     const msgLine = JSON.stringify({
-      type: "model_change",
+      type: "message",
       id: "msg-id",
       parentId: "pit-entry-id",
-      display: true,
-      content: firstMessage,
+      message: {
+        role: "user",
+        content: firstMessage,
+      },
     });
 
     fs.writeFileSync(sessionFile, `${headerLine}\n${pitLine}\n${msgLine}\n`);
@@ -118,18 +120,35 @@ async function getRenderedPickerUI(
         const full = path.join(bucketDir, f);
         const s = fs.statSync(full);
         const lines = fs.readFileSync(full, "utf8").split("\n").filter((l) => l.trim());
-        const cwdLine = lines.find((l) => {
-          try { return JSON.parse(l).type === "session"; } catch { return false; }
-        });
-        const msgLine = lines.find((l) => {
-          try { return JSON.parse(l).type === "model_change"; } catch { return false; }
-        });
-        const parsedCwd = cwdLine ? JSON.parse(cwdLine).cwd : null;
-        const firstMessage = msgLine ? JSON.parse(msgLine).content : "";
+        let parsedCwd: string | null = null;
+        let firstMessage = "";
+
+        const extractText = (content: any): string => {
+          if (typeof content === "string") return content;
+          if (Array.isArray(content)) {
+            return content
+              .map((c) => (c && typeof c === "object" && c.type === "text" ? c.text : ""))
+              .join("")
+              .trim();
+          }
+          return "";
+        };
+
+        for (const line of lines) {
+          try {
+            const e = JSON.parse(line);
+            if (e.type === "session") {
+              parsedCwd = e.cwd ?? null;
+            } else if (e.type === "message" && !firstMessage && e.message?.role === "user") {
+              firstMessage = extractText(e.message.content);
+            }
+          } catch {}
+        }
+
         return {
           path: full,
           modified: s.mtime,
-          firstMessage,
+          firstMessage: firstMessage || "(no messages)",
           messageCount: lines.length - 2,
           cwd: parsedCwd,
         };
@@ -208,7 +227,7 @@ describe("E2E TUI Picker (Zero Mocks with Real Git & FS Fixtures)", () => {
         agentDir: f.agentDir,
       });
 
-      expect(ui).toContain("[pruned worktree branch:pi/pruned-branch]");
+      expect(ui).toContain("[pruned worktree branch:pi/pruned-branch] This session's worktree is deleted");
     } finally {
       f.cleanup();
     }

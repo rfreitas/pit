@@ -164,20 +164,21 @@ describe("Picker TUI integration", () => {
     expect(ui).toContain("[worktree branch:deleted]");
   });
 
-  it("Catches the render contract bug (crashing on undefined name/firstMessage)", async () => {
-    // This explicitly mocks the exact bug state: discovering a session that lacks display fields
-    await expect(async () => {
-      await getRenderedPickerUI(
-        { cwd: "/tmp/repo", repo: "/tmp/repo", isLinked: false, worktrees: [], agentDir: "/tmp/agent" },
-        {
-          listSessions: async () => [],
-          readWorktreeBranch: async () => null,
-          existsSync: () => false,
-          // MOCK the buggy behavior: returning only path and modified
-          scanSessionsByRepo: async () => [{ path: "/tmp/crash.jsonl", modified: new Date() } as any],
-        }
-      );
-    }).rejects.toThrowError("Cannot read properties of undefined (reading 'replace')");
+  it("Ensures the render contract does NOT crash on undefined name/firstMessage", async () => {
+    // This verifies that even if we discover a session that lacks display fields,
+    // the picker remains robust and renders with a clean default instead of crashing.
+    const ui = await getRenderedPickerUI(
+      { cwd: "/tmp/repo", repo: "/tmp/repo", isLinked: false, worktrees: [], agentDir: "/tmp/agent" },
+      {
+        listSessions: async () => [],
+        readWorktreeBranch: async () => null,
+        existsSync: () => false,
+        // Mock a minimal scanned object lacking firstMessage and name
+        scanSessionsByRepo: async () => [{ path: "/tmp/crash.jsonl", modified: new Date() } as any],
+      }
+    );
+
+    expect(ui).toContain("(no messages)");
   });
 
 });

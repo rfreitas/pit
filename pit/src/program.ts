@@ -68,6 +68,7 @@ export interface PickerSession {
   name?: string;
   cwd?: string | null;
   messageCount?: number;
+  branch?: string; // checked-out branch name
   [key: string]: unknown; // Allow passthrough of other SessionManager fields
 }
 
@@ -157,8 +158,16 @@ export const discoverSessionsForPicker = async (
         .filter((s) => !knownPaths.has(s.path))
     : [];
 
+  const markedPruned = prunedSessions.map((s) => {
+    const b = s.branch ?? "unknown";
+    const l = `[pruned worktree branch:${b}]`;
+    return s.name
+      ? { ...s, name: `${l} ${s.name}` }
+      : { ...s, firstMessage: `${l} ${s.firstMessage ?? "(no messages)"}` };
+  });
+
   // Combine without dedup needed — prunedSessions are already filtered to novel paths
-  const combined = [...mainGroups.flat(), ...marked, ...prunedSessions];
+  const combined = [...mainGroups.flat(), ...marked, ...markedPruned];
 
   return [...combined]
     .sort((a, b) => b.modified.getTime() - a.modified.getTime());

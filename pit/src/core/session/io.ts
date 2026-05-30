@@ -58,20 +58,36 @@ export const findPitSession = (
  * matches the given repo. Used by the picker to discover pruned worktrees
  * that no longer appear in `git worktree list`.
  *
- * Returns basic SessionInfo (path + modified) for each matching session.
+ * Returns rich SessionInfo (path, modified, firstMessage, messageCount, cwd, name, branch).
  * The caller (discoverSessionsForPicker) applies labels and deduplicates.
  */
 export const scanSessionsByRepo = async (
   repo: string,
   agentDir: string,
-): Promise<Array<{ path: string; modified: Date; firstMessage: string; messageCount: number; cwd: string | null }>> => {
+): Promise<Array<{
+  path: string;
+  modified: Date;
+  firstMessage: string;
+  messageCount: number;
+  cwd: string | null;
+  name?: string;
+  branch?: string;
+}>> => {
   const sessionsDir = join(agentDir, "sessions");
   const { readdir, readFile, stat } = await import("node:fs/promises");
 
   let buckets: string[] = [];
   try { buckets = await readdir(sessionsDir); } catch { return []; }
 
-  let found: Array<{ path: string; modified: Date; firstMessage: string; messageCount: number; cwd: string | null }> = [];
+  let found: Array<{
+    path: string;
+    modified: Date;
+    firstMessage: string;
+    messageCount: number;
+    cwd: string | null;
+    name?: string;
+    branch?: string;
+  }> = [];
 
   for (const bucket of buckets) {
     const bucketDir = join(sessionsDir, bucket);
@@ -98,37 +114,54 @@ export const scanSessionsByRepo = async (
         const content = await readFile(mostRecent, "utf8");
         const lines = content.split("\n").filter((l) => l.trim());
 
-        // Extract cwd from session header (first line)
         let cwd: string | null = null;
-        try {
-          const header = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
-          if (header["type"] === "session") cwd = (header["cwd"] as string) ?? null;
-        } catch { /* ignore */ }
+        let name: string | undefined = undefined;
+        let firstMessage = "";
+        let messageCount = 0;
+        let branch = "unknown";
+        let hasPitMeta = false;
 
-        // Count model_change entries as a proxy for messageCount
-        const messageCount = lines.filter((l) => {
-          try {
-            const e = JSON.parse(l) as Record<string, unknown>;
-            return e["type"] === "model_change";
-          } catch { return false; }
-        }).length;
+        const extractText = (content: any): string => {
+          if (typeof content === "string") return content;
+          if (Array.isArray(content)) {
+            return content
+              .map((c) => (c && typeof c === "object" && c.type === "text" ? c.text : ""))
+              .join("")
+              .trim();
+          }
+          return "";
+        };
 
-        const pitLine = lines.find((l) => {
+        for (const line of lines) {
           try {
-            const e = JSON.parse(l) as Record<string, unknown>;
-            return e["type"] === "custom" && e["customType"] === "pit";
-          } catch { return false; }
-        });
-        if (!pitLine) return null;
-        const entry = JSON.parse(pitLine) as { data?: { repo?: string; branch?: string } };
-        if (entry.data?.repo !== repo) return null;
-        const branch = entry.data?.branch ?? "unknown";
+            const e = JSON.parse(line) as Record<string, any>;
+            if (e.type === "session") {
+              cwd = e.cwd ?? null;
+            } else if (e.type === "session_info") {
+              name = e.name?.trim() || undefined;
+            } else if (e.type === "custom" && e.customType === "pit") {
+              if (e.data?.repo !== repo) return null; // Belongs to a different repo
+              branch = e.data?.branch ?? "unknown";
+              hasPitMeta = true;
+            } else if (e.type === "message") {
+              messageCount++;
+              if (!firstMessage && e.message?.role === "user") {
+                firstMessage = extractText(e.message.content);
+              }
+            }
+          } catch { /* skip corrupt lines */ }
+        }
+
+        if (!hasPitMeta) return null;
+
         return {
           path: mostRecent,
           modified: jsonlFiles[0]!.mtime,
-          firstMessage: `[pruned worktree branch:${branch}]`,
+          firstMessage: firstMessage || "(no messages)",
           messageCount,
           cwd,
+          name,
+          branch,
         };
       } catch { return null; }
     })();
