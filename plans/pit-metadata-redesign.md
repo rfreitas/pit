@@ -64,9 +64,9 @@ Show pit mode and sandbox status in the pi status bar on every session start,
 including when not in tree mode or not sandboxed.
 
 Examples:
-- `[worktree: pi/80096d01] [sandbox]`
+- `[worktree] [sandbox]`
 - `[no-tree] [sandbox]`
-- `[worktree: pi/80096d01] [no sandbox]`
+- `[worktree] [no sandbox]`
 - `[no-tree] [no sandbox]`
 
 Implementation: pit extension `session_start` handler calls
