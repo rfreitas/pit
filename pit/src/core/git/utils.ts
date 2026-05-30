@@ -20,6 +20,7 @@ import { make as makeCommand, string as commandString, exitCode as commandExitCo
 import { FileSystem } from "@effect/platform/FileSystem";
 import { CommandExecutor } from "@effect/platform/CommandExecutor";
 import type { PlatformError } from "@effect/platform/Error";
+import { readWorktreeBranchSync } from "./utils-sync.ts";
 
 // ── linked worktree detection ─────────────────────────────────────────────────
 
@@ -69,22 +70,7 @@ export const resolveMainRepo = (
 export const readWorktreeBranch = (
   cwd: string,
 ): Effect.Effect<string | null, never, FileSystem> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem;
-    const gitPath = join(cwd, ".git");
-    const exists = yield* fs.exists(gitPath).pipe(Effect.orElse(() => Effect.succeed(false)));
-    if (!exists) return null;
-    const info = yield* fs.stat(gitPath).pipe(Effect.orElse(() => Effect.succeed(null)));
-    if (!info || info.type === "Directory") return null;
-    const content = yield* fs.readFileString(gitPath).pipe(Effect.orElse(() => Effect.succeed("")));
-    const gitdir = content.trim().replace(/^gitdir:\s*/, "");
-    if (!gitdir.includes("/.git/worktrees/")) return null;
-    const head = yield* fs.readFileString(join(gitdir, "HEAD")).pipe(
-      Effect.orElse(() => Effect.succeed("")),
-    );
-    const m = head.trim().match(/^ref: refs\/heads\/(.+)$/);
-    return m ? m[1] : null;
-  });
+  Effect.sync(() => readWorktreeBranchSync(cwd));
 
 /**
  * Read the gitdir path for a linked worktree (.git/worktrees/<id>/).

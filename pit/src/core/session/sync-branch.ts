@@ -11,35 +11,8 @@
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { refreshPitBranchIfStaleSync } from "./io.ts";
-
-const isLinkedWorktreeSync = (cwd: string): boolean => {
-  const gitPath = join(cwd, ".git");
-  try {
-    const info = statSync(gitPath);
-    if (!info.isFile()) return false;
-    const content = readFileSync(gitPath, "utf8").trim();
-    const gitdir = content.replace(/^gitdir:\s*/, "");
-    return gitdir.includes("/.git/worktrees/");
-  } catch {
-    return false;
-  }
-};
-
-const readWorktreeBranchSync = (cwd: string): string | null => {
-  const gitPath = join(cwd, ".git");
-  try {
-    const content = readFileSync(gitPath, "utf8").trim();
-    const gitdir = content.replace(/^gitdir:\s*/, "");
-    const head = readFileSync(join(gitdir, "HEAD"), "utf8").trim();
-    const m = head.match(/^ref:\s*refs\/heads\/(\S+)$/);
-    return m?.[1] ?? null;
-  } catch {
-    return null;
-  }
-};
+import { isLinkedWorktreeSync, readWorktreeBranchSync } from "../git/utils-sync.ts";
 
 export const createSyncBranchHook = (
   socketPath: string,

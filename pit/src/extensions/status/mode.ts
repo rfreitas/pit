@@ -12,21 +12,7 @@
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-
-const isLinkedWorktreeSync = (cwd: string): boolean => {
-  const gitPath = join(cwd, ".git");
-  try {
-    const info = statSync(gitPath);
-    if (!info.isFile()) return false;
-    const content = readFileSync(gitPath, "utf8").trim();
-    const gitdir = content.replace(/^gitdir:\s*/, "");
-    return gitdir.includes("/.git/worktrees/");
-  } catch {
-    return false;
-  }
-};
+import { isLinkedWorktreeSync } from "../../core/git/utils-sync.ts";
 
 export const createModeStatus = (
   socketPath: string,

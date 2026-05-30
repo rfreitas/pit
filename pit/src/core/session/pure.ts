@@ -58,3 +58,73 @@ export const systemPromptArgs = (sandboxMounts: Readonly<SandboxMounts> | undefi
   if (!sandboxMounts) return [];
   return ["--append-system-prompt", formatSandboxNote(sandboxMounts)];
 };
+
+// ── JSONL session file parser (DRY extraction helper) ─────────────────────────
+
+export interface ExtractedSessionMeta {
+  cwd: string | null;
+  name?: string;
+  firstMessage: string;
+  messageCount: number;
+  branch?: string;
+}
+
+/**
+ * Robustly extracts plaintext from raw message content strings or array-of-blocks.
+ */
+export const extractTextContent = (content: any): string => {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((c) => (c && typeof c === "object" && c.type === "text" ? c.text : ""))
+      .join("")
+      .trim();
+  }
+  return "";
+};
+
+/**
+ * Purely parses a session file's raw JSONL text.
+ * Filters out sessions belonging to different repositories if `repoFilter` is supplied.
+ */
+export const parseSessionFileContent = (
+  content: string,
+  repoFilter?: string,
+): ExtractedSessionMeta | null => {
+  const lines = content.split("\n").filter((l) => l.trim());
+
+  const parsed = lines.reduce((acc, line) => {
+    try {
+      const e = JSON.parse(line) as Record<string, any>;
+      if (e.type === "session") {
+        return { ...acc, cwd: e.cwd ?? null };
+      }
+      if (e.type === "session_info") {
+        return { ...acc, name: e.name?.trim() || undefined };
+      }
+      if (e.type === "custom" && e.customType === "pit") {
+        if (repoFilter && e.data?.repo !== repoFilter) return { ...acc, isRepoMatch: false };
+        return { ...acc, branch: e.data?.branch ?? "unknown", hasPitMeta: true };
+      }
+      if (e.type === "message") {
+        const nextMessageCount = acc.messageCount + 1;
+        if (!acc.firstMessage && e.message?.role === "user") {
+          return { ...acc, messageCount: nextMessageCount, firstMessage: extractTextContent(e.message.content) };
+        }
+        return { ...acc, messageCount: nextMessageCount };
+      }
+    } catch { /* skip */ }
+    return acc;
+  }, { cwd: null as string | null, name: undefined as string | undefined, firstMessage: "", messageCount: 0, branch: "unknown", hasPitMeta: false, isRepoMatch: true });
+
+
+  if (!parsed.hasPitMeta || !parsed.isRepoMatch) return null;
+
+  return {
+    cwd: parsed.cwd,
+    name: parsed.name,
+    firstMessage: parsed.firstMessage || "(no messages)",
+    messageCount: parsed.messageCount,
+    branch: parsed.branch,
+  };
+};

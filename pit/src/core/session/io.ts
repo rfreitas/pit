@@ -15,7 +15,7 @@ import type {
   SandboxMounts,
   LinkedWorktreeSession,
 } from "../../types.ts";
-import { cwdToBucket, buildSessionLines } from "./pure.ts";
+import { cwdToBucket, buildSessionLines, parseSessionFileContent } from "./pure.ts";
 import { buildNoTreeMeta } from "../worktree/pure.ts";
 import { SessionWriteError } from "../../errors.ts";
 
@@ -112,56 +112,13 @@ export const scanSessionsByRepo = async (
     const scanResult = await (async () => {
       try {
         const content = await readFile(mostRecent, "utf8");
-        const lines = content.split("\n").filter((l) => l.trim());
-
-        let cwd: string | null = null;
-        let name: string | undefined = undefined;
-        let firstMessage = "";
-        let messageCount = 0;
-        let branch = "unknown";
-        let hasPitMeta = false;
-
-        const extractText = (content: any): string => {
-          if (typeof content === "string") return content;
-          if (Array.isArray(content)) {
-            return content
-              .map((c) => (c && typeof c === "object" && c.type === "text" ? c.text : ""))
-              .join("")
-              .trim();
-          }
-          return "";
-        };
-
-        for (const line of lines) {
-          try {
-            const e = JSON.parse(line) as Record<string, any>;
-            if (e.type === "session") {
-              cwd = e.cwd ?? null;
-            } else if (e.type === "session_info") {
-              name = e.name?.trim() || undefined;
-            } else if (e.type === "custom" && e.customType === "pit") {
-              if (e.data?.repo !== repo) return null; // Belongs to a different repo
-              branch = e.data?.branch ?? "unknown";
-              hasPitMeta = true;
-            } else if (e.type === "message") {
-              messageCount++;
-              if (!firstMessage && e.message?.role === "user") {
-                firstMessage = extractText(e.message.content);
-              }
-            }
-          } catch { /* skip corrupt lines */ }
-        }
-
-        if (!hasPitMeta) return null;
+        const parsed = parseSessionFileContent(content, repo);
+        if (!parsed) return null;
 
         return {
           path: mostRecent,
           modified: jsonlFiles[0]!.mtime,
-          firstMessage: firstMessage || "(no messages)",
-          messageCount,
-          cwd,
-          name,
-          branch,
+          ...parsed,
         };
       } catch { return null; }
     })();
