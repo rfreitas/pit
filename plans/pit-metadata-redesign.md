@@ -190,16 +190,15 @@ pass to pi as --append-system-prompt
 | 7 | Cache refresh on resume | ✅ Done | `session/io.ts` (`refreshPitBranchIfStale`), `program.ts` | `session/io.test.ts` (6 tests: no-op, rewrite, file count, non-pit lines preserved, no pit entry) |
 | 8 | Mode footer | ✅ Done | `extensions/status/mode.ts`, `extensions/index.ts` | `mode.test.ts` (8 tests: no-tree, linked worktree, missing branch, sandbox, no sandbox, both keys, registration, live derivation) |
 | 9 | Update test expectations (0→1 factories) | ✅ Done | `index.test.ts`, `inner.test.ts`, `git.test.ts`, `reload.test.ts`, `rename-branch.test.ts` | Updated 7 assertions |
-| — | **2.1 Picker metadata.repo scan** | 🔄 **In progress** | `program.ts` (extract `discoverSessionsForPicker`) | **TDD** |
+| — | **2.1 Picker metadata.repo scan** | ✅ Done | `program.ts` (`discoverSessionsForPicker`), `session/io.ts` (`scanSessionsByRepo`) | `picker.test.ts` (6 tests) |
 | — | Branch-deleted TUI prompt | ❌ Not started | — | — |
 | — | Branch refresh via escape server ref-change | ❌ Not started | — | — |
 
-**Test summary:** 427 passing, 1 skipped, 4 todo. 16 new tests added in this batch across `mode.test.ts`, `io.test.ts`, `resume.test.ts`.
+**Test summary:** 433 passing, 1 skipped, 4 todo. 22 new tests added across `mode.test.ts` (8), `io.test.ts` (6), `resume.test.ts` (2), `picker.test.ts` (6).
 
 ---
 
 ## Implementation order (remaining)
 
-1. **2.1 Picker metadata.repo scan** — extract `discoverSessionsForPicker` into a testable function; scan session files whose `meta.repo` matches current repo to discover pruned worktrees; deduplicate with git worktree list results
-2. Branch-deleted TUI prompt (fresh branch off main)
-3. Branch refresh via escape server ref-change (1.1)
+1. Branch-deleted TUI prompt (fresh branch off main)
+2. Branch refresh via escape server ref-change (1.1)
