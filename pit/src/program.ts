@@ -73,6 +73,26 @@ export interface PickerSession {
 }
 
 /**
+ * Production-line helper to check if a branch exists locally in Git.
+ * Exported so that our TUI E2E tests can execute the real plumbing under test.
+ */
+export const productionBranchExists = (
+  branch: string,
+  repo: string | null,
+): Promise<boolean> =>
+  Effect.runPromise(
+    Effect.promise(async () => {
+      try {
+        const { execSync } = await import("node:child_process");
+        execSync(`git show-ref --verify refs/heads/${branch}`, { cwd: repo ?? undefined, stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    })
+  );
+
+/**
  * Discover sessions for the picker by combining live git worktree data
  * with a metadata scan for pruned worktrees.
  *
@@ -301,17 +321,7 @@ export const showPicker = async (
             readWorktreeBranch: (wt) =>
               Effect.runPromise(readWorktreeBranch(wt).pipe(Effect.provide(NodeContextLayer))),
             existsSync,
-            branchExists: (branch) =>
-              Effect.runPromise(
-                Effect.tryPromise({
-                  try: async () => {
-                    const { execSync } = await import("node:child_process");
-                    execSync(`git show-ref --verify refs/heads/${branch}`, { cwd: repo ?? undefined, stdio: "ignore" });
-                    return true;
-                  },
-                  catch: () => false,
-                })
-              ),
+            branchExists: (branch) => productionBranchExists(branch, repo),
             scanSessionsByRepo,
           },
         );

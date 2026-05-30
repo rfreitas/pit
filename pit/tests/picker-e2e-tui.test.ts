@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { buildSessionLines, cwdToBucket } from "../src/core/session/pure.ts";
-import { discoverSessionsForPicker } from "../src/program.ts";
+import { discoverSessionsForPicker, productionBranchExists } from "../src/program.ts";
 import { scanSessionsByRepo } from "../src/core/session/io.ts";
 import { SessionSelectorComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import type { WorktreeResult } from "../src/types.ts";
@@ -178,14 +178,7 @@ async function getRenderedPickerUI(
       }
     },
     existsSync: (p: string) => fs.existsSync(p),
-    branchExists: async (branch: string) => {
-      try {
-        execSync(`git show-ref --verify refs/heads/${branch}`, { cwd: opts.repo, stdio: "ignore" });
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    branchExists: (branch: string) => productionBranchExists(branch, opts.repo),
     scanSessionsByRepo: (repo: string, agentDir: string) => scanSessionsByRepo(repo, agentDir),
   };
 
