@@ -191,14 +191,13 @@ pass to pi as --append-system-prompt
 | 8 | Mode footer | ✅ Done | `extensions/status/mode.ts`, `extensions/index.ts` | `mode.test.ts` (8 tests: no-tree, linked worktree, missing branch, sandbox, no sandbox, both keys, registration, live derivation) |
 | 9 | Update test expectations (0→1 factories) | ✅ Done | `index.test.ts`, `inner.test.ts`, `git.test.ts`, `reload.test.ts`, `rename-branch.test.ts` | Updated 7 assertions |
 | — | **2.1 Picker metadata.repo scan** | ✅ Done | `program.ts` (`discoverSessionsForPicker`), `session/io.ts` (`scanSessionsByRepo`) | `picker.test.ts` (6 tests) |
-| — | Branch-deleted TUI prompt | ❌ Not started | — | — |
+| — | Branch-deleted TUI prompt | ✅ Done | `program.ts` (`showBranchDeletedPrompt`), `worktree/io.ts` (`createFreshWorktreeEffect`) | `prompt-integration.test.ts` (3 tests) |
 | — | Branch refresh via escape server ref-change | ❌ Not started | — | — |
 
-**Test summary:** 433 passing, 1 skipped, 4 todo. 22 new tests added across `mode.test.ts` (8), `io.test.ts` (6), `resume.test.ts` (2), `picker.test.ts` (6).
+**Test summary:** 438 passing, 1 skipped, 4 todo. 25 new tests added across `mode.test.ts` (8), `io.test.ts` (6), `resume.test.ts` (2), `picker-integration.test.ts` (6), `prompt-integration.test.ts` (3).
 
 ---
 
 ## Implementation order (remaining)
 
-1. Branch-deleted TUI prompt (fresh branch off main)
-2. Branch refresh via escape server ref-change (1.1)
+1. Branch refresh via escape server ref-change (1.1)
