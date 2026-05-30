@@ -192,3 +192,89 @@ if ! pi-tool git -- commit -m "auto" | jq -e .ok > /dev/null; then
   exit 1
 fi
 ```
+
+## Testing
+
+All tests run in CI. No LLM, no `pi` CLI install — tests use the SDK directly
+(`@earendil-works/pi-coding-agent` is already in `node_modules`). Tool
+implementations are mocked via `customTools` so dispatch logic is testable
+without real subagent, real git, or real anything.
+
+Tests co-located in `packages/pi-tool/src/`. Framework: vitest (consistent
+with the rest of the repo).
+
+### Unit — pure functions, no pi session
+
+- **Input parser**
+  - Valid JSON object → JSON mode
+  - JSON primitive / array / invalid → positional mode
+  - Positional: single required `string` key → join as string
+  - Positional: single required `string[]` key → split as array
+  - Positional: multi-key required schema → error with schema + jq example
+  - Optional fields do not disqualify positional mode
+  - TypeBox field errors surfaced correctly for malformed JSON objects
+
+- **Error message generator**
+  - Produces correct schema listing from TypeBox schema
+  - Generates correct `jq` invocation for all-string required fields
+  - Handles mixed types (string + number) gracefully
+
+- **Output serializer**
+  - `TextContent[]` joined correctly
+  - `ImageContent` blocks handled (dropped or noted)
+  - `details` passed through verbatim
+  - `isError` → `ok: false`
+
+- **Stale socket cleanup**
+  - Files matching `tool-*.sock` pattern parsed for pid
+  - `kill -0` success → file kept
+  - `kill -0` failure → file removed
+  - Non-matching files in `.pi/` untouched
+
+### Integration — SDK session, no LLM
+
+Uses `createAgentSession({ customTools, sessionManager: SessionManager.inMemory() })`.
+Tools are mocked — dispatch logic is fully exercised without real implementations.
+
+- **Lifecycle**
+  - Socket created at `session_start`, path matches `tool-<sessionId>-<pid>.sock`
+  - Shim written to `.pi/bin/pi-tool`, is executable
+  - Socket removed at `session_shutdown`
+  - Two sessions in same worktree get distinct socket paths
+
+- **Environment injection**
+  - `bash` tool_call has `PI_TOOL_SOCK` and `PATH` prepended
+  - Non-bash tool_calls are not modified
+
+- **Dispatch — success**
+  - JSON input → correct tool called with correct params → JSON output
+  - Positional input (`string[]` tool) → correct params → JSON output
+  - `ok: true`, `content` matches mock return, `details` passed through
+
+- **Dispatch — errors**
+  - Unknown tool → `ok: false`, exit code 2, schema on stderr
+  - Tool throws → `ok: false`, exit code 1
+  - Tool returns `isError: true` → `ok: false`, exit code 1
+  - Missing required field → TypeBox error on stderr, exit code 2
+  - Positional on multi-key tool → schema + jq example on stderr, exit code 2
+
+- **Concurrency**
+  - Two simultaneous `pi-tool` calls → both complete, correct results, no interleaving
+
+- **Streaming**
+  - `--stream` → JSON-lines emitted as `onUpdate` fires
+  - Final `{"type":"result",...}` line matches full result
+  - Without `--stream` → blocks, single JSON output
+
+- **Discovery**
+  - `--list` → lists all registered tools with descriptions
+  - `--describe <tool>` → correct schema output
+  - `--list` reflects live tool set (tool registered after startup appears)
+
+### Manual smoke tests
+
+Not automated — run against real environments:
+
+- pit: `pi-tool git -- status` routes through pit escape server correctly
+- pit: agent writes a script using `pi-tool git`, script runs in sandbox
+- subagent: real LLM subagent spawned and result returned over socket

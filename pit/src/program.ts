@@ -351,7 +351,7 @@ export const program = Effect.gen(function* () {
         })
       )
     );
-    const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
+    const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox, pitConfig);
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
     const escape = yield* applyEscapeEffect(result.cwd, picked.sessionUUID, settingsPath);
 
@@ -374,7 +374,7 @@ export const program = Effect.gen(function* () {
       yield* launchEffect(cwd, filteredArgv, sandbox);
       return;
     }
-    const sandboxMounts = yield* resolveSandboxMountsEffect(cwd, sandbox);
+    const sandboxMounts = yield* resolveSandboxMountsEffect(cwd, sandbox, pitConfig);
     const session = yield* findOrCreateLinkedSession(cwd, AGENT_DIR, sandboxMounts);
     if (session.kind === "new") {
     console.error("pit: already in a git worktree — no pit session found, running no-tree");
@@ -401,7 +401,7 @@ export const program = Effect.gen(function* () {
     const escapeUM = yield* applyEscapeEffect(result.cwd, randomUUID(), settingsPath);
     yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath, undefined, pitConfig, escapeUM);
   } else {
-    const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
+    const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox, pitConfig);
     const sessionFile = yield* setupNewSession(result, AGENT_DIR, sandboxMounts);
     const sessionUUID3 = SessionManager.open(sessionFile).getSessionId();
     const escape3 = yield* applyEscapeEffect(result.cwd, sessionUUID3, settingsPath);

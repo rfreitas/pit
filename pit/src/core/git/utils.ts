@@ -13,6 +13,7 @@
  */
 
 import { join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { make as makeCommand, string as commandString, exitCode as commandExitCode } from "@effect/platform/Command";
@@ -179,13 +180,17 @@ export const listRepoWorktrees = (
     const out = yield* commandString(
       makeCommand("git", "-C", repo, "worktree", "list", "--porcelain"),
     );
+    const norm = (p: string) => { try { return realpathSync(p); } catch { return p; } };
+    const repoReal = norm(repo);
     return out.split("\n")
       .reduce<{ paths: string[]; current: string }>(
         ({ paths, current }, line) => {
           if (line.startsWith("worktree "))
             return { paths, current: line.slice(9).trim() };
-          if (line === "" && current)
-            return { paths: current !== repo ? [...paths, current] : paths, current: "" };
+          if (line === "" && current) {
+            const currentReal = norm(current);
+            return { paths: currentReal !== repoReal ? [...paths, currentReal] : paths, current: "" };
+          }
           return { paths, current };
         },
         { paths: [], current: "" },

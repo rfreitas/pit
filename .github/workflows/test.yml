@@ -1,0 +1,130 @@
+name: test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # ── Linux ────────────────────────────────────────────────────────────────────
+  # Typecheck, lint, and production test suite (bwrap sandbox tests included).
+  test-linux:
+    name: test (linux)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: install dependencies
+        run: npm install
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: lint
+        run: npm run lint
+
+      - name: enable unprivileged user namespaces
+        # Ubuntu 24.04 added AppArmor restrictions on user namespaces that
+        # block bwrap. Both sysctls are needed; || true handles missing entries.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: install bwrap
+        # Ubuntu 24.04 ships bwrap 0.9.0 which lacks --overlay-src (added in 0.10.0).
+        # Build from source to get a version that supports all features the tests use.
+        run: |
+          sudo apt-get install -y meson libcap-dev libseccomp-dev
+          git clone --depth 1 --branch v0.11.0 https://github.com/containers/bubblewrap.git /tmp/bwrap
+          cd /tmp/bwrap && meson setup build --prefix=/usr && ninja -C build && sudo ninja -C build install
+          bwrap --version
+
+      - name: install pi SDK globally
+        # The SDK bwrap test imports from the global node_modules path,
+        # matching the production environment where pi is globally installed.
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: test
+        run: npm test
+        env:
+          PI_SKIP_VERSION_CHECK: "1"
+
+  # ── macOS production tests ───────────────────────────────────────────────────
+  # Runs npm test on macOS — exercises sbplLaunch, buildSbplProfile, and the
+  # darwin path in buildSandboxMountSpec through actual production code.
+  # E2E tests run with sandbox-exec as the active backend on this platform.
+  test-macos:
+    name: test (macos)
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: install dependencies
+        run: npm install
+
+      - name: test
+        run: npm test
+        env:
+          PI_SKIP_VERSION_CHECK: "1"
+
+  # ── macOS SBPL probe ─────────────────────────────────────────────────────────
+  # Research probe — NOT production tests. See pit/debug/sbpl-probe.test.ts.
+  # continue-on-error: true so failures are amber, not blocking.
+  debug-sbpl-macos:
+    name: debug sbpl (macos)
+    runs-on: macos-14
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: install dependencies
+        run: npm install
+
+      - name: install pi SDK globally
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: probe sbpl behaviour
+        run: npx vitest run --config pit/debug/vitest.config.ts --reporter verbose --passWithNoTests
+        env:
+          PI_SKIP_VERSION_CHECK: "1"
+
+  # ── macOS Intel SBPL probe ───────────────────────────────────────────────────
+  # Same probe on Intel. Gated to main/tags to save runner minutes.
+  debug-sbpl-macos-intel:
+    name: debug sbpl (macos intel)
+    runs-on: macos-13
+    continue-on-error: true
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: install dependencies
+        run: npm install
+
+      - name: install pi SDK globally
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: probe sbpl behaviour
+        run: npx vitest run --config pit/debug/vitest.config.ts --reporter verbose --passWithNoTests
+        env:
+          PI_SKIP_VERSION_CHECK: "1"

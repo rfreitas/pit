@@ -8,6 +8,7 @@
   ],
   "type": "module",
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "typecheck": "tsc",
     "lint": "node --experimental-strip-types node_modules/.bin/eslint 'pit/**/*.ts' && node --experimental-strip-types pit/scripts/check-no-disable.ts",
     "test": "vitest run",

@@ -35,6 +35,8 @@ export interface RoMount {
 export interface RwMount {
   path: string;
   label?: string;
+  /** Use --bind-try instead of --bind (silently skipped if source missing). */
+  optional?: boolean;
 }
 
 export interface OverlayMount {
@@ -53,8 +55,22 @@ export interface SandboxMounts {
    * Ephemeral overlay mounts: the parent repo's unversioned dirs are overlaid
    * onto the worktree using a tmpfs upper layer. Reads come from the parent;
    * writes succeed but vanish when the session ends.
+   * Linux only — not supported on macOS (feature gap, sandbox-exec has no overlayfs).
    */
   overlay?: OverlayMount[];
+  /**
+   * Read denylist (macOS sandbox-exec only).
+   * undefined = whitelist mode (Linux bwrap): reads are closed by default.
+   * [] = blacklist mode, reads fully open, no denials.
+   * [...] = blacklist mode, reads open except listed paths.
+   */
+  readDeny?: RoMount[];
+  /**
+   * Which sandbox backend enforces this policy.
+   * Drives the sandbox announcement header text.
+   * Defaults to 'bwrap' when absent (backward compat).
+   */
+  backend?: 'bwrap' | 'sandbox-exec';
 }
 
 // ── pit config ────────────────────────────────────────────────────────────────
@@ -72,6 +88,17 @@ export interface PitConfig {
    * are silently skipped. Example: ["http_proxy", "https_proxy"].
    */
   allowEnv?: string[];
+  /**
+   * Per-platform read/write policy overrides.
+   * allowRead: Linux → adds to ro[]; macOS → removes from readDeny[].
+   * denyRead:  macOS only → adds to readDeny[]; Linux no-op.
+   * allowWrite: both platforms → adds to rw[].
+   */
+  sandbox?: {
+    allowRead?: string[];
+    denyRead?: string[];
+    allowWrite?: string[];
+  };
 }
 
 // ── flag parsing ──────────────────────────────────────────────────────────────

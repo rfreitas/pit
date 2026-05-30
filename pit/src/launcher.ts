@@ -3,7 +3,7 @@
  * pit-escape out-of-sandbox helper.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, linkSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -18,7 +18,8 @@ import {
   resolveWorktreeGitRwMounts,
 } from "./core/git/utils.ts";
 import { resolveUnversionedDirs } from "./core/sandbox/io.ts";
-import { buildSandboxMountSpec, allowedEnvArgs } from "./core/sandbox/pure.ts";
+import { buildSandboxMountSpec, allowedEnvArgs, buildSealedEnv } from "./core/sandbox/pure.ts";
+import { buildSbplProfile } from "./core/sandbox/sbpl.ts";
 import { probeSocketEffect } from "./extensions/escape/client.ts";
 import { setPitEscapeSocket } from "./env.ts";
 import { createExtensionFactories } from "./extensions/index.ts";
@@ -42,6 +43,20 @@ export const extensionArgs = (): string[] => {
 
 export const findBwrap = (): string | null => {
   return ["/usr/bin/bwrap", "/usr/local/bin/bwrap"].find(p => existsSync(p)) ?? null;
+};
+
+export const findSandboxExec = (): string | null =>
+  process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec")
+    ? "/usr/bin/sandbox-exec"
+    : null;
+
+/** Returns which sandbox backend is available on this platform, or null. */
+export const findSandboxTool = (): { kind: "bwrap"; path: string } | { kind: "sandbox-exec" } | null => {
+  if (process.platform === "darwin") {
+    return existsSync("/usr/bin/sandbox-exec") ? { kind: "sandbox-exec" } : null;
+  }
+  const bwrapPath = findBwrap();
+  return bwrapPath ? { kind: "bwrap", path: bwrapPath } : null;
 };
 
 const findNodeModules = (dir: string): string | null => {
@@ -74,7 +89,8 @@ export const getExtensionMounts = (): string[] => {
 
 /**
  * Build sandbox mounts.
- * resolveUnversionedDirs failure → warns + skips overlays (graceful degradation).
+ * On macOS: no overlay support (feature gap — sandbox-exec has no overlayfs).
+ * resolveUnversionedDirs failure → warns + skips overlays (Linux only).
  * resolveWorktreeGitRwMounts failure → empty mounts (caller sees typed error).
  */
 export const buildSandboxMountsEffect = (
@@ -83,10 +99,12 @@ export const buildSandboxMountsEffect = (
   agentDirReal: string,
   extensionMounts: string[],
   nodeDir: string,
+  pitConfig?: Readonly<PitConfig>,
 ): Effect.Effect<SandboxMounts, never, NodeContext> =>
   Effect.gen(function* () {
+    const platform = process.platform === "darwin" ? "darwin" as const : "linux" as const;
     const parentRepo = yield* resolveMainRepo(cwd);
-    const overlayDirs = parentRepo
+    const overlayDirs = platform === "linux" && parentRepo
       ? (yield* resolveUnversionedDirs(parentRepo).pipe(
           Effect.catchAll((e) =>
             Effect.logWarning(`pit: overlay mounts unavailable: ${String(e)}`).pipe(
@@ -101,24 +119,26 @@ export const buildSandboxMountsEffect = (
             if (existsSync(dest) && statSync(dest).isDirectory() && readdirSync(dest).length > 0)
               return [];
             return [{ src, dest, label: rel }];
-          } catch { return []; } // src disappeared
+          } catch { return []; }
         })
       : [];
     const gitRwMounts = yield* resolveWorktreeGitRwMounts(cwd);
     return buildSandboxMountSpec({
-      home: HOME, cwd, agentDir, agentDirReal, extensionMounts, nodeDir, gitRwMounts, overlayDirs,
+      home: HOME, cwd, agentDir, agentDirReal, extensionMounts, nodeDir,
+      gitRwMounts, overlayDirs, platform, pitConfig,
     });
   });
 
 export const resolveSandboxMountsEffect = (
   cwd: string,
   useSandbox: boolean,
+  pitConfig?: Readonly<PitConfig>,
 ): Effect.Effect<SandboxMounts | undefined, never, NodeContext> =>
   Effect.gen(function* () {
-    if (!useSandbox || !findBwrap()) return undefined;
+    if (!useSandbox || !findSandboxTool()) return undefined;
     const nodeDir = dirname(dirname(process.execPath));
     return yield* buildSandboxMountsEffect(
-      cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir,
+      cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir, pitConfig,
     );
   });
 
@@ -185,7 +205,7 @@ export const bwrapLaunch = (
   const roArgs = mounts.ro.flatMap(m =>
     [m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path],
   );
-  const rwArgs = mounts.rw.flatMap(m => ["--bind", m.path, m.path]);
+  const rwArgs = mounts.rw.flatMap(m => [m.optional ? "--bind-try" : "--bind", m.path, m.path]);
   const overlayArgs = (mounts.overlay ?? []).flatMap(m => {
     mkdirSync(m.dest, { recursive: true });
     return ["--overlay-src", m.src, "--tmp-overlay", m.dest];
@@ -233,6 +253,122 @@ export const bwrapLaunch = (
   process.exit(result.status ?? 1);
 };
 
+// ── macOS sandbox-exec launch ─────────────────────────────────────────────────────
+
+// Known agentDir subdirs pi creates at runtime (tools, sessions etc).
+// Pre-created so they exist before mirroring and get symlinks, not fresh dirs.
+const AGENT_KNOWN_SUBDIRS = ["sessions", "bin", "themes", "prompts", "git"] as const;
+
+/**
+ * Create a symlink mirror of agentDirReal at mirrorDir for macOS dir remap.
+ * - Each entry in agentDirReal is symlinked into mirrorDir.
+ * - settings.json is hardlinked to settingsPath (same inode): writes from
+ *   inside the sandbox propagate to settingsPath, which pit-escape reads
+ *   for /reload.
+ * - Known subdirs are pre-created in agentDirReal so they get symlinks,
+ *   not fresh dirs that would be lost when the mirror is deleted on exit.
+ */
+const createSymlinkMirror = (
+  agentDirReal: string,
+  mirrorDir: string,
+  settingsPath: string,
+): void => {
+  for (const sub of AGENT_KNOWN_SUBDIRS) {
+    mkdirSync(join(agentDirReal, sub), { recursive: true });
+  }
+  for (const entry of readdirSync(agentDirReal)) {
+    symlinkSync(join(agentDirReal, entry), join(mirrorDir, entry));
+  }
+  // Hardlink overrides the settings.json symlink: same inode as settingsPath.
+  const link = join(mirrorDir, "settings.json");
+  try { unlinkSync(link); } catch { /* not present */ }
+  linkSync(settingsPath, link);
+};
+
+/**
+ * Spawn the sandboxed pi session via macOS sandbox-exec.
+ * Uses spawn (async) so SIGTERM/SIGINT can be forwarded to the child.
+ * Note: SIGKILL of pit orphans the child — accepted risk, same as ASRT.
+ * Effectively never returns (calls process.exit on child exit).
+ */
+export const sbplLaunch = (
+  cwd: string,
+  piArgs: Readonly<string[]>,
+  mounts: Readonly<SandboxMounts>,
+  pitConfig: Readonly<PitConfig>,
+  settingsPath?: string,
+  escapeToken?: string,
+): Promise<never> => {
+  const nodeBin = process.execPath;
+  const nodeDir = dirname(dirname(nodeBin));
+  const scriptPath = process.argv[1]!;
+  const pitInnerScript = resolve(dirname(scriptPath), "src", "inner.ts");
+
+  // Set up symlink mirror for dir remap
+  let mirrorDir: string | undefined;
+  let effectiveMounts: SandboxMounts = { ...mounts };
+  let mirrorEnv: Record<string, string> = {};
+
+  if (settingsPath) {
+    mirrorDir = mkdtempSync("/private/tmp/pit-agent-");
+    const agentDirReal = realpathSync(AGENT_DIR);
+    createSymlinkMirror(agentDirReal, mirrorDir, settingsPath);
+    effectiveMounts = {
+      ...mounts,
+      rw: [...mounts.rw, { path: mirrorDir, label: "Pi config dir (mirror)" }],
+    };
+    mirrorEnv = { PI_CODING_AGENT_DIR: mirrorDir };
+  }
+
+  // Resolve rw paths to real (symlink-free) paths — SBPL matches on real paths.
+  const resolvedMounts: SandboxMounts = {
+    ...effectiveMounts,
+    rw: effectiveMounts.rw.map(m => {
+      try { return { ...m, path: realpathSync(m.path) }; }
+      catch { return m; } // path doesn't exist yet, use as-is
+    }),
+  };
+
+  const profile = buildSbplProfile(resolvedMounts);
+  const env = {
+    ...buildSealedEnv(pitConfig, process.env as Record<string, string | undefined>, nodeDir),
+    ...(escapeToken ? { PIT_ESCAPE_TOKEN: escapeToken } : {}),
+    ...mirrorEnv,
+  };
+
+  const cleanup = () => {
+    if (settingsPath) try { unlinkSync(settingsPath); } catch { /* gone */ }
+    if (mirrorDir) try { rmSync(mirrorDir, { recursive: true, force: true }); } catch { /* gone */ }
+  };
+  process.on("exit", cleanup);
+
+  const child = spawn(
+    "/usr/bin/sandbox-exec",
+    ["-p", profile, "--", nodeBin, "--experimental-strip-types", pitInnerScript, ...piArgs],
+    { stdio: "inherit", env, cwd },
+  );
+
+  const sigterm = () => { try { child.kill("SIGTERM"); } catch { /* gone */ } };
+  const sigint  = () => { try { child.kill("SIGINT");  } catch { /* gone */ } };
+  process.on("SIGTERM", sigterm);
+  process.on("SIGINT",  sigint);
+
+  return new Promise<never>((_, reject) => {
+    child.on("error", (err) => {
+      process.off("SIGTERM", sigterm);
+      process.off("SIGINT",  sigint);
+      cleanup();
+      reject(err);
+    });
+    child.on("exit", (code) => {
+      process.off("SIGTERM", sigterm);
+      process.off("SIGINT",  sigint);
+      cleanup();
+      process.exit(code ?? 1);
+    });
+  });
+};
+
 export const launchEffect = (
   cwd: string,
   piArgs: string[],
@@ -244,21 +380,32 @@ export const launchEffect = (
 ): Effect.Effect<void, never, NodeContext> =>
   Effect.gen(function* () {
     if (sandbox) {
-      const bwrap = findBwrap();
-      if (bwrap) {
+      const tool = findSandboxTool();
+      if (tool?.kind === "sandbox-exec") {
         const m = mounts ?? (yield* buildSandboxMountsEffect(
-          cwd,
-          AGENT_DIR,
-          realpathSync(AGENT_DIR),
-          getExtensionMounts(),
-          dirname(dirname(process.execPath)),
+          cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(),
+          dirname(dirname(process.execPath)), pitConfig,
+        ));
+        // sbplLaunch exits the process; promise never resolves
+        yield* Effect.promise(() =>
+          sbplLaunch(cwd, piArgs, m, pitConfig ?? {}, settingsPath, escapeHandle?.token)
+        );
+        return;
+      }
+      if (tool?.kind === "bwrap") {
+        const m = mounts ?? (yield* buildSandboxMountsEffect(
+          cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(),
+          dirname(dirname(process.execPath)), pitConfig,
         ));
         bwrapLaunch(cwd, piArgs, m, pitConfig ?? {}, settingsPath, escapeHandle?.token); // never returns
       }
-      yield* Effect.logWarning("pit: bwrap not found — running without sandbox");
+      yield* Effect.logWarning(
+        process.platform === "darwin"
+          ? "pit: sandbox-exec not found — running without sandbox"
+          : "pit: bwrap not found — running without sandbox",
+      );
     }
-    // Non-sandbox: pass the same factories so extension behaviour is consistent
-    // whether bwrap is available or not.
+    // Non-sandbox: pass the same factories so extension behaviour is consistent.
     const socketPath = escapeHandle?.socketPath ?? "";
     const token = escapeHandle?.token ?? "";
     process.chdir(cwd);

@@ -14,7 +14,8 @@ Errors propagate to callers — display happens at `pit.ts` (CLI boundary).
 |---|---|
 | `constants.ts` | `HOME`, `AGENT_DIR`, `PIT_DIR` — resolved once at startup |
 | `git/utils.ts` | filesystem + subprocess git utilities |
-| `sandbox/pure.ts` | bwrap mount spec builder (pure) |
+| `sandbox/pure.ts` | mount spec builder; `formatSandboxNote`; `buildSealedEnv` (pure) |
+| `sandbox/sbpl.ts` | macOS SBPL profile builder for sandbox-exec (pure) |
 | `sandbox/io.ts` | pit config read, settings filtering |
 | `session/pure.ts` | session JSONL content builders (pure) |
 | `session/io.ts` | session file read/write |

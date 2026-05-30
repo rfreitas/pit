@@ -39,22 +39,20 @@ export type ParsedBranchStatus = {
  */
 export const parseNumstat = (
   stdout: string,
-): { insertions: number; deletions: number; binaryFiles: number } => {
-  let insertions = 0;
-  let deletions = 0;
-  let binaryFiles = 0;
-  for (const line of stdout.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    if (line.startsWith("-\t-\t")) {
-      binaryFiles++;
-    } else {
+): { insertions: number; deletions: number; binaryFiles: number } =>
+  stdout.split(/\r?\n/).reduce(
+    (acc, line) => {
+      if (!line.trim()) return acc;
+      if (line.startsWith("-\t-\t")) return { ...acc, binaryFiles: acc.binaryFiles + 1 };
       const parts = line.split("\t");
-      insertions += parseInt(parts[0], 10) || 0;
-      deletions += parseInt(parts[1], 10) || 0;
-    }
-  }
-  return { insertions, deletions, binaryFiles };
-};
+      return {
+        ...acc,
+        insertions: acc.insertions + (parseInt(parts[0], 10) || 0),
+        deletions:  acc.deletions  + (parseInt(parts[1], 10) || 0),
+      };
+    },
+    { insertions: 0, deletions: 0, binaryFiles: 0 },
+  );
 
 // ── formatBranchStatus ────────────────────────────────────────────────────────
 
@@ -93,7 +91,7 @@ const formatDirtySegment = (
  * Exported for testing.
  */
 export const formatBranchStatus = (
-  s: ParsedBranchStatus,
+  s: Readonly<ParsedBranchStatus>,
 ): string | undefined => {
   const hasDirty =
     s.stagedInsertions > 0 || s.stagedDeletions > 0 ||
@@ -102,43 +100,39 @@ export const formatBranchStatus = (
   // Detached HEAD or no parent branch — hide when clean
   if (s.detachedHead || !s.parentBranch) {
     if (!hasDirty) return undefined;
-    const parts: string[] = [];
-    if (s.stagedInsertions > 0 || s.stagedDeletions > 0)
-      parts.push(formatDirtySegment("staged", s.stagedInsertions, s.stagedDeletions));
-    if (s.unstagedInsertions > 0 || s.unstagedDeletions > 0)
-      parts.push(formatDirtySegment("unstaged", s.unstagedInsertions, s.unstagedDeletions));
-    parts.push(s.detachedHead ? "detached HEAD" : "no parent branch");
-    return parts.join(DOT);
+    return [
+      s.stagedInsertions > 0 || s.stagedDeletions > 0
+        ? formatDirtySegment("staged", s.stagedInsertions, s.stagedDeletions)
+        : null,
+      s.unstagedInsertions > 0 || s.unstagedDeletions > 0
+        ? formatDirtySegment("unstaged", s.unstagedInsertions, s.unstagedDeletions)
+        : null,
+      s.detachedHead ? "detached HEAD" : "no parent branch",
+    ].filter((x): x is string => x !== null).join(DOT);
   }
 
-  const segments: string[] = [];
-
-  if (s.mergeInProgress) segments.push("merge in progress");
-
-  // Ahead/behind
-  const aheadNoun = s.aheadCount === 1 ? "commit" : "commits";
+  const aheadNoun  = s.aheadCount  === 1 ? "commit" : "commits";
   const behindNoun = s.behindCount === 1 ? "commit" : "commits";
 
-  if (s.aheadCount === 0 && s.behindCount === 0) {
-    segments.push(`in sync with ${s.parentBranch}`);
-  } else if (s.aheadCount > 0 && s.behindCount === 0) {
-    segments.push(
-      `${s.aheadCount} ${aheadNoun} (${formatAheadLoc(s.aheadInsertions, s.aheadDeletions, s.aheadBinaryFiles)}) ahead of ${s.parentBranch}`,
-    );
-  } else if (s.aheadCount === 0 && s.behindCount > 0) {
-    segments.push(`${s.behindCount} ${behindNoun} behind ${s.parentBranch}`);
-  } else {
-    segments.push(
-      `${s.aheadCount} ${aheadNoun} (${formatAheadLoc(s.aheadInsertions, s.aheadDeletions, s.aheadBinaryFiles)}) ahead of ${s.parentBranch}, ${s.behindCount} behind`,
-    );
-  }
+  const syncSegment =
+    s.aheadCount === 0 && s.behindCount === 0
+      ? `in sync with ${s.parentBranch}`
+      : s.aheadCount > 0 && s.behindCount === 0
+        ? `${s.aheadCount} ${aheadNoun} (${formatAheadLoc(s.aheadInsertions, s.aheadDeletions, s.aheadBinaryFiles)}) ahead of ${s.parentBranch}`
+        : s.aheadCount === 0
+          ? `${s.behindCount} ${behindNoun} behind ${s.parentBranch}`
+          : `${s.aheadCount} ${aheadNoun} (${formatAheadLoc(s.aheadInsertions, s.aheadDeletions, s.aheadBinaryFiles)}) ahead of ${s.parentBranch}, ${s.behindCount} behind`;
 
-  if (s.stagedInsertions > 0 || s.stagedDeletions > 0)
-    segments.push(formatDirtySegment("staged", s.stagedInsertions, s.stagedDeletions));
-  if (s.unstagedInsertions > 0 || s.unstagedDeletions > 0)
-    segments.push(formatDirtySegment("unstaged", s.unstagedInsertions, s.unstagedDeletions));
-
-  return segments.join(DOT);
+  return [
+    s.mergeInProgress ? "merge in progress" : null,
+    syncSegment,
+    s.stagedInsertions > 0 || s.stagedDeletions > 0
+      ? formatDirtySegment("staged", s.stagedInsertions, s.stagedDeletions)
+      : null,
+    s.unstagedInsertions > 0 || s.unstagedDeletions > 0
+      ? formatDirtySegment("unstaged", s.unstagedInsertions, s.unstagedDeletions)
+      : null,
+  ].filter((x): x is string => x !== null).join(DOT);
 };
 
 // ── extension factory ─────────────────────────────────────────────────────────

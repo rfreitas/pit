@@ -43,7 +43,14 @@ Picking a session reopens Pi in the correct worktree directory and refreshes the
 
 ## Sandbox
 
-pit wraps Pi in an OS-level sandbox so the agent can only access what it needs. Active by default; pass `--no-sandbox` to disable. On Linux the backend is [`bwrap`](https://github.com/containers/bubblewrap) (Bubblewrap) — if not installed, pit warns and runs without a sandbox.
+pit wraps Pi in an OS-level sandbox so the agent can only access what it needs. Active by default; pass `--no-sandbox` to disable.
+
+| Platform | Backend | Model |
+|---|---|---|
+| Linux | [`bwrap`](https://github.com/containers/bubblewrap) (Bubblewrap) | Closed filesystem — reads and writes to unlisted paths are blocked |
+| macOS | `sandbox-exec` (Seatbelt) | Write-closed filesystem — writes outside the allowlist are blocked; reads are globally open except for a default credential denylist |
+
+If the sandbox backend is not available, pit warns and runs without a sandbox.
 
 The sandbox features below use implementation-neutral names. Each has a platform-specific mechanism.
 
@@ -63,7 +70,9 @@ The sandbox features below use implementation-neutral names. Each has a platform
 
 ### Closed filesystem
 
-Nothing is accessible unless explicitly granted via a read or write grant. Anything outside the grant lists — home directory contents, other projects, shell credentials, system state — is inaccessible.
+On **Linux**: nothing is accessible unless explicitly granted via a read or write grant. Anything outside the grant lists — home directory contents, other projects, shell credentials, system state — is inaccessible.
+
+On **macOS**: writes outside the grant list are blocked. Reads are globally open except for a default credential denylist (`~/.ssh`, `~/.aws`, `~/.gnupg`, and similar). The denylist is user-extensible via `sandbox.denyRead` in [config](#config).
 
 ### Read grants
 
@@ -122,6 +131,9 @@ The agent process starts with a clean environment. Variables forwarded by defaul
 |---|---|---|
 | `denyPackages` | `string[]` | Package sources to strip from settings inside the sandbox — see [Package filtering](#package-filtering) |
 | `allowEnv` | `string[]` | Extra env var names to forward into the sandbox — see [Env seal](#env-seal) |
+| `sandbox.allowRead` | `string[]` | Linux: adds paths to the read allowlist. macOS: removes paths from the read denylist (grant read access to a path that would otherwise be denied). |
+| `sandbox.denyRead` | `string[]` | macOS only: adds paths to the read denylist beyond the defaults. No effect on Linux. |
+| `sandbox.allowWrite` | `string[]` | Both platforms: adds paths the agent may write to. |
 
 ---
 

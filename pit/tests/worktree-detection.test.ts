@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 function makeTmpDir(prefix: string): string {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   tmpDirs.push(d);
   return d;
 }
