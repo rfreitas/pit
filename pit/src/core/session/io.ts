@@ -4,6 +4,7 @@
  */
 
 import { join } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import * as Effect from "effect/Effect";
 import { FileSystem } from "@effect/platform/FileSystem";
@@ -147,6 +148,36 @@ export const scanSessionsByRepo = async (
  * from freshBranch. Returns true if a rewrite was performed.
  * Safe to call before pi starts — no concurrent writer at that point.
  */
+export const refreshPitBranchIfStaleSync = (sessionFile: string, freshBranch: string): boolean => {
+  try {
+    const content = readFileSync(sessionFile, "utf8");
+    const lines = content.split("\n");
+    const updated = lines.map((l: string) => {
+      if (!l || !l.trim()) return l;
+      try {
+        const e = JSON.parse(l) as Record<string, unknown>;
+        if (e["type"] === "custom" && e["customType"] === "pit") {
+          const entry = e as { data?: { branch?: string } };
+          if (entry.data?.branch !== freshBranch) {
+            return JSON.stringify({
+              ...e,
+              data: { ...((e.data as object) || {}), branch: freshBranch },
+            });
+          }
+        }
+      } catch { /* skip */ }
+      return l;
+    });
+
+    const updatedContent = updated.join("\n");
+    if (updatedContent !== content) {
+      writeFileSync(sessionFile, updatedContent);
+      return true;
+    }
+  } catch { /* ignore read/write errors */ }
+  return false;
+};
+
 export const refreshPitBranchIfStale = (
   sessionFile: string,
   freshBranch: string,

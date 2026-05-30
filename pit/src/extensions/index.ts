@@ -10,6 +10,8 @@ import { createRenameBranchCommand } from "./commands/rename-branch/index.ts";
 import { createBranchStatus } from "./status/branch-status.ts";
 import { createModeStatus } from "./status/mode.ts";
 
+import { createSyncBranchHook } from "../core/session/sync-branch.ts";
+
 export const createExtensionFactories = (
   socketPath: string,
   token: string,
@@ -17,6 +19,7 @@ export const createExtensionFactories = (
   return [
     createModeStatus(socketPath),
     ...(socketPath ? [
+      createSyncBranchHook(socketPath, token),
       createReloadHook(socketPath, token),
       createGitTool(socketPath, token),
       createMergeCommand(socketPath, token),
