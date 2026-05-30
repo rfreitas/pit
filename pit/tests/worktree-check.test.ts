@@ -38,7 +38,9 @@ function makeGitRepo(): string {
   execFileSync("git", ["-C", repo, "init", "-b", "main", "-q"]);
   execFileSync("git", ["-C", repo, "config", "user.email", "t@t.t"]);
   execFileSync("git", ["-C", repo, "config", "user.name", "t"]);
-  execFileSync("git", ["-C", repo, "commit", "--allow-empty", "-m", "init", "-q"]);
+  fs.writeFileSync(path.join(repo, "dummy.txt"), "hello world");
+  execFileSync("git", ["-C", repo, "add", "dummy.txt"]);
+  execFileSync("git", ["-C", repo, "commit", "-m", "init", "-q"]);
   return repo;
 }
 
@@ -144,5 +146,90 @@ describe("worktreeCheckEffect — new session path (requires real git)", () => {
     tmpDirs.push(result.cwd);
     execFileSync("git", ["-C", repo, "worktree", "remove", result.cwd]);
     execFileSync("git", ["-C", repo, "branch", "-D", result.meta.branch]);
+  });
+});
+
+describe("worktreeCheckEffect — the 5 Row-Item open behaviors", () => {
+  it("Row 1: Active Worktree (Healthy) — Direct Open (No-op)", async () => {
+    const repo = makeGitRepo();
+    const worktree = path.join(path.dirname(repo), path.basename(repo) + "-wt-row1");
+    const branch = "pi/row1";
+
+    execFileSync("git", ["-C", repo, "worktree", "add", "-b", branch, worktree, "HEAD"]);
+    tmpDirs.push(worktree);
+
+    const originalMtime = fs.statSync(path.join(worktree, "dummy.txt")).mtimeMs;
+
+    const result = await run(worktreeCheckEffect({ meta: { repo, branch }, cwd: worktree }));
+
+    expect(result.cwd).toBe(worktree);
+    expect(fs.statSync(path.join(worktree, "dummy.txt")).mtimeMs).toBe(originalMtime); // Verifies no filesystem changes
+  });
+
+  it("Row 2: Missing Worktree (Branch Exists) — Recreates", async () => {
+    const repo = makeGitRepo();
+    const worktree = path.join(path.dirname(repo), path.basename(repo) + "-wt-row2");
+    const branch = "pi/row2";
+
+    execFileSync("git", ["-C", repo, "worktree", "add", "-b", branch, worktree, "HEAD"]);
+    tmpDirs.push(worktree);
+
+    // Physically delete folder, keep branch
+    fs.rmSync(worktree, { recursive: true, force: true });
+    expect(fs.existsSync(worktree)).toBe(false);
+
+    const result = await run(worktreeCheckEffect({ meta: { repo, branch }, cwd: worktree }));
+
+    expect(result.cwd).toBe(worktree);
+    expect(fs.existsSync(worktree)).toBe(true); // Verifies it was automatically recreated
+  });
+
+  it("Row 3: Deleted Branch (Folder Missing) — Throws WorktreeMissingError", async () => {
+    const repo = makeGitRepo();
+    const worktree = path.join(path.dirname(repo), path.basename(repo) + "-wt-row3");
+    const branch = "pi/row3";
+
+    // Deleted branch & folder missing
+    await expect(
+      run(worktreeCheckEffect({ meta: { repo, branch }, cwd: worktree })),
+    ).rejects.toThrow(); // Throws WorktreeMissingError (caught by program.ts to trigger prompt)
+  });
+
+  it("Row 4: Deleted Branch (Folder Exists) — Direct Non-Destructive Open", async () => {
+    const repo = makeGitRepo();
+    const worktree = path.join(path.dirname(repo), path.basename(repo) + "-wt-row4");
+    const branch = "pi/row4";
+
+    execFileSync("git", ["-C", repo, "worktree", "add", "-b", branch, worktree, "HEAD"]);
+    tmpDirs.push(worktree);
+
+    // Break the link (delete .git file) and prune so Git lets us delete the branch
+    fs.unlinkSync(path.join(worktree, ".git"));
+    execFileSync("git", ["-C", repo, "worktree", "prune"]);
+
+    // Now Git will allow us to delete the branch because it is no longer locked as active
+    execFileSync("git", ["-C", repo, "branch", "-D", branch]);
+
+    const result = await run(worktreeCheckEffect({ meta: { repo, branch }, cwd: worktree }));
+
+    expect(result.cwd).toBe(worktree);
+    expect(fs.existsSync(worktree)).toBe(true); // Verifies folder remains untouched
+  });
+
+  it("Row 5: Unregistered Worktree (Folder Exists, Branch Exists) — Direct Non-Destructive Open", async () => {
+    const repo = makeGitRepo();
+    const worktree = path.join(path.dirname(repo), path.basename(repo) + "-wt-row5");
+    const branch = "pi/row5";
+
+    execFileSync("git", ["-C", repo, "worktree", "add", "-b", branch, worktree, "HEAD"]);
+    tmpDirs.push(worktree);
+
+    // Break the link (delete .git), making it unregistered
+    fs.unlinkSync(path.join(worktree, ".git"));
+
+    const result = await run(worktreeCheckEffect({ meta: { repo, branch }, cwd: worktree }));
+
+    expect(result.cwd).toBe(worktree);
+    expect(fs.existsSync(worktree)).toBe(true); // Verifies folder remains untouched
   });
 });

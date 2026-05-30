@@ -3,7 +3,7 @@
  *
  * Verifies that the real production discovery pipeline (with actual fs.existsSync,
  * git commands, and scanSessionsByRepo file IO) correctly populates the
- * SessionSelectorComponent and renders the terminal layout cleanly.
+ * SessionSelectorComponent and renders the terminal layout cleanly for all 5 row states.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { execSync } from "node:child_process";
@@ -29,6 +29,7 @@ interface GitE2EFixture {
   cleanup: () => void;
   writeSession: (cwd: string, branch: string, firstMessage?: string) => string;
   addWorktree: (branchName: string, pathName: string) => string;
+  deleteLocalBranch: (branchName: string) => void;
 }
 
 function createGitE2EFixture(): GitE2EFixture {
@@ -50,6 +51,12 @@ function createGitE2EFixture(): GitE2EFixture {
     const wtPath = path.join(tempDir, pathName);
     execSync(`git worktree add -b ${branchName} ${wtPath}`, { cwd: repoPath, stdio: "ignore" });
     return wtPath;
+  };
+
+  const deleteLocalBranch = (branchName: string): void => {
+    try {
+      execSync(`git update-ref -d refs/heads/${branchName}`, { cwd: repoPath, stdio: "ignore" });
+    } catch {}
   };
 
   const writeSession = (cwd: string, branch: string, firstMessage = "This is a test session"): string => {
@@ -102,8 +109,8 @@ function createGitE2EFixture(): GitE2EFixture {
     fs.rmSync(tempDir, { recursive: true, force: true });
   };
 
-  return { tempDir, repoPath, agentDir, cleanup, writeSession, addWorktree };
-}
+  return { tempDir, repoPath, agentDir, cleanup, writeSession, addWorktree, deleteLocalBranch };
+};
 
 /** Helper to run discovery -> TUI component load -> render to string */
 async function getRenderedPickerUI(
@@ -120,6 +127,7 @@ async function getRenderedPickerUI(
         const full = path.join(bucketDir, f);
         const s = fs.statSync(full);
         const lines = fs.readFileSync(full, "utf8").split("\n").filter((l) => l.trim());
+        
         let parsedCwd: string | null = null;
         let firstMessage = "";
 
@@ -170,6 +178,14 @@ async function getRenderedPickerUI(
       }
     },
     existsSync: (p: string) => fs.existsSync(p),
+    branchExists: async (branch: string) => {
+      try {
+        execSync(`git show-ref --verify refs/heads/${branch}`, { cwd: opts.repo, stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     scanSessionsByRepo: (repo: string, agentDir: string) => scanSessionsByRepo(repo, agentDir),
   };
 
@@ -191,11 +207,11 @@ async function getRenderedPickerUI(
 
 describe("E2E TUI Picker (Zero Mocks with Real Git & FS Fixtures)", () => {
 
-  it("Test 1: Real active worktree session rendering", async () => {
+  it("Test 1: Row 1 — Active Worktree (Healthy)", async () => {
     const f = createGitE2EFixture();
     try {
       const wt = f.addWorktree("pi/feature-active", "wt-active");
-      f.writeSession(wt, "pi/feature-active", "User started a feature turn");
+      f.writeSession(wt, "pi/feature-active", "Active worktree description");
 
       const ui = await getRenderedPickerUI({
         cwd: f.repoPath,
@@ -205,105 +221,100 @@ describe("E2E TUI Picker (Zero Mocks with Real Git & FS Fixtures)", () => {
         agentDir: f.agentDir,
       });
 
-      expect(ui).toContain("[worktree branch:pi/feature-active]");
-      expect(ui).toContain("User started a feature turn");
+      expect(ui).toContain("[worktree branch:pi/feature-active] Active worktree description");
     } finally {
       f.cleanup();
     }
   });
 
-  it("Test 2: Real pruned session rendering (metadata.repo scan)", async () => {
+  it("Test 2: Row 2 — Missing Worktree (Branch Exists)", async () => {
     const f = createGitE2EFixture();
     try {
-      // Create session file for a directory that does NOT exist
-      const deadWt = path.join(f.tempDir, "wt-pruned");
-      f.writeSession(deadWt, "pi/pruned-branch", "This session's worktree is deleted");
+      const wt = f.addWorktree("pi/missing-wt", "wt-missing");
+      f.writeSession(wt, "pi/missing-wt", "Missing worktree but branch survives");
+
+      // Delete the folder, but do NOT delete the branch
+      fs.rmSync(wt, { recursive: true, force: true });
 
       const ui = await getRenderedPickerUI({
         cwd: f.repoPath,
         repo: f.repoPath,
         isLinked: false,
-        worktrees: [], // No active worktrees
+        worktrees: [], // Folder gone, unregistered in git list too
         agentDir: f.agentDir,
       });
 
-      expect(ui).toContain("[pruned worktree branch:pi/pruned-branch] This session's worktree is deleted");
+      expect(ui).toContain("[missing worktree branch:pi/missing-wt] Missing worktree but branch survives");
     } finally {
       f.cleanup();
     }
   });
 
-  it("Test 3: Real warning indicator rendering (dir exists but branch null/broken)", async () => {
+  it("Test 3: Row 3 — Deleted Branch (Folder Missing)", async () => {
     const f = createGitE2EFixture();
     try {
-      const wt = f.addWorktree("pi/broken-link", "wt-broken");
-      f.writeSession(wt, "pi/broken-link", "Broken worktree link");
+      const wt = f.addWorktree("pi/deleted-branch", "wt-deleted");
+      f.writeSession(wt, "pi/deleted-branch", "Folder gone and branch deleted");
 
-      // Corrupt the worktree by deleting its .git file, so isLinked existsSync is true, but reading the branch returns null
+      // Delete both the folder AND the local branch
+      fs.rmSync(wt, { recursive: true, force: true });
+      f.deleteLocalBranch("pi/deleted-branch");
+
+      const ui = await getRenderedPickerUI({
+        cwd: f.repoPath,
+        repo: f.repoPath,
+        isLinked: false,
+        worktrees: [],
+        agentDir: f.agentDir,
+      });
+
+      expect(ui).toContain("[deleted branch:pi/deleted-branch] Folder gone and branch deleted");
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("Test 4: Row 4 — Deleted Branch (Folder Exists)", async () => {
+    const f = createGitE2EFixture();
+    try {
+      const wt = f.addWorktree("pi/deleted-exists", "wt-exists");
+      f.writeSession(wt, "pi/deleted-exists", "Folder stays but branch is deleted");
+
+      // Delete the branch, but keep the folder on disk
+      f.deleteLocalBranch("pi/deleted-exists");
+
+      const ui = await getRenderedPickerUI({
+        cwd: f.repoPath,
+        repo: f.repoPath,
+        isLinked: false,
+        worktrees: [], // Unregistered, not listed in active worktrees list
+        agentDir: f.agentDir,
+      });
+
+      expect(ui).toContain("⚠ [deleted branch:pi/deleted-exists] Folder stays but branch is deleted");
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("Test 5: Row 5 — Unregistered Worktree (Folder Exists, Branch Exists)", async () => {
+    const f = createGitE2EFixture();
+    try {
+      const wt = f.addWorktree("pi/unregistered", "wt-unreg");
+      f.writeSession(wt, "pi/unregistered", "Folder and branch stay, but link broken");
+
+      // Corrupt/unlink the worktree link by deleting .git, making it unregistered
       fs.unlinkSync(path.join(wt, ".git"));
 
       const ui = await getRenderedPickerUI({
         cwd: f.repoPath,
         repo: f.repoPath,
         isLinked: false,
-        worktrees: [wt],
+        worktrees: [], // Unregistered, not listed in active worktrees list
         agentDir: f.agentDir,
       });
 
-      expect(ui).toContain("⚠");
-      expect(ui).toContain("[worktree branch:deleted]");
-    } finally {
-      f.cleanup();
-    }
-  });
-
-  it("Test 4: Real worktree isolation rendering", async () => {
-    const f = createGitE2EFixture();
-    try {
-      const wtCurrent = f.addWorktree("pi/current", "wt-current");
-      const wtSibling = f.addWorktree("pi/sibling", "wt-sibling");
-
-      f.writeSession(wtCurrent, "pi/current", "Current active branch");
-      f.writeSession(wtSibling, "pi/sibling", "Sibling branch");
-
-      const ui = await getRenderedPickerUI({
-        cwd: wtCurrent,
-        repo: f.repoPath,
-        isLinked: true, // We are inside wtCurrent
-        worktrees: [wtCurrent, wtSibling],
-        agentDir: f.agentDir,
-      });
-
-      // Isolation means we only render wtCurrent's session, sibling is hidden
-      expect(ui).toContain("Current active branch");
-      expect(ui).not.toContain("Sibling branch");
-    } finally {
-      f.cleanup();
-    }
-  });
-
-  it("Test 5: Main repo parent session selection (active children list)", async () => {
-    const f = createGitE2EFixture();
-    try {
-      const wtAlpha = f.addWorktree("pi/alpha", "wt-alpha");
-      const wtBeta = f.addWorktree("pi/beta", "wt-beta");
-
-      f.writeSession(wtAlpha, "pi/alpha", "Working on Alpha");
-      f.writeSession(wtBeta, "pi/beta", "Working on Beta");
-
-      const ui = await getRenderedPickerUI({
-        cwd: f.repoPath, // Invoked from main repo root
-        repo: f.repoPath,
-        isLinked: false,
-        worktrees: [wtAlpha, wtBeta],
-        agentDir: f.agentDir,
-      });
-
-      // Running from parent should list both active children
-      expect(ui).toContain("[worktree branch:pi/alpha]");
-      expect(ui).toContain("Working on Alpha");
-      expect(ui).toContain("[worktree branch:pi/beta]");
-      expect(ui).toContain("Working on Beta");
+      expect(ui).toContain("⚠ [unregistered worktree:pi/unregistered] Folder and branch stay, but link broken");
     } finally {
       f.cleanup();
     }

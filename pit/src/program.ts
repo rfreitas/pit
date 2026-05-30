@@ -99,6 +99,7 @@ export const discoverSessionsForPicker = async (
     listSessions: (cwd: string) => Promise<readonly PickerSession[]>;
     readWorktreeBranch: (wt: string) => Promise<string | null>;
     existsSync: (p: string) => boolean;
+    branchExists: (branch: string) => Promise<boolean>;
     scanSessionsByRepo: (repo: string, agentDir: string) => Promise<readonly PickerSession[]>;
   }>,
 ): Promise<readonly PickerSession[]> => {
@@ -111,17 +112,13 @@ export const discoverSessionsForPicker = async (
   const mainPaths = opts.repo ? [opts.repo, opts.cwd] : [opts.cwd];
 
   // 1. Sessions from git-known worktree paths
-  const worktreeBranchInfo: Array<[string, string, boolean]> = await Promise.all(
+  const worktreeBranchInfo: Array<[string, string | null]> = await Promise.all(
     opts.worktrees.map(async (wt) => {
       const branch = await deps.readWorktreeBranch(wt);
-      const dirExists = deps.existsSync(wt);
-      // 2.4: warning = dir exists but is no longer a proper linked worktree
-      const warn = dirExists && branch === null;
-      return [wt, branch ?? "deleted", warn] as [string, string, boolean];
+      return [wt, branch] as [string, string | null];
     }),
   );
   const worktreeBranch = new Map(worktreeBranchInfo.map(([wt, b]) => [wt, b]));
-  const worktreeWarn = new Map(worktreeBranchInfo.map(([wt, , w]) => [wt, w]));
 
   const [mainGroups, wtGroups] = await Promise.all([
     Promise.all(
@@ -132,25 +129,44 @@ export const discoverSessionsForPicker = async (
     ),
   ]);
 
-  // Label worktree sessions with branch name + optional warning
-  const label = (branch: string, warn: boolean) =>
-    `${warn ? "⚠ " : ""}[worktree branch:${branch}]`;
-  const marked = opts.worktrees.flatMap((wt, i) =>
-    wtGroups[i].map((s) => {
-      const l = label(worktreeBranch.get(wt)!, worktreeWarn.get(wt) ?? false);
+  // Label worktree sessions dynamically based on disk and branch state
+  const markedPromises = opts.worktrees.flatMap((wt, i) =>
+    wtGroups[i].map(async (s) => {
+      const branch = worktreeBranch.get(wt);
+      const dirExists = deps.existsSync(wt);
+      const hasBranch = branch ? await deps.branchExists(branch) : false;
+
+      let labelText = "";
+      if (dirExists) {
+        if (branch && branch !== "deleted" && hasBranch) {
+          labelText = `[worktree branch:${branch}]`;
+        } else if (branch && branch !== "deleted" && !hasBranch) {
+          labelText = `⚠ [deleted branch:${branch}]`;
+        } else {
+          labelText = `⚠ [deleted branch]`;
+        }
+      } else {
+        if (branch && branch !== "deleted" && hasBranch) {
+          labelText = `[missing worktree branch:${branch}]`;
+        } else {
+          labelText = `[deleted branch:${branch ?? "unknown"}]`;
+        }
+      }
+
       return s.name
-        ? { ...s, name: `${l} ${s.name}` }
-        : { ...s, firstMessage: `${l} ${s.firstMessage}` };
+        ? { ...s, name: `${labelText} ${s.name}` }
+        : { ...s, firstMessage: `${labelText} ${s.firstMessage ?? "(no messages)"}` };
     }),
   );
 
+  const flatMarked = await Promise.all(markedPromises).then((g) => g.flat());
+
   // 2.1: Metadata scan for pruned worktrees — only include sessions whose
   // paths are NOT already known from SessionManager.list() (git worktree list
-  // or main repo). Pruned scan returns minimal objects; we must not overwrite
-  // full SessionManager.list() objects which have id, cwd, messageCount, etc.
+  // or main repo).
   const knownPaths = new Set([
     ...mainGroups.flat().map((s) => s.path),
-    ...marked.map((s) => s.path),
+    ...flatMarked.map((s) => s.path),
   ]);
 
   const prunedSessions = opts.repo
@@ -158,16 +174,35 @@ export const discoverSessionsForPicker = async (
         .filter((s) => !knownPaths.has(s.path))
     : [];
 
-  const markedPruned = prunedSessions.map((s) => {
-    const b = s.branch ?? "unknown";
-    const l = `[pruned worktree branch:${b}]`;
-    return s.name
-      ? { ...s, name: `${l} ${s.name}` }
-      : { ...s, firstMessage: `${l} ${s.firstMessage ?? "(no messages)"}` };
-  });
+  const markedPruned = await Promise.all(
+    prunedSessions.map(async (s) => {
+      const b = s.branch ?? "unknown";
+      const dirExists = s.cwd ? deps.existsSync(s.cwd) : false;
+      const hasBranch = await deps.branchExists(b);
+
+      let labelText = "";
+      if (dirExists) {
+        if (hasBranch) {
+          labelText = `⚠ [unregistered worktree:${b}]`;
+        } else {
+          labelText = `⚠ [deleted branch:${b}]`;
+        }
+      } else {
+        if (hasBranch) {
+          labelText = `[missing worktree branch:${b}]`;
+        } else {
+          labelText = `[deleted branch:${b}]`;
+        }
+      }
+
+      return s.name
+        ? { ...s, name: `${labelText} ${s.name}` }
+        : { ...s, firstMessage: `${labelText} ${s.firstMessage ?? "(no messages)"}` };
+    })
+  );
 
   // Combine without dedup needed — prunedSessions are already filtered to novel paths
-  const combined = [...mainGroups.flat(), ...marked, ...markedPruned];
+  const combined = [...mainGroups.flat(), ...flatMarked, ...markedPruned];
 
   return [...combined]
     .sort((a, b) => b.modified.getTime() - a.modified.getTime());
@@ -266,6 +301,17 @@ export const showPicker = async (
             readWorktreeBranch: (wt) =>
               Effect.runPromise(readWorktreeBranch(wt).pipe(Effect.provide(NodeContextLayer))),
             existsSync,
+            branchExists: (branch) =>
+              Effect.runPromise(
+                Effect.tryPromise({
+                  try: async () => {
+                    const { execSync } = await import("node:child_process");
+                    execSync(`git show-ref --verify refs/heads/${branch}`, { cwd: repo ?? undefined, stdio: "ignore" });
+                    return true;
+                  },
+                  catch: () => false,
+                })
+              ),
             scanSessionsByRepo,
           },
         );

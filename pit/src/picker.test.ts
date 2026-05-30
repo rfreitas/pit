@@ -42,6 +42,7 @@ interface DiscoveryDeps {
   listSessions: (cwd: string) => Promise<PickerSession[]>;
   readWorktreeBranch: (wt: string) => Promise<string | null>;
   existsSync: (p: string) => boolean;
+  branchExists: (branch: string) => Promise<boolean>;
   scanSessionsByRepo: (repo: string, agentDir: string) => Promise<PickerSession[]>;
 }
 
@@ -65,6 +66,7 @@ describe("discoverSessionsForPicker", () => {
       },
       readWorktreeBranch: async (wt) => (wt === wt1 ? "pi/abc123" : null),
       existsSync: () => true,
+      branchExists: async () => true,
       scanSessionsByRepo: async () => [],
     };
 
@@ -91,6 +93,7 @@ describe("discoverSessionsForPicker", () => {
       listSessions: async () => [],
       readWorktreeBranch: async () => null,
       existsSync: () => false,
+      branchExists: async () => true,
       scanSessionsByRepo: async (targetRepo, dir) => {
         const sessionsDir = path.join(dir, "sessions");
         const buckets = fs.readdirSync(sessionsDir);
@@ -139,6 +142,7 @@ describe("discoverSessionsForPicker", () => {
       listSessions: async () => [],
       readWorktreeBranch: async () => null,
       existsSync: () => false,
+      branchExists: async () => true,
       scanSessionsByRepo: async (targetRepo, dir) => {
         const sessionsDir = path.join(dir, "sessions");
         return fs.readdirSync(sessionsDir).flatMap((bucket) => {
@@ -187,6 +191,7 @@ describe("discoverSessionsForPicker", () => {
       },
       readWorktreeBranch: async (wt) => (wt === wt1 ? "pi/abc123" : null),
       existsSync: () => true,
+      branchExists: async () => true,
       scanSessionsByRepo: async () => [{
         path: session1.path,
         modified: session1.modified,
@@ -215,6 +220,7 @@ describe("discoverSessionsForPicker", () => {
       },
       readWorktreeBranch: async () => null, // dir exists but not a proper linked worktree
       existsSync: () => true,
+      branchExists: async () => false,
       scanSessionsByRepo: async () => [],
     };
 
@@ -243,6 +249,7 @@ describe("discoverSessionsForPicker", () => {
       },
       readWorktreeBranch: async () => null,
       existsSync: () => true,
+      branchExists: async () => true,
       scanSessionsByRepo: async () => [],
     };
 

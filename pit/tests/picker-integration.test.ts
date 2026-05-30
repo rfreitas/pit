@@ -51,7 +51,10 @@ async function getRenderedPickerUI(
   opts: any,
   deps: any,
 ): Promise<string> {
-  const sessions = await discoverSessionsForPicker(opts, deps);
+  const sessions = await discoverSessionsForPicker(opts, {
+    branchExists: async () => true,
+    ...deps
+  });
   
   const comp = new SessionSelectorComponent(
     async () => sessions as any,
@@ -156,12 +159,13 @@ describe("Picker TUI integration", () => {
         // Mock git returning null (branch lost) but existsSync returning true
         readWorktreeBranch: async () => null,
         existsSync: () => true,
+        branchExists: async () => false, // deleted branch
         scanSessionsByRepo: async () => [],
       }
     );
 
     expect(ui).toContain("⚠");
-    expect(ui).toContain("[worktree branch:deleted]");
+    expect(ui).toContain("⚠ [deleted branch] Bad WT");
   });
 
   it("Ensures the render contract does NOT crash on undefined name/firstMessage", async () => {
