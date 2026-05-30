@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import type { PitMetadata, SandboxMounts } from "./types.ts";
 import { AGENT_DIR, PIT_DIR } from "./core/constants.ts";
 import { parseFlags } from "./core/worktree/pure.ts";
-import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
+import { worktreeCheckEffect, createFreshWorktreeEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { systemPromptArgs } from "./core/session/pure.ts";
 import { setupNewSession, findOrCreateLinkedSession, refreshPitBranchIfStale, scanSessionsByRepo } from "./core/session/io.ts";
 import { readPitConfig, createTempSettingsFileEffect } from "./core/sandbox/io.ts";
@@ -181,6 +181,41 @@ const SESSION_FLAGS = new Set([
 export const unlinkSilent = (p: string): Effect.Effect<void, never, never> =>
   Effect.sync(() => { try { unlinkSync(p); } catch { /* already gone */ } });
 
+// ── tui prompts ───────────────────────────────────────────────────────────────
+
+export const showBranchDeletedPrompt = async (
+  branch: string,
+): Promise<boolean> => {
+  const { TUI, ProcessTerminal } = await import("@earendil-works/pi-tui");
+  const { ExtensionSelectorComponent, initTheme } = await import("@earendil-works/pi-coding-agent");
+  initTheme();
+
+  return new Promise<boolean>((resolve) => {
+    const terminal = new ProcessTerminal();
+    const tui = new TUI(terminal, true);
+
+    const title = `Branch ${branch} no longer exists. Create a fresh branch off main?`;
+    const options = ["Yes", "No"];
+
+    const selector = new ExtensionSelectorComponent(
+      title,
+      options,
+      (selected) => {
+        tui.stop();
+        resolve(selected === "Yes");
+      },
+      () => {
+        tui.stop();
+        resolve(false);
+      }
+    );
+
+    tui.start();
+    tui.addChild(selector);
+    tui.setFocus(selector);
+  });
+};
+
 // ── resume via session picker ─────────────────────────────────────────────────
 
 export const showPicker = async (
@@ -303,7 +338,19 @@ export const program = Effect.gen(function* () {
       }
     }
 
-    const result = yield* worktreeCheckEffect({ meta: picked.meta, cwd: picked.sessionCwd });
+    const result = yield* worktreeCheckEffect({ meta: picked.meta, cwd: picked.sessionCwd }).pipe(
+      Effect.catchTag("WorktreeMissingError", (e) =>
+        Effect.gen(function* () {
+          const createFresh = yield* Effect.promise(() => showBranchDeletedPrompt(e.branch));
+          if (!createFresh) {
+            yield* Effect.logInfo("pit: aborted by user");
+            process.exit(0);
+          }
+          yield* createFreshWorktreeEffect({ repo: picked.meta.repo, branch: e.branch, worktree: picked.sessionCwd });
+          return { cwd: picked.sessionCwd, meta: picked.meta };
+        })
+      )
+    );
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
     const escape = yield* applyEscapeEffect(result.cwd, picked.sessionUUID, settingsPath);

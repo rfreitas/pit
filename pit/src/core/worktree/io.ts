@@ -40,6 +40,35 @@ export const createWorktreeEffect = ({
     );
   });
 
+export const createFreshWorktreeEffect = ({
+  repo,
+  branch,
+  worktree,
+}: Readonly<{
+  repo: string;
+  branch: string;
+  worktree: string;
+}>): Effect.Effect<void, WorktreeCreationError, CommandExecutor> =>
+  Effect.gen(function* () {
+    yield* Effect.logInfo("pit: creating fresh worktree");
+    yield* Effect.logInfo(`  branch:   ${branch}`);
+    yield* Effect.logInfo(`  worktree: ${worktree}`);
+    // Create off the main repo's HEAD
+    yield* commandExitCode(
+      makeCommand("git", "-C", repo, "worktree", "add", "-b", branch, worktree, "HEAD"),
+    ).pipe(
+      Effect.flatMap((code) =>
+        code === 0
+          ? Effect.void
+          : Effect.fail(new WorktreeCreationError({ message: `git worktree add exited ${code}` })),
+      ),
+      Effect.catchTag("WorktreeCreationError", (e) => Effect.fail(e)),
+      Effect.catchAll((e) =>
+        Effect.fail(new WorktreeCreationError({ message: String(e) })),
+      ),
+    );
+  });
+
 export const recreateWorktreeEffect = ({
   repo,
   branch,
