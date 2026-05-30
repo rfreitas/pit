@@ -50,6 +50,61 @@ export const findPitSession = (
     catch: () => null as never,
   });
 
+// ── metadata scan for pruned worktrees (picker 2.1) ────────────────────────────
+
+/**
+ * Scan all session buckets and return sessions whose pit metadata.repo
+ * matches the given repo. Used by the picker to discover pruned worktrees
+ * that no longer appear in `git worktree list`.
+ *
+ * Returns basic SessionInfo (path + modified) for each matching session.
+ * The caller (discoverSessionsForPicker) applies labels and deduplicates.
+ */
+export const scanSessionsByRepo = async (
+  repo: string,
+  agentDir: string,
+): Promise<Array<{ path: string; modified: Date }>> => {
+  const sessionsDir = join(agentDir, "sessions");
+  const found: Array<{ path: string; modified: Date }> = [];
+
+  let buckets: string[] = [];
+  try { buckets = await (await import("node:fs/promises")).readdir(sessionsDir); } catch { return []; }
+
+  for (const bucket of buckets) {
+    const bucketDir = join(sessionsDir, bucket);
+    let files: string[] = [];
+    try { files = await (await import("node:fs/promises")).readdir(bucketDir); } catch { continue; }
+
+    const jsonlFiles = files
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => ({ name: f, stat: (() => { try { return require("node:fs").statSync(join(bucketDir, f)); } catch { return null; } })() }))
+      .filter((x): x is { name: string; stat: import("node:fs").Stats } => x.stat !== null)
+      .sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
+
+    if (!jsonlFiles.length) continue;
+    const mostRecent = join(bucketDir, jsonlFiles[0]!.name);
+
+    try {
+      const { readFileSync } = require("node:fs");
+      const lines = readFileSync(mostRecent, "utf8").split("\n");
+      const pitLine = lines.find((l: string) => {
+        if (!l.trim()) return false;
+        try {
+          const e = JSON.parse(l) as Record<string, unknown>;
+          return e["type"] === "custom" && e["customType"] === "pit";
+        } catch { return false; }
+      });
+      if (!pitLine) continue;
+      const entry = JSON.parse(pitLine) as { data?: { repo?: string } };
+      if (entry.data?.repo === repo) {
+        found.push({ path: mostRecent, modified: jsonlFiles[0]!.stat.mtime });
+      }
+    } catch { /* skip corrupt */ }
+  }
+
+  return found;
+};
+
 // ── cache refresh ───────────────────────────────────────────────────────────────
 
 /**

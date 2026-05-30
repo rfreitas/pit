@@ -19,7 +19,7 @@ import { AGENT_DIR, PIT_DIR } from "./core/constants.ts";
 import { parseFlags } from "./core/worktree/pure.ts";
 import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { systemPromptArgs } from "./core/session/pure.ts";
-import { setupNewSession, findOrCreateLinkedSession, refreshPitBranchIfStale } from "./core/session/io.ts";
+import { setupNewSession, findOrCreateLinkedSession, refreshPitBranchIfStale, scanSessionsByRepo } from "./core/session/io.ts";
 import { readPitConfig, createTempSettingsFileEffect } from "./core/sandbox/io.ts";
 import {
   isLinkedWorktree,
@@ -54,6 +54,99 @@ const applyEscapeEffect = (
     if (Option.isSome(opt)) setPitEscapeSocket(opt.value.socketPath);
     return Option.getOrUndefined(opt);
   });
+
+// ── picker discovery (extracted for testability) ──────────────────────────
+
+// SessionManager.list return type is opaque from this module; we only need
+// path/name/firstMessage/modified, so we use any for the element type.
+type SessionItem = any;
+
+/**
+ * Discover sessions for the picker by combining live git worktree data
+ * with a metadata scan for pruned worktrees.
+ *
+ * When isLinked=true, returns ONLY sessions for the current cwd (worktree
+ * isolation — Fix 2.3).
+ *
+ * Otherwise:
+ *   1. Query sessions for each known worktree path (from git worktree list).
+ *   2. Scan all session files for any whose meta.repo matches the current repo
+ *      but whose cwd is NOT in the git worktree list (pruned worktrees).
+ *   3. Deduplicate by session path.
+ *   4. Label worktree sessions with live branch name; add ⚠ when the dir
+ *      exists but readWorktreeBranch returns null (Fix 2.4).
+ */
+export const discoverSessionsForPicker = async (
+  opts: Readonly<{
+    cwd: string;
+    repo: string | null;
+    isLinked: boolean;
+    worktrees: readonly string[];
+    agentDir: string;
+  }>,
+  deps: Readonly<{
+    listSessions: (cwd: string) => Promise<readonly SessionItem[]>;
+    readWorktreeBranch: (wt: string) => Promise<string | null>;
+    existsSync: (p: string) => boolean;
+    scanSessionsByRepo: (repo: string, agentDir: string) => Promise<readonly SessionItem[]>;
+  }>,
+): Promise<readonly SessionItem[]> => {
+  // 2.3: Worktree isolation — when inside a linked worktree, only show
+  // sessions for THIS worktree, not siblings or the parent repo.
+  if (opts.isLinked) {
+    return deps.listSessions(opts.cwd).catch(() => []);
+  }
+
+  const mainPaths = opts.repo ? [opts.repo, opts.cwd] : [opts.cwd];
+
+  // 1. Sessions from git-known worktree paths
+  const worktreeBranchInfo: Array<[string, string, boolean]> = await Promise.all(
+    opts.worktrees.map(async (wt) => {
+      const branch = await deps.readWorktreeBranch(wt);
+      const dirExists = deps.existsSync(wt);
+      // 2.4: warning = dir exists but is no longer a proper linked worktree
+      const warn = dirExists && branch === null;
+      return [wt, branch ?? "deleted", warn] as [string, string, boolean];
+    }),
+  );
+  const worktreeBranch = new Map(worktreeBranchInfo.map(([wt, b]) => [wt, b]));
+  const worktreeWarn = new Map(worktreeBranchInfo.map(([wt, , w]) => [wt, w]));
+
+  const [mainGroups, wtGroups] = await Promise.all([
+    Promise.all(
+      mainPaths.map((p) => deps.listSessions(p).catch(() => [] as SessionItem[])),
+    ),
+    Promise.all(
+      opts.worktrees.map((wt) => deps.listSessions(wt).catch(() => [] as SessionItem[])),
+    ),
+  ]);
+
+  // Label worktree sessions with branch name + optional warning
+  const label = (branch: string, warn: boolean) =>
+    `${warn ? "⚠ " : ""}[worktree branch:${branch}]`;
+  const marked = opts.worktrees.flatMap((wt, i) =>
+    wtGroups[i].map((s) => {
+      const l = label(worktreeBranch.get(wt)!, worktreeWarn.get(wt) ?? false);
+      return s.name
+        ? { ...s, name: `${l} ${s.name}` }
+        : { ...s, firstMessage: `${l} ${s.firstMessage}` };
+    }),
+  );
+
+  // 2.1: Metadata scan for pruned worktrees
+  const prunedSessions = opts.repo
+    ? await deps.scanSessionsByRepo(opts.repo, opts.agentDir).catch(() => [] as SessionItem[])
+    : [];
+
+  // Deduplicate by path, preferring labeled results over pruned scan results
+  const deduped = [...mainGroups.flat(), ...marked, ...prunedSessions].reduce<Record<string, SessionItem>>(
+    (acc, s) => ({ ...acc, [s.path]: s }),
+    {},
+  );
+
+  return Object.values(deduped)
+    .sort((a, b) => b.modified.getTime() - a.modified.getTime());
+};
 
 // ── constants ─────────────────────────────────────────────────────────────
 
@@ -91,12 +184,6 @@ export const showPicker = async (
         const rawRepo = await Effect.runPromise(gitRepoRoot().pipe(Effect.provide(NodeContextLayer)));
         const isLinked = await Effect.runPromise(isLinkedWorktree(cwd).pipe(Effect.provide(NodeContextLayer)));
 
-        // 2.3: When running from inside a worktree, only show sessions for
-        // this worktree — not siblings or the parent repo.
-        if (isLinked) {
-          return SessionManager.list(cwd, undefined, progress).catch(() => []);
-        }
-
         const mainRepo = isLinked
           ? await Effect.runPromise(resolveMainRepo(cwd).pipe(Effect.provide(NodeContextLayer)))
           : null;
@@ -111,57 +198,17 @@ export const showPicker = async (
             )
           : [];
 
-        // Read live branch for each worktree; detect the warning case
-        // (dir exists but is not a proper linked worktree) vs simply deleted.
         const { existsSync } = await import("node:fs");
-        const worktreeEntries: Array<[string, string, boolean]> = await Promise.all(
-          worktrees.map(async (wt) => {
-            const branch = await Effect.runPromise(
-              readWorktreeBranch(wt).pipe(
-                Effect.map((b) => b ?? null),
-                Effect.provide(NodeContextLayer),
-              ),
-            );
-            // 3.4: warning = dir exists but isLinkedWorktree returned false
-            const dirExists = existsSync(wt);
-            const warn = dirExists && branch === null;
-            return [wt, branch ?? "deleted", warn] as [string, string, boolean];
-          }),
+        return discoverSessionsForPicker(
+          { cwd, repo, isLinked, worktrees, agentDir: AGENT_DIR },
+          {
+            listSessions: (p) => SessionManager.list(p, undefined, progress).catch(() => []),
+            readWorktreeBranch: (wt) =>
+              Effect.runPromise(readWorktreeBranch(wt).pipe(Effect.provide(NodeContextLayer))),
+            existsSync,
+            scanSessionsByRepo,
+          },
         );
-        const worktreeBranch = new Map(worktreeEntries.map(([wt, b]) => [wt, b]));
-        const worktreeWarn  = new Map(worktreeEntries.map(([wt,, w]) => [wt, w]));
-
-        const mainPaths = new Set([
-          ...(repo ? [repo] : []),
-          ...(isLinked ? [] : [cwd]),
-        ]);
-
-        const [mainGroups, wtGroups] = await Promise.all([
-          Promise.all(
-            [...mainPaths].map((p) =>
-              SessionManager.list(p, undefined, progress).catch(() => [] as Awaited<ReturnType<typeof SessionManager.list>>),
-            ),
-          ),
-          Promise.all(
-            worktrees.map((wt) =>
-              SessionManager.list(wt, undefined, progress).catch(() => [] as Awaited<ReturnType<typeof SessionManager.list>>),
-            ),
-          ),
-        ]);
-
-        const label = (branch: string, warn: boolean) =>
-          `${warn ? "⚠ " : ""}[worktree branch:${branch}]`;
-        const marked = worktrees.flatMap((wt, i) =>
-          wtGroups[i].map((s) => {
-            const l = label(worktreeBranch.get(wt)!, worktreeWarn.get(wt) ?? false);
-            return s.name
-              ? { ...s, name: `${l} ${s.name}` }
-              : { ...s, firstMessage: `${l} ${s.firstMessage}` };
-          }),
-        );
-
-        return [...new Map([...mainGroups.flat(), ...marked].map(s => [s.path, s])).values()]
-          .sort((a, b) => b.modified.getTime() - a.modified.getTime());
       },
       (progress) => SessionManager.listAll(progress),
       (sessionPath) => { tui.stop(); resolve(sessionPath); },

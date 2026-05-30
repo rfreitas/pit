@@ -174,13 +174,32 @@ pass to pi as --append-system-prompt
 
 ---
 
-## Implementation order
+## Implementation status
 
-1. Metadata cleanup (`PitMetadata` → `{ repo, branch }`, backward compat)
-2. Fix session open CWD (always use `sm.getCwd()`, fix sandbox dir)
-3. Picker changes (2.1 discovery, 2.2 live labels, 2.3 worktree isolation, 2.4 warning)
-4. Branch-deleted TUI prompt (fresh branch off main)
-5. Escape socket → session UUID
-6. System prompt → sandbox only
-7. Mode footer
-8. Branch refresh via escape server ref-change (1.1)
+| # | Item | Status | Files changed | Tests added |
+|---|---|---|---|---|
+| 1 | Metadata cleanup (`PitMetadata` → `{ repo, branch }`) | ✅ Done | `types.ts`, `worktree/pure.ts`, `session/pure.ts`, `session/io.ts`, `worktree/io.ts` | `worktree/pure.test.ts` (old-format compat), `session/pure.test.ts` (sandbox-only system prompt) |
+| 2 | Fix session open CWD | ✅ Done | `program.ts` (showPicker returns sessionUUID, uses sm.getCwd()) | `resume.test.ts` (picker invariants, backward compat) |
+| 2.2 | Picker live labels | ✅ Done | `program.ts` (picker reads live branch via `readWorktreeBranch`) | e2e tests pass; unit tests via `showPicker` closure (integration) |
+| 2.3 | Worktree isolation | ✅ Done | `program.ts` (isLinked → only list(cwd)) | e2e tests (`launching from inside an existing pit worktree`) |
+| 2.4 | Warning icon (⚠) | ✅ Done | `program.ts` (dir exists + branch null → warn prefix) | e2e tests pass |
+| 3 | Escape socket → session UUID | ✅ Done | `program.ts`, `launcher.ts` | `resume.test.ts` (socket name invariant) |
+| 4 | System prompt → sandbox only | ✅ Done | `session/pure.ts` | `session/pure.test.ts` |
+| 5 | Escape server: remove `isLinkedWorktree` gate | ✅ Done | `launcher.ts` | `resume.test.ts` (extension factories length), `inner.test.ts`, `index.test.ts` |
+| 6 | `userManagingSession` regression fix | ✅ Done | `program.ts` (applyEscapeEffect restored) | e2e tests pass |
+| 7 | Cache refresh on resume | ✅ Done | `session/io.ts` (`refreshPitBranchIfStale`), `program.ts` | `session/io.test.ts` (6 tests: no-op, rewrite, file count, non-pit lines preserved, no pit entry) |
+| 8 | Mode footer | ✅ Done | `extensions/status/mode.ts`, `extensions/index.ts` | `mode.test.ts` (8 tests: no-tree, linked worktree, missing branch, sandbox, no sandbox, both keys, registration, live derivation) |
+| 9 | Update test expectations (0→1 factories) | ✅ Done | `index.test.ts`, `inner.test.ts`, `git.test.ts`, `reload.test.ts`, `rename-branch.test.ts` | Updated 7 assertions |
+| — | **2.1 Picker metadata.repo scan** | 🔄 **In progress** | `program.ts` (extract `discoverSessionsForPicker`) | **TDD** |
+| — | Branch-deleted TUI prompt | ❌ Not started | — | — |
+| — | Branch refresh via escape server ref-change | ❌ Not started | — | — |
+
+**Test summary:** 427 passing, 1 skipped, 4 todo. 16 new tests added in this batch across `mode.test.ts`, `io.test.ts`, `resume.test.ts`.
+
+---
+
+## Implementation order (remaining)
+
+1. **2.1 Picker metadata.repo scan** — extract `discoverSessionsForPicker` into a testable function; scan session files whose `meta.repo` matches current repo to discover pruned worktrees; deduplicate with git worktree list results
+2. Branch-deleted TUI prompt (fresh branch off main)
+3. Branch refresh via escape server ref-change (1.1)
