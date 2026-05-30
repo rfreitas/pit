@@ -3,10 +3,10 @@
  * pi status bar on every session start.
  *
  * Examples:
- *   "worktree: pi/80096d01"  +  "sandbox"
- *   "no-tree"                +  "no sandbox"
+ *   "worktree"  +  "sandbox"
+ *   "no-tree"   +  "no sandbox"
  *
- * Mode is derived from live git state (isLinkedWorktree + readWorktreeBranch),
+ * Mode is derived from live git state (isLinkedWorktree),
  * never from stored session metadata. Uses plain node:fs to avoid jiti/Effect
  * runtime issues in extension context.
  */
@@ -28,19 +28,6 @@ const isLinkedWorktreeSync = (cwd: string): boolean => {
   }
 };
 
-const readWorktreeBranchSync = (cwd: string): string | null => {
-  const gitPath = join(cwd, ".git");
-  try {
-    const content = readFileSync(gitPath, "utf8").trim();
-    const gitdir = content.replace(/^gitdir:\s*/, "");
-    const head = readFileSync(join(gitdir, "HEAD"), "utf8").trim();
-    const m = head.match(/^ref:\s*refs\/heads\/(\S+)$/);
-    return m?.[1] ?? null;
-  } catch {
-    return null;
-  }
-};
-
 export const createModeStatus = (
   socketPath: string,
 ): ExtensionFactory => (pi: ExtensionAPI) => {
@@ -48,8 +35,7 @@ export const createModeStatus = (
     const cwd = ctx.cwd;
 
     if (isLinkedWorktreeSync(cwd)) {
-      const branch = readWorktreeBranchSync(cwd);
-      ctx.ui.setStatus("pit-mode", `worktree: ${branch ?? "?"}`);
+      ctx.ui.setStatus("pit-mode", "worktree");
     } else {
       ctx.ui.setStatus("pit-mode", "no-tree");
     }

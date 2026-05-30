@@ -160,7 +160,7 @@ export const discoverSessionsForPicker = async (
   // Combine without dedup needed — prunedSessions are already filtered to novel paths
   const combined = [...mainGroups.flat(), ...marked, ...prunedSessions];
 
-  return combined
+  return [...combined]
     .sort((a, b) => b.modified.getTime() - a.modified.getTime());
 };
 

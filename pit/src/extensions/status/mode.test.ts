@@ -2,7 +2,7 @@
  * Tests for the pit mode footer extension (createModeStatus).
  *
  * The extension reads live git state at session_start and sets two status keys:
- *   "pit-mode"    — "worktree: <branch>" | "no-tree"
+ *   "pit-mode"    — "worktree" | "no-tree"
  *   "pit-sandbox" — "sandbox" | "no sandbox"
  *
  * We mock the ExtensionAPI (just the `on` and `ui.setStatus` surface)
@@ -72,7 +72,7 @@ describe("createModeStatus — pit-mode status key", () => {
     expect(statuses["pit-mode"]).toBe("no-tree");
   });
 
-  it("sets 'worktree: <branch>' for a linked worktree dir", async () => {
+  it("sets 'worktree' for a linked worktree dir", async () => {
     const cwd = makeTmp("wt-");
     const mainRepo = makeTmp("repo-");
     makeLinkedWorktree(cwd, "pi/abc12345", mainRepo);
@@ -80,10 +80,10 @@ describe("createModeStatus — pit-mode status key", () => {
     const { api, statuses, triggerSessionStart } = makeMockApi();
     createModeStatus("")(api);
     await triggerSessionStart(cwd);
-    expect(statuses["pit-mode"]).toBe("worktree: pi/abc12345");
+    expect(statuses["pit-mode"]).toBe("worktree");
   });
 
-  it("sets 'worktree: ?' when branch cannot be read", async () => {
+  it("sets 'worktree' even when branch cannot be read", async () => {
     const cwd = makeTmp("wt-nohead-");
     const mainRepo = makeTmp("repo-");
     // Write .git file but no HEAD in the gitdir
@@ -95,7 +95,7 @@ describe("createModeStatus — pit-mode status key", () => {
     const { api, statuses, triggerSessionStart } = makeMockApi();
     createModeStatus("")(api);
     await triggerSessionStart(cwd);
-    expect(statuses["pit-mode"]).toBe("worktree: ?");
+    expect(statuses["pit-mode"]).toBe("worktree");
   });
 });
 
