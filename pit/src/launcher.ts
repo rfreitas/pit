@@ -14,7 +14,6 @@ import { main } from "@earendil-works/pi-coding-agent";
 import type { PitMetadata, PitConfig, SandboxMounts, OverlayMount } from "./types.ts";
 import { HOME, AGENT_DIR, PIT_DIR } from "./core/constants.ts";
 import {
-  isLinkedWorktree,
   resolveMainRepo,
   resolveWorktreeGitRwMounts,
 } from "./core/git/utils.ts";
@@ -280,11 +279,8 @@ export const startPitEscapeEffect = (
   settingsPath: string,
 ): Effect.Effect<Option.Option<EscapeHandle>, SocketAliveError, NodeContext> =>
   Effect.gen(function* () {
-    const isMain = yield* isLinkedWorktree(worktreeCwd).pipe(
-      Effect.map((linked) => !linked),
-    );
-    if (isMain) return Option.none();
-
+    // Escape server starts whenever sandboxed — individual ops
+    // (merge, subscribe) fail gracefully when cwd is not a linked worktree.
     const socketPath = join(AGENT_DIR, `pit-${sessionId}.sock`);
     const probe = yield* probeSocketEffect(socketPath);
     if (probe === "alive") return yield* Effect.fail(new SocketAliveError({ sessionId }));

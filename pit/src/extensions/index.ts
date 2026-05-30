@@ -8,17 +8,20 @@ import { createGitTool } from "./tools/git.ts";
 import { createMergeCommand } from "./commands/merge/index.ts";
 import { createRenameBranchCommand } from "./commands/rename-branch/index.ts";
 import { createBranchStatus } from "./status/branch-status.ts";
+import { createModeStatus } from "./status/mode.ts";
 
 export const createExtensionFactories = (
   socketPath: string,
   token: string,
 ): ExtensionFactory[] => {
-  if (!socketPath) return [];
   return [
-    createReloadHook(socketPath, token),
-    createGitTool(socketPath, token),
-    createMergeCommand(socketPath, token),
-    createRenameBranchCommand(socketPath, token),
-    createBranchStatus(socketPath, token),
+    createModeStatus(socketPath),
+    ...(socketPath ? [
+      createReloadHook(socketPath, token),
+      createGitTool(socketPath, token),
+      createMergeCommand(socketPath, token),
+      createRenameBranchCommand(socketPath, token),
+      createBranchStatus(socketPath, token),
+    ] : []),
   ];
 };

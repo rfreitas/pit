@@ -40,8 +40,8 @@ describe("createExtensionFactories", () => {
     );
   });
 
-  it("returns empty array when socketPath is empty", () => {
-    expect(createExtensionFactories("", "any-token")).toHaveLength(0);
+  it("returns mode footer only when socketPath is empty", () => {
+    expect(createExtensionFactories("", "any-token")).toHaveLength(1);
   });
 
   it("registers git tool", async () => {

@@ -75,9 +75,10 @@ describe("inner.ts bootstrap", () => {
     expect(mainOpts?.extensionFactories?.length).toBeGreaterThan(0);
   });
 
-  it("calls main() with empty extensionFactories when PIT_ESCAPE_SOCKET is empty", async () => {
+  it("calls main() with mode footer only when PIT_ESCAPE_SOCKET is empty", async () => {
     const { mainOpts } = await run({ PIT_IS_INNER: "1", PIT_ESCAPE_TOKEN: "s" });
-    expect(mainOpts?.extensionFactories).toHaveLength(0);
+    // Mode footer is always registered; escape-based factories require socket.
+    expect(mainOpts?.extensionFactories).toHaveLength(1);
   });
 
   it("sets process.title to 'pi' before main() is called", async () => {

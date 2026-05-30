@@ -13,12 +13,13 @@ import {
   type CustomEntry,
 } from "@earendil-works/pi-coding-agent";
 import { unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { PitMetadata, SandboxMounts } from "./types.ts";
 import { AGENT_DIR, PIT_DIR } from "./core/constants.ts";
 import { parseFlags } from "./core/worktree/pure.ts";
 import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { systemPromptArgs } from "./core/session/pure.ts";
-import { setupNewSession, findOrCreateLinkedSession } from "./core/session/io.ts";
+import { setupNewSession, findOrCreateLinkedSession, refreshPitBranchIfStale } from "./core/session/io.ts";
 import { readPitConfig, createTempSettingsFileEffect } from "./core/sandbox/io.ts";
 import {
   isLinkedWorktree,
@@ -89,6 +90,13 @@ export const showPicker = async (
         const cwd = process.cwd();
         const rawRepo = await Effect.runPromise(gitRepoRoot().pipe(Effect.provide(NodeContextLayer)));
         const isLinked = await Effect.runPromise(isLinkedWorktree(cwd).pipe(Effect.provide(NodeContextLayer)));
+
+        // 2.3: When running from inside a worktree, only show sessions for
+        // this worktree — not siblings or the parent repo.
+        if (isLinked) {
+          return SessionManager.list(cwd, undefined, progress).catch(() => []);
+        }
+
         const mainRepo = isLinked
           ? await Effect.runPromise(resolveMainRepo(cwd).pipe(Effect.provide(NodeContextLayer)))
           : null;
@@ -103,18 +111,25 @@ export const showPicker = async (
             )
           : [];
 
-        const worktreeBranchEntries: Array<[string, string]> = await Promise.all(
+        // Read live branch for each worktree; detect the warning case
+        // (dir exists but is not a proper linked worktree) vs simply deleted.
+        const { existsSync } = await import("node:fs");
+        const worktreeEntries: Array<[string, string, boolean]> = await Promise.all(
           worktrees.map(async (wt) => {
             const branch = await Effect.runPromise(
               readWorktreeBranch(wt).pipe(
-                Effect.map((b) => b ?? "deleted"),
+                Effect.map((b) => b ?? null),
                 Effect.provide(NodeContextLayer),
               ),
             );
-            return [wt, branch] as [string, string];
+            // 3.4: warning = dir exists but isLinkedWorktree returned false
+            const dirExists = existsSync(wt);
+            const warn = dirExists && branch === null;
+            return [wt, branch ?? "deleted", warn] as [string, string, boolean];
           }),
         );
-        const worktreeBranch = new Map(worktreeBranchEntries);
+        const worktreeBranch = new Map(worktreeEntries.map(([wt, b]) => [wt, b]));
+        const worktreeWarn  = new Map(worktreeEntries.map(([wt,, w]) => [wt, w]));
 
         const mainPaths = new Set([
           ...(repo ? [repo] : []),
@@ -134,10 +149,11 @@ export const showPicker = async (
           ),
         ]);
 
-        const label = (branch: string) => `[worktree branch:${branch}]`;
+        const label = (branch: string, warn: boolean) =>
+          `${warn ? "⚠ " : ""}[worktree branch:${branch}]`;
         const marked = worktrees.flatMap((wt, i) =>
           wtGroups[i].map((s) => {
-            const l = label(worktreeBranch.get(wt)!);
+            const l = label(worktreeBranch.get(wt)!, worktreeWarn.get(wt) ?? false);
             return s.name
               ? { ...s, name: `${l} ${s.name}` }
               : { ...s, firstMessage: `${l} ${s.firstMessage}` };
@@ -214,6 +230,15 @@ export const program = Effect.gen(function* () {
     const picked = yield* Effect.promise(() => showPicker(piArgs, sandbox));
     if (!picked) return;
 
+    // Refresh cached branch in session file if it has drifted (e.g. branch renamed).
+    // Runs before pi starts so there is no concurrent writer.
+    if (picked.meta.branch) {
+      const freshBranch = yield* readWorktreeBranch(picked.sessionCwd);
+      if (freshBranch && freshBranch !== picked.meta.branch) {
+        yield* refreshPitBranchIfStale(picked.sessionFile, freshBranch);
+      }
+    }
+
     const result = yield* worktreeCheckEffect({ meta: picked.meta, cwd: picked.sessionCwd });
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
@@ -261,7 +286,9 @@ export const program = Effect.gen(function* () {
   const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
 
   if (userManagingSession) {
-    yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath, undefined, pitConfig);
+    // Escape server still starts for sandboxed user-managed sessions.
+    const escapeUM = yield* applyEscapeEffect(result.cwd, randomUUID(), settingsPath);
+    yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath, undefined, pitConfig, escapeUM);
   } else {
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const sessionFile = yield* setupNewSession(result, AGENT_DIR, sandboxMounts);

@@ -50,6 +50,45 @@ export const findPitSession = (
     catch: () => null as never,
   });
 
+// ── cache refresh ───────────────────────────────────────────────────────────────
+
+/**
+ * Rewrite the pit CustomEntry's branch in the session file if it differs
+ * from freshBranch. Returns true if a rewrite was performed.
+ * Safe to call before pi starts — no concurrent writer at that point.
+ */
+export const refreshPitBranchIfStale = (
+  sessionFile: string,
+  freshBranch: string,
+): Effect.Effect<boolean, never, FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const content = yield* fs.readFileString(sessionFile).pipe(
+      Effect.orElse(() => Effect.succeed("")),
+    );
+    const lines = content.split("\n");
+    const pitIdx = lines.findIndex((l) => {
+      if (!l.trim()) return false;
+      try {
+        const e = JSON.parse(l) as Record<string, unknown>;
+        return e["type"] === "custom" && e["customType"] === "pit";
+      } catch { return false; }
+    });
+    if (pitIdx === -1) return false;
+    const entry = JSON.parse(lines[pitIdx]!) as {
+      data?: { branch?: string; [k: string]: unknown };
+      [k: string]: unknown;
+    };
+    if (entry.data?.branch === freshBranch) return false; // already fresh
+    const updated = lines.map((l, i) =>
+      i === pitIdx ? JSON.stringify({ ...entry, data: { ...entry.data, branch: freshBranch } }) : l,
+    );
+    yield* fs.writeFileString(sessionFile, updated.join("\n")).pipe(
+      Effect.orElse(() => Effect.void),
+    );
+    return true;
+  });
+
 // ── session creation ──────────────────────────────────────────────────────────
 
 /**

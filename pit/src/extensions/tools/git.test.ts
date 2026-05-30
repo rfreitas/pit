@@ -88,9 +88,9 @@ describe("bundled git tool", () => {
     expect(pi.getTool()).toBeDefined();
   });
 
-  it("does NOT register the git tool when socketPath is empty (aggregator returns empty array)", async () => {
+  it("does NOT register the git tool when socketPath is empty (mode footer only)", async () => {
     const { createExtensionFactories } = await import("../../extensions/index.ts");
-    expect(createExtensionFactories("", "token")).toHaveLength(0);
+    expect(createExtensionFactories("", "token")).toHaveLength(1); // mode footer only
   });
 
   it("sends { op: 'git', args } to pit-escape and returns text output", async () => {

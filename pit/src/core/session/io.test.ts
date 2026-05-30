@@ -3,7 +3,7 @@ import { run, useTmpDirs } from "../../tests/helpers.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { setupNewSession } from "./io.ts";
+import { setupNewSession, refreshPitBranchIfStale } from "./io.ts";
 import { cwdToBucket } from "./pure.ts";
 import type { WorktreeResult, SandboxMounts } from "../../types.ts";
 
@@ -89,5 +89,75 @@ describe("setupNewSession", () => {
     expect(lines).toHaveLength(3);
     expect(JSON.parse(lines[2]).type).toBe("custom_message");
     expect(JSON.parse(lines[2]).content).toContain("Sandbox (bwrap)");
+  });
+});
+
+// ── refreshPitBranchIfStale ───────────────────────────────────────────────────
+//
+// Rewrites the branch in the pit CustomEntry when it has changed.
+// Safe because it runs before pi starts — no concurrent writer.
+
+import { buildSessionLines } from "./pure.ts";
+
+describe("refreshPitBranchIfStale", () => {
+  function makeSessionWithBranch(agentDir: string, branch: string): string {
+    const result: WorktreeResult = { cwd: "/tmp/test-wt", meta: { repo: "/tmp/test-repo", branch } };
+    const dir = path.join(agentDir, "sessions", "--tmp-test-wt--");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "session.jsonl");
+    fs.writeFileSync(file, buildSessionLines(result, "test-uuid-1234", "2026-01-01T00:00:00.000Z"));
+    return file;
+  }
+
+  it("returns false when branch is already up-to-date", async () => {
+    const agentDir = makeSandbox("refresh-agent-");
+    const file = makeSessionWithBranch(agentDir, "pi/abc12345");
+    const result = await run(refreshPitBranchIfStale(file, "pi/abc12345"));
+    expect(result).toBe(false);
+  });
+
+  it("returns true and rewrites when branch is stale", async () => {
+    const agentDir = makeSandbox("refresh-agent-");
+    const file = makeSessionWithBranch(agentDir, "pi/old-name");
+    const result = await run(refreshPitBranchIfStale(file, "pi/new-name"));
+    expect(result).toBe(true);
+  });
+
+  it("branch is updated in the file after rewrite", async () => {
+    const agentDir = makeSandbox("refresh-agent-");
+    const file = makeSessionWithBranch(agentDir, "pi/old-name");
+    await run(refreshPitBranchIfStale(file, "pi/new-name"));
+
+    const lines = fs.readFileSync(file, "utf8").trim().split("\n");
+    const pitEntry = JSON.parse(lines[1]) as { data: { branch: string } };
+    expect(pitEntry.data.branch).toBe("pi/new-name");
+  });
+
+  it("file line count does not change after rewrite", async () => {
+    const agentDir = makeSandbox("refresh-agent-");
+    const file = makeSessionWithBranch(agentDir, "pi/old-name");
+    const before = fs.readFileSync(file, "utf8").trim().split("\n").length;
+    await run(refreshPitBranchIfStale(file, "pi/new-name"));
+    const after = fs.readFileSync(file, "utf8").trim().split("\n").length;
+    expect(after).toBe(before);
+  });
+
+  it("non-pit lines are preserved after rewrite", async () => {
+    const agentDir = makeSandbox("refresh-agent-");
+    const file = makeSessionWithBranch(agentDir, "pi/old-name");
+    const headerBefore = JSON.parse(fs.readFileSync(file, "utf8").split("\n")[0]);
+    await run(refreshPitBranchIfStale(file, "pi/new-name"));
+    const headerAfter = JSON.parse(fs.readFileSync(file, "utf8").split("\n")[0]);
+    expect(headerAfter).toEqual(headerBefore); // header unchanged
+  });
+
+  it("returns false when no pit entry exists in the file", async () => {
+    const agentDir = makeSandbox("refresh-agent-");
+    // Write a session with only a header (no pit entry)
+    const dir = fs.mkdtempSync(path.join(agentDir, "bucket-"));
+    const file = path.join(dir, "session.jsonl");
+    fs.writeFileSync(file, JSON.stringify({ type: "session", id: "x", cwd: "/tmp", timestamp: "t" }) + "\n");
+    const result = await run(refreshPitBranchIfStale(file, "pi/new-name"));
+    expect(result).toBe(false);
   });
 });

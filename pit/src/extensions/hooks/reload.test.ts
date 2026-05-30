@@ -110,11 +110,10 @@ describe("bundled reload extension", () => {
   });
 
   it("does NOT register any handler when created with empty socketPath", async () => {
-    // With the factory pattern, callers should simply not call the factory
-    // when there is no escape socket. The factory always registers if called.
-    // This test verifies the index.ts aggregator returns [] for empty socket.
+    // The mode footer is always registered; escape-based factories are gated on socketPath.
     const { createExtensionFactories } = await import("../../extensions/index.ts");
-    expect(createExtensionFactories("", "token")).toHaveLength(0);
+    const factories = createExtensionFactories("", "token");
+    expect(factories).toHaveLength(1); // mode footer only
   });
 
   it("sends { op: 'refresh-settings' } to the socket on reason 'reload'", async () => {

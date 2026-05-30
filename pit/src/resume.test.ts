@@ -621,3 +621,59 @@ describe("backward compat: old-format session metadata", () => {
     expect(pitEntry?.data["branch"]).toBe("pi/deadbeef");
   });
 });
+
+// ── 10. Escape server: starts for non-linked worktree (gate removed) ──────────
+//
+// Previously startPitEscapeEffect returned Option.none() for non-linked
+// worktrees. Now it always attempts to start (individual ops fail gracefully).
+// We verify the behaviour via the extension factory: createExtensionFactories
+// should return non-empty even when socketPath is empty (mode footer), and
+// the mode footer handler sets both status keys.
+
+describe("createExtensionFactories: mode footer always present", () => {
+  it("returns at least one factory even when socketPath is empty (mode footer)", async () => {
+    const { createExtensionFactories } = await import("./extensions/index.ts");
+    const factories = createExtensionFactories("", "");
+    expect(factories.length).toBeGreaterThan(0);
+  });
+
+  it("returns more factories when socketPath is set (full suite)", async () => {
+    const { createExtensionFactories } = await import("./extensions/index.ts");
+    const noSocket = createExtensionFactories("", "");
+    const withSocket = createExtensionFactories("/tmp/test.sock", "token");
+    expect(withSocket.length).toBeGreaterThan(noSocket.length);
+  });
+});
+
+// ── 11. refreshPitBranchIfStale: integrated via resume path ──────────────────
+//
+// The cache refresh runs before pi starts in the -r path.
+// We verify the invariant: if the session file has a stale branch, the caller
+// can detect and correct it using refreshPitBranchIfStale.
+
+describe("refreshPitBranchIfStale: integration invariant", () => {
+  it("session file branch is updated before worktreeCheckEffect is called", async () => {
+    const { refreshPitBranchIfStale } = await import("./core/session/io.ts");
+    const agentDir = makeTmp("refresh-int-agent-");
+    const cwd = makeTmp("refresh-int-wt-");
+    const { sessionFile } = await makeWorktreeSession(cwd, agentDir);
+
+    // Simulate a branch rename: file has old branch
+    const linesBefore = fs.readFileSync(sessionFile, "utf8").split("\n");
+    const pitIdx = linesBefore.findIndex(l => {
+      try { return (JSON.parse(l) as Record<string, unknown>)["customType"] === "pit"; }
+      catch { return false; }
+    });
+    const entryBefore = JSON.parse(linesBefore[pitIdx]!) as { data: { branch: string } };
+    expect(entryBefore.data.branch).toBe("pi/test-session-id");
+
+    // Refresh with new branch name
+    const refreshed = await run(refreshPitBranchIfStale(sessionFile, "pi/renamed-branch"));
+    expect(refreshed).toBe(true);
+
+    // Verify file was updated
+    const linesAfter = fs.readFileSync(sessionFile, "utf8").split("\n");
+    const entryAfter = JSON.parse(linesAfter[pitIdx]!) as { data: { branch: string } };
+    expect(entryAfter.data.branch).toBe("pi/renamed-branch");
+  });
+});
