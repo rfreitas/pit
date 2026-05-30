@@ -60,7 +60,7 @@ export const recreateWorktreeEffect = ({
       yield* Effect.fail(new WorktreeMissingError({ branch }));
     }
     yield* Effect.all([
-      commandExitCode(makeCommand("git", "worktree", "prune", "-C", repo)).pipe(
+      commandExitCode(makeCommand("git", "-C", repo, "worktree", "prune")).pipe(
         Effect.ignore,
       ),
       commandExitCode(
@@ -104,37 +104,29 @@ export const worktreeCheckEffect = (
   Effect.gen(function* () {
     if (existing) {
       const { meta, cwd } = existing;
-      if (meta.mode === "no-tree") {
-        return { mode: "no-tree" as const, cwd, meta };
-      }
       if (!existsSync(cwd)) {
-        yield* recreateWorktreeEffect({ repo: meta.repo, branch: meta.branch, worktree: cwd });
+        // Directory missing — use branch cache for recovery.
+        // branch === "" means no-tree: nothing to recreate.
+        if (meta.branch) {
+          yield* recreateWorktreeEffect({ repo: meta.repo, branch: meta.branch, worktree: cwd });
+        }
+        return { cwd, meta };
       }
-      return { mode: "worktree" as const, cwd, meta };
+      // Directory exists — mode is derived from live git state, not metadata.
+      // (meta is still returned for repo/branch cache refresh by the caller)
+      return { cwd, meta };
     }
 
     const repo = yield* gitRepoRoot();
     const cwd = process.cwd();
+
+    if (!repo || forceNoTree) {
+      return { cwd, meta: buildNoTreeMeta(repo ?? cwd) };
+    }
+
     const id = genId();
-    const created = new Date().toISOString();
-
-    if (!repo) {
-      return {
-        mode: "no-tree" as const,
-        cwd,
-        meta: buildNoTreeMeta(cwd, cwd, "no-repo", id, created),
-      };
-    }
-    if (forceNoTree) {
-      return {
-        mode: "no-tree" as const,
-        cwd,
-        meta: buildNoTreeMeta(cwd, repo, "forced", id, created),
-      };
-    }
-
+    const branch = `pi/${id}`;
     const worktreePath = worktreePathFor(repo, id);
-    const meta = buildWorktreeMeta(repo, id, created);
-    yield* createWorktreeEffect({ branch: meta.branch, worktree: worktreePath });
-    return { mode: "worktree" as const, cwd: worktreePath, meta };
+    yield* createWorktreeEffect({ branch, worktree: worktreePath });
+    return { cwd: worktreePath, meta: buildWorktreeMeta(repo, branch) };
   });

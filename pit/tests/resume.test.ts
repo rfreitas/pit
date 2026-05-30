@@ -63,15 +63,8 @@ function makeTmpDir(): string {
 
 async function makePitSession(worktree: string, agentDir: string) {
   const result: WorktreeResult = {
-    mode: "worktree",
     cwd: worktree,
-    meta: {
-      id: "a1b2c3d4",
-      repo: path.dirname(worktree),
-      branch: "pi/a1b2c3d4",
-      created: new Date().toISOString(),
-      mode: "worktree",
-    },
+    meta: { repo: path.dirname(worktree), branch: "pi/a1b2c3d4" },
   };
   const sessionFile = await run(setupNewSession(result, agentDir));
   return { sessionFile, meta: result.meta, cwd: result.cwd };
@@ -100,8 +93,9 @@ describe("session metadata extraction for pit -r", () => {
 
     expect(extracted).not.toBeNull();
     expect(extracted.branch).toBe(meta.branch);
-    expect(extracted.mode).toBe("worktree");
-    // worktree path is NOT stored in metadata — it lives in the session header
+    expect(extracted.repo).toBe(meta.repo);
+    // mode, worktree, id not stored in metadata
+    expect(extracted.mode).toBeUndefined();
     expect(extracted.worktree).toBeUndefined();
   });
 

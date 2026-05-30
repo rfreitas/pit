@@ -25,36 +25,17 @@ export const worktreePathFor = (repo: string, id: string): string =>
 
 /**
  * Build a no-tree PitMetadata struct.
- * Callers supply id + created so the IO boundary (genId, new Date) stays outside.
+ * Only repo is stored — branch is empty for no-tree sessions.
  */
-export const buildNoTreeMeta = (
-  cwd: string,
-  repo: string,
-  reason: PitMetadata["noTreeReason"],
-  id: string,
-  created: string,
-): PitMetadata  => {
-  // cwd is kept as parameter for callers that need it, but not stored in meta.
-  // The session header's cwd field is the authoritative location.
-  void cwd;
-  return { id, repo, created, branch: "", mode: "no-tree", noTreeReason: reason };
-}
+export const buildNoTreeMeta = (repo: string): PitMetadata => ({ repo, branch: "" });
 
 /**
  * Build a worktree PitMetadata struct.
+ * Branch is passed explicitly (derived from id by the caller: `pi/${id}`).
  * The worktree path is NOT stored in metadata — it lives in the session header's cwd.
  * Use worktreePathFor(repo, id) to get the path.
- * Callers supply id + created so the IO boundary stays outside.
  */
-export const buildWorktreeMeta = (repo: string, id: string, created: string): PitMetadata  => {
-  return {
-    id,
-    repo,
-    created,
-    branch: `pi/${id}`,
-    mode: "worktree",
-  };
-}
+export const buildWorktreeMeta = (repo: string, branch: string): PitMetadata => ({ repo, branch });
 
 // ── flag parsing ──────────────────────────────────────────────────────────────
 

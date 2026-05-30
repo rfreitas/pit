@@ -55,15 +55,8 @@ function makeAgentDir(): string {
 /** Seed an existing pit session for cwd in agentDir. Returns the session file path. */
 async function seedSession(cwd: string, agentDir: string, id = "a1b2c3d4"): Promise<string> {
   const result: WorktreeResult = {
-    mode: "worktree",
     cwd,
-    meta: {
-      id,
-      repo: path.dirname(cwd),
-      branch: `pi/${id}`,
-      created: new Date().toISOString(),
-      mode: "worktree",
-    } satisfies PitMetadata,
+    meta: { repo: path.dirname(cwd), branch: `pi/${id}` } satisfies PitMetadata,
   };
   return run(setupNewSession(result, agentDir));
 }
@@ -81,13 +74,7 @@ describe("findOrCreateLinkedSession — no existing session", () => {
     expect(fs.existsSync(session.sessionFile)).toBe(true);
   });
 
-  it("meta has mode 'no-tree' and noTreeReason 'linked-worktree'", async () => {
-    const session = await run(findOrCreateLinkedSession(makeDir("cwd-"), makeAgentDir()));
-    expect(session.meta.mode).toBe("no-tree");
-    expect(session.meta.noTreeReason).toBe("linked-worktree");
-  });
-
-  it("meta.repo is set to cwd, branch is empty", async () => {
+  it("meta.repo is set to cwd and branch is empty (no-tree)", async () => {
     const cwd = makeDir("cwd-");
     const session = await run(findOrCreateLinkedSession(cwd, makeAgentDir()));
     expect(session.meta.repo).toBe(cwd);
@@ -126,7 +113,6 @@ describe("findOrCreateLinkedSession — existing session", () => {
     const cwd = makeDir("cwd-");
     await seedSession(cwd, agentDir, "cafebabe");
     const session = await run(findOrCreateLinkedSession(cwd, agentDir));
-    expect(session.meta.id).toBe("cafebabe");
     expect(session.meta.branch).toBe("pi/cafebabe");
   });
 
@@ -148,6 +134,6 @@ describe("findOrCreateLinkedSession — existing session", () => {
     const newer = await seedSession(cwd, agentDir, "22222222");
     const session = await run(findOrCreateLinkedSession(cwd, agentDir));
     expect(session.sessionFile).toBe(newer);
-    expect(session.meta.id).toBe("22222222");
+    expect(session.meta.branch).toBe("pi/22222222");
   });
 });

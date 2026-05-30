@@ -409,9 +409,8 @@ describe("pit E2E — session already open", () => {
         const file = files[0];
         const content = fs.readFileSync(path.join(sessionsDir, bucket, file), "utf8");
         const header = JSON.parse(content.split("\n")[0]);
-        // pit-escape socket uses the pit metadata id (8-hex), found in line 2
-        const pitEntry = JSON.parse(content.split("\n")[1]);
-        sessionId = pitEntry.data?.id;
+        // pit-escape socket uses the session UUID from the session header
+        sessionId = header.id;
         break;
       }
     }

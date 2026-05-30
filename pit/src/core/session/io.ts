@@ -15,7 +15,7 @@ import type {
   LinkedWorktreeSession,
 } from "../../types.ts";
 import { cwdToBucket, buildSessionLines } from "./pure.ts";
-import { genId, buildNoTreeMeta } from "../worktree/pure.ts";
+import { buildNoTreeMeta } from "../worktree/pure.ts";
 import { SessionWriteError } from "../../errors.ts";
 
 // ── session discovery ─────────────────────────────────────────────────────────
@@ -97,8 +97,7 @@ export const findOrCreateLinkedSession = (
     if (existing) {
       return { kind: "resume" as const, sessionFile: existing.sessionFile, meta: existing.meta };
     }
-    const id = genId();
-    const meta = buildNoTreeMeta(cwd, cwd, "linked-worktree", id, new Date().toISOString());
-    const sessionFile = yield* setupNewSession({ mode: "no-tree", cwd, meta }, agentDir, sandboxMounts);
+    const meta = buildNoTreeMeta(cwd);
+    const sessionFile = yield* setupNewSession({ cwd, meta }, agentDir, sandboxMounts);
     return { kind: "new" as const, sessionFile, meta };
   });

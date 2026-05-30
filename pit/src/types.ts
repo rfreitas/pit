@@ -7,19 +7,13 @@
 // ── session metadata ──────────────────────────────────────────────────────────
 
 export interface PitMetadata {
-  id: string;
-  /** repo root, or original cwd for no-tree sessions */
+  /** main repo path — recovery cache for when the worktree directory is gone */
   repo: string;
-  /** git branch name; empty string for no-tree sessions */
+  /** checked-out branch — recovery cache; empty string for no-tree sessions */
   branch: string;
-  created: string;
-  mode: "worktree" | "no-tree";
-  /** why no-tree: absent git repo, user explicitly passed -nt/--no-tree, or cwd is already a linked worktree */
-  noTreeReason?: "no-repo" | "forced" | "linked-worktree";
 }
 
 export interface WorktreeResult {
-  mode: "worktree" | "no-tree";
   cwd: string;
   meta: PitMetadata;
 }

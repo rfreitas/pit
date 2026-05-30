@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { cwdToBucket, buildAnnouncement, buildSessionLines, systemPromptArgs } from "./pure.ts";
+import { cwdToBucket, buildSessionLines, systemPromptArgs } from "./pure.ts";
 import { formatSandboxNote } from "../sandbox/pure.ts";
-import type { WorktreeResult, SandboxMounts, PitMetadata } from "../../types.ts";
+import type { WorktreeResult, SandboxMounts } from "../../types.ts";
 
 // ── cwdToBucket ───────────────────────────────────────────────────────────────
 //
@@ -42,138 +42,54 @@ describe("cwdToBucket", () => {
   });
 });
 
-// ── buildAnnouncement ─────────────────────────────────────────────────────────
-//
-// Pure function that composes the full agent announcement from PitMetadata
-// and an optional mount list. Covers all three mode variants.
-
-describe("buildAnnouncement", () => {
-  const worktreeMeta: PitMetadata = {
-    id: "a1b2c3d4", repo: "/tmp/repo",
-    branch: "pi/a1b2c3d4", created: "2026-01-01T00:00:00.000Z", mode: "worktree",
-  };
-  const forcedMeta: PitMetadata = {
-    id: "b2c3d4e5", repo: "/tmp/repo",
-    branch: "", created: "2026-01-01T00:00:00.000Z", mode: "no-tree", noTreeReason: "forced",
-  };
-  const noRepoMeta: PitMetadata = {
-    id: "c3d4e5f6", repo: "/tmp/somedir",
-    branch: "", created: "2026-01-01T00:00:00.000Z", mode: "no-tree", noTreeReason: "no-repo",
-  };
-  const worktreeCwd = "/tmp/repo-wt-a1b2c3d4";
-  const mounts: SandboxMounts = {
-    ro: [{ path: "/home/user", label: "home directory" }],
-    rw: [{ path: worktreeCwd }, { path: "/home/user/.pi/agent", label: "Pi config dir" }],
-  };
-
-  it("worktree mode: contains the pit worktree mode header", () => {
-    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).toContain("**pit — worktree mode**");
-  });
-  it("worktree mode: contains the branch name", () => {
-    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).toContain("`pi/a1b2c3d4`");
-  });
-  it("worktree mode: contains the worktree path", () => {
-    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).toContain("`/tmp/repo-wt-a1b2c3d4`");
-  });
-  it("worktree mode: explains branch isolation to the agent", () => {
-    const t = buildAnnouncement(worktreeMeta, worktreeCwd);
-    expect(t).toContain("not on the main branch");
-    expect(t).toContain("The main working tree is untouched");
-  });
-  it("no-tree forced: contains the no-tree skipped header", () => {
-    expect(buildAnnouncement(forcedMeta, "/tmp/repo")).toContain("worktree creation skipped");
-  });
-  it("no-tree forced: explains -nt flag", () => {
-    expect(buildAnnouncement(forcedMeta, "/tmp/repo")).toContain("-nt");
-  });
-  it("no-tree forced: warns about missing git isolation", () => {
-    expect(buildAnnouncement(forcedMeta, "/tmp/repo")).toContain("No git isolation");
-  });
-  it("no-tree no-repo: contains the no-tree header", () => {
-    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir")).toContain("**pit — no-tree mode**");
-  });
-  it("no-tree no-repo: explains the absence of a git repository", () => {
-    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir")).toContain("Not inside a git repository");
-  });
-  it("no-tree no-repo: warns about missing git isolation", () => {
-    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir")).toContain("No git isolation");
-  });
-  it("no sandbox mounts: announcement contains no sandbox section", () => {
-    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).not.toContain("Sandbox (bwrap)");
-  });
-  it("with sandbox mounts: announcement contains the sandbox section", () => {
-    expect(buildAnnouncement(worktreeMeta, worktreeCwd, mounts)).toContain("Sandbox (bwrap)");
-  });
-  it("sandbox section appears after the mode content", () => {
-    const t = buildAnnouncement(worktreeMeta, worktreeCwd, mounts);
-    expect(t.indexOf("Sandbox (bwrap)")).toBeGreaterThan(t.indexOf("worktree mode"));
-  });
-  it("sandbox section is identical to formatSandboxNote output", () => {
-    expect(buildAnnouncement(worktreeMeta, worktreeCwd, mounts)).toContain(formatSandboxNote(mounts));
-  });
-  it("all three modes include the sandbox section when mounts are provided", () => {
-    expect(buildAnnouncement(worktreeMeta, worktreeCwd, mounts)).toContain("Sandbox (bwrap)");
-    expect(buildAnnouncement(forcedMeta, "/tmp/repo", mounts)).toContain("Sandbox (bwrap)");
-    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir", mounts)).toContain("Sandbox (bwrap)");
-  });
-  it("all three modes omit the sandbox section when mounts are absent", () => {
-    expect(buildAnnouncement(worktreeMeta, worktreeCwd)).not.toContain("Sandbox (bwrap)");
-    expect(buildAnnouncement(forcedMeta, "/tmp/repo")).not.toContain("Sandbox (bwrap)");
-    expect(buildAnnouncement(noRepoMeta, "/tmp/somedir")).not.toContain("Sandbox (bwrap)");
-  });
-});
-
 // ── buildSessionLines ─────────────────────────────────────────────────────────
 //
-// Pure content builder for session JSONL files. setupNewSession calls this
-// after generating sessionId + isoTs at the IO boundary.
+// Without sandbox: header + pit entry (2 lines).
+// With sandbox: header + pit entry + sandbox message (3 lines).
 
 describe("buildSessionLines", () => {
   const result: WorktreeResult = {
-    mode: "worktree", cwd: "/tmp/repo-wt-abc",
-    meta: { id: "abc12345", repo: "/tmp/repo",
-            branch: "pi/abc12345", created: "2026-01-01T00:00:00.000Z", mode: "worktree" },
+    cwd: "/tmp/repo-wt-abc",
+    meta: { repo: "/tmp/repo", branch: "pi/abc12345" },
   };
+  const mounts: SandboxMounts = { ro: [{ path: "/home", label: "home directory" }], rw: [{ path: result.cwd }] };
 
-  it("returns exactly 3 newline-terminated lines", () => {
-    expect(buildSessionLines(result, "uuid-1", "2026-01-01T00:00:00.000Z").trim().split("\n")).toHaveLength(3);
+  it("without sandbox: exactly 2 lines (header + pit entry)", () => {
+    expect(buildSessionLines(result, "uuid-1", "ts").trim().split("\n")).toHaveLength(2);
   });
-  it("line 1 is a session header with the supplied id and timestamp", () => {
-    const [l1] = buildSessionLines(result, "my-uuid", "2026-06-01T12:00:00.000Z").split("\n");
-    const h = JSON.parse(l1);
+  it("with sandbox: exactly 3 lines (header + pit entry + sandbox message)", () => {
+    expect(buildSessionLines(result, "uuid-1", "ts", mounts).trim().split("\n")).toHaveLength(3);
+  });
+  it("line 1 is a session header with the supplied id and cwd", () => {
+    const h = JSON.parse(buildSessionLines(result, "my-uuid", "2026-06-01T12:00:00.000Z").split("\n")[0]);
     expect(h.type).toBe("session");
     expect(h.id).toBe("my-uuid");
-    expect(h.timestamp).toBe("2026-06-01T12:00:00.000Z");
     expect(h.cwd).toBe(result.cwd);
     expect(h.version).toBe(CURRENT_SESSION_VERSION);
   });
-  it("line 2 is a pit CustomEntry with the worktree metadata", () => {
-    const [, l2] = buildSessionLines(result, "uuid", "ts").split("\n");
-    const e = JSON.parse(l2);
+  it("line 2 is a pit CustomEntry with repo and branch", () => {
+    const e = JSON.parse(buildSessionLines(result, "uuid", "ts").split("\n")[1]);
     expect(e.type).toBe("custom");
     expect(e.customType).toBe("pit");
     expect(e.parentId).toBeNull();
-    expect(e.data.id).toBe(result.meta.id);
+    expect(e.data.repo).toBe(result.meta.repo);
     expect(e.data.branch).toBe(result.meta.branch);
+    expect(e.data.mode).toBeUndefined();
+    expect(e.data.id).toBeUndefined();
   });
-  it("line 3 is a custom_message with display:true that chains to line 2", () => {
-    const [, l2, l3] = buildSessionLines(result, "uuid", "ts").split("\n");
-    const msg = JSON.parse(l3);
+  it("line 3 (sandbox): custom_message with sandbox content and display: true", () => {
+    const lines = buildSessionLines(result, "uuid", "ts", mounts).trim().split("\n");
+    const msg = JSON.parse(lines[2]);
     expect(msg.type).toBe("custom_message");
     expect(msg.display).toBe(true);
-    expect(msg.parentId).toBe(JSON.parse(l2).id);
+    expect(msg.content).toContain("Sandbox (bwrap)");
+    expect(msg.content).toBe(formatSandboxNote(mounts));
   });
-  it("sandbox section appears in line 3 content when mounts provided", () => {
-    const mounts: SandboxMounts = { ro: [{ path: "/home", label: "home directory" }], rw: [{ path: result.cwd }] };
-    expect(JSON.parse(buildSessionLines(result, "uuid", "ts", mounts).split("\n")[2]).content)
-      .toContain("Sandbox (bwrap)");
+  it("sandbox message parentId chains to pit entry id", () => {
+    const lines = buildSessionLines(result, "uuid", "ts", mounts).trim().split("\n");
+    expect(JSON.parse(lines[2]).parentId).toBe(JSON.parse(lines[1]).id);
   });
-  it("sandbox section absent when no mounts provided", () => {
-    expect(JSON.parse(buildSessionLines(result, "uuid", "ts").split("\n")[2]).content)
-      .not.toContain("Sandbox (bwrap)");
-  });
-  it("calling twice produces different id1/id2 values (not hardcoded)", () => {
-    // id1/id2 are random 4-byte hex values; collision probability is negligible.
+  it("calling twice produces different pit entry ids (not hardcoded)", () => {
     const a = JSON.parse(buildSessionLines(result, "u", "t").split("\n")[1]).id;
     const b = JSON.parse(buildSessionLines(result, "u", "t").split("\n")[1]).id;
     expect(a).not.toBe(b);
@@ -182,25 +98,62 @@ describe("buildSessionLines", () => {
 
 // ── systemPromptArgs ──────────────────────────────────────────────────────────
 //
-// Thin wrapper that packages the announcement into --append-system-prompt args.
+// Passes sandbox context only — agent derives git context from git tools.
 
 describe("systemPromptArgs", () => {
-  const meta: PitMetadata = {
-    id: "abc", repo: "/repo",
-    branch: "pi/abc", created: "2026-01-01T00:00:00.000Z", mode: "worktree",
-  };
-  const cwd = "/repo-wt-abc";
-  it("returns a two-element array", () => {
-    expect(systemPromptArgs(meta, cwd, undefined)).toHaveLength(2);
+  const mounts: SandboxMounts = { ro: [{ path: "/home" }], rw: [{ path: "/work" }] };
+
+  it("returns empty array when not sandboxed", () => {
+    expect(systemPromptArgs(undefined)).toHaveLength(0);
+  });
+  it("returns two elements when sandboxed", () => {
+    expect(systemPromptArgs(mounts)).toHaveLength(2);
   });
   it("first element is --append-system-prompt", () => {
-    expect(systemPromptArgs(meta, cwd, undefined)[0]).toBe("--append-system-prompt");
+    expect(systemPromptArgs(mounts)[0]).toBe("--append-system-prompt");
   });
-  it("second element is the buildAnnouncement output", () => {
-    expect(systemPromptArgs(meta, cwd, undefined)[1]).toBe(buildAnnouncement(meta, cwd, undefined));
+  it("second element is formatSandboxNote output", () => {
+    expect(systemPromptArgs(mounts)[1]).toBe(formatSandboxNote(mounts));
+    expect(systemPromptArgs(mounts)[1]).toContain("Sandbox (bwrap)");
   });
-  it("sandbox section is included when mounts are provided", () => {
-    const mounts: SandboxMounts = { ro: [{ path: "/home" }], rw: [{ path: "/work" }] };
-    expect(systemPromptArgs(meta, cwd, mounts)[1]).toContain("Sandbox (bwrap)");
+});
+
+// ── buildSessionLines: no git context injected ────────────────────────────────
+//
+// Pit no longer tells the agent about worktree mode, branch, or no-tree reason.
+// The agent derives git context itself. This suite verifies the session file and
+// the system prompt contain sandbox info ONLY — no git metadata.
+
+describe("buildSessionLines: sandbox-only, no git context", () => {
+  const result: WorktreeResult = {
+    cwd: "/tmp/repo-wt-abc",
+    meta: { repo: "/tmp/repo", branch: "pi/abc12345" },
+  };
+  const mounts: SandboxMounts = {
+    ro: [{ path: "/home/user", label: "home directory" }],
+    rw: [{ path: result.cwd }],
+  };
+
+  it("sandbox message does not mention branch name", () => {
+    const lines = buildSessionLines(result, "uuid", "ts", mounts).trim().split("\n");
+    const msg = JSON.parse(lines[2]);
+    expect(msg.content).not.toContain("pi/abc12345");
+  });
+
+  it("sandbox message does not mention worktree mode", () => {
+    const lines = buildSessionLines(result, "uuid", "ts", mounts).trim().split("\n");
+    expect(JSON.parse(lines[2]).content).not.toContain("worktree mode");
+  });
+
+  it("without sandbox: no message at all — agent gets no pit context", () => {
+    const lines = buildSessionLines(result, "uuid", "ts").trim().split("\n");
+    expect(lines).toHaveLength(2);
+    // Verify no custom_message entry exists
+    expect(lines.every(l => JSON.parse(l).type !== "custom_message")).toBe(true);
+  });
+
+  it("pit entry stores only repo and branch — no mode, id, or created", () => {
+    const pitEntry = JSON.parse(buildSessionLines(result, "uuid", "ts").split("\n")[1]);
+    expect(Object.keys(pitEntry.data).sort()).toEqual(["branch", "repo"]);
   });
 });

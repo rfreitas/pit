@@ -141,7 +141,7 @@ export const gitRepoRoot = (): Effect.Effect<
   CommandExecutor
 > =>
   commandString(makeCommand("git", "rev-parse", "--show-toplevel")).pipe(
-    Effect.map((s) => s.trim() as string | null),
+    Effect.map((s) => s.trim() || null),
     Effect.catchAll(() => Effect.succeed(null)),
   );
 

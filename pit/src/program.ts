@@ -76,7 +76,7 @@ export const unlinkSilent = (p: string): Effect.Effect<void, never, never> =>
 export const showPicker = async (
   piArgs: string[],
   sandbox: boolean,
-): Promise<{ sessionFile: string; meta: PitMetadata; sessionCwd: string } | null> => {
+): Promise<{ sessionFile: string; meta: PitMetadata; sessionCwd: string; sessionUUID: string } | null> => {
   const { TUI, ProcessTerminal } = await import("@earendil-works/pi-tui");
   initTheme();
 
@@ -167,15 +167,18 @@ export const showPicker = async (
       (e): e is CustomEntry<PitMetadata> =>
         e.type === "custom" && (e as CustomEntry).customType === "pit",
     );
+    const sessionCwd = sm.getCwd() ?? selectedPath;
+    const sessionUUID = sm.getSessionId();
     if (!pitEntry?.data) {
+      // No pit metadata — still launch in the session's own cwd, not process.cwd().
       await Effect.runPromise(
-        launchEffect(process.cwd(), ["--session", selectedPath, ...piArgs], sandbox).pipe(
+        launchEffect(sessionCwd, ["--session", selectedPath, ...piArgs], sandbox).pipe(
           Effect.provide(NodeContextLayer),
         ),
       );
       return null;
     }
-    return { sessionFile: selectedPath, meta: pitEntry.data, sessionCwd: sm.getCwd() ?? selectedPath };
+    return { sessionFile: selectedPath, meta: pitEntry.data, sessionCwd, sessionUUID };
   } catch {
     console.warn("pit: could not read session metadata — opening session directly");
     await Effect.runPromise(
@@ -214,11 +217,11 @@ export const program = Effect.gen(function* () {
     const result = yield* worktreeCheckEffect({ meta: picked.meta, cwd: picked.sessionCwd });
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
-    const escape = yield* applyEscapeEffect(result.cwd, result.meta.id, settingsPath);
+    const escape = yield* applyEscapeEffect(result.cwd, picked.sessionUUID, settingsPath);
 
     yield* launchEffect(
       result.cwd,
-      ["--session", picked.sessionFile, ...systemPromptArgs(result.meta, result.cwd, sandboxMounts), ...piArgs],
+      ["--session", picked.sessionFile, ...systemPromptArgs(sandboxMounts), ...piArgs],
       sandbox, settingsPath, sandboxMounts, pitConfig, escape,
     );
     yield* unlinkSilent(settingsPath);
@@ -241,11 +244,12 @@ export const program = Effect.gen(function* () {
     console.error("pit: already in a git worktree — no pit session found, running no-tree");
     }
     const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
-    const escape2 = yield* applyEscapeEffect(cwd, session.meta.id, settingsPath);
+    const sessionUUID2 = SessionManager.open(session.sessionFile).getSessionId();
+    const escape2 = yield* applyEscapeEffect(cwd, sessionUUID2, settingsPath);
 
     yield* launchEffect(
       cwd,
-      ["--session", session.sessionFile, ...systemPromptArgs(session.meta, cwd, sandboxMounts), ...filteredArgv],
+      ["--session", session.sessionFile, ...systemPromptArgs(sandboxMounts), ...filteredArgv],
       sandbox, settingsPath, sandboxMounts, pitConfig, escape2,
     );
     yield* unlinkSilent(settingsPath);
@@ -255,16 +259,17 @@ export const program = Effect.gen(function* () {
   // ── new session ───────────────────────────────────────────────────────────
   const result = yield* worktreeCheckEffect(undefined, noTree);
   const settingsPath = yield* createTempSettingsFileEffect(AGENT_DIR, pitConfig);
-  const escape3 = yield* applyEscapeEffect(result.cwd, result.meta.id, settingsPath);
 
   if (userManagingSession) {
-    yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath, undefined, pitConfig, escape3);
+    yield* launchEffect(result.cwd, filteredArgv, sandbox, settingsPath, undefined, pitConfig);
   } else {
     const sandboxMounts = yield* resolveSandboxMountsEffect(result.cwd, sandbox);
     const sessionFile = yield* setupNewSession(result, AGENT_DIR, sandboxMounts);
+    const sessionUUID3 = SessionManager.open(sessionFile).getSessionId();
+    const escape3 = yield* applyEscapeEffect(result.cwd, sessionUUID3, settingsPath);
     yield* launchEffect(result.cwd, [
       "--session", sessionFile,
-      ...systemPromptArgs(result.meta, result.cwd, sandboxMounts),
+      ...systemPromptArgs(sandboxMounts),
       ...filteredArgv,
     ], sandbox, settingsPath, sandboxMounts, pitConfig, escape3);
   }

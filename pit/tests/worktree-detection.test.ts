@@ -44,15 +44,8 @@ function makeTmpDir(prefix: string): string {
 
 function makeWorktreeResult(cwd: string, id = "a1b2c3d4"): WorktreeResult {
   return {
-    mode: "worktree",
     cwd,
-    meta: {
-      id,
-      repo: path.dirname(cwd),
-      branch: `pi/${id}`,
-      created: new Date().toISOString(),
-      mode: "worktree",
-    } satisfies PitMetadata,
+    meta: { repo: path.dirname(cwd), branch: `pi/${id}` } satisfies PitMetadata,
   };
 }
 
@@ -117,7 +110,7 @@ describe("findPitSession", () => {
     const found = await run(findPitSession(cwd, agentDir));
     expect(found).not.toBeNull();
     expect(found!.sessionFile).toBe(sessionFile);
-    expect(found!.meta.id).toBe("deadbeef");
+    expect(found!.meta.branch).toBe("pi/deadbeef");
     expect(found!.meta.branch).toBe("pi/deadbeef");
   });
 
@@ -138,7 +131,7 @@ describe("findPitSession", () => {
     const found = await run(findPitSession(cwd, agentDir));
     expect(found).not.toBeNull();
     expect(found!.sessionFile).toBe(newer);
-    expect(found!.meta.id).toBe("22222222");
+    expect(found!.meta.branch).toBe("pi/22222222");
   });
 
   it("the returned session can be opened by SessionManager (pi compatibility)", async () => {

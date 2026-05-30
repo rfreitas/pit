@@ -65,15 +65,8 @@ const hasBwrap = !!(fs.existsSync("/usr/bin/bwrap") || fs.existsSync("/usr/local
 
 async function makeWorktreeSession(worktree: string, agentDir: string) {
   const result: WorktreeResult = {
-    mode: "worktree",
     cwd: worktree,
-    meta: {
-      id: "test-session-id",
-      repo: path.dirname(worktree),
-      branch: "pi/test-session-id",
-      created: new Date().toISOString(),
-      mode: "worktree",
-    },
+    meta: { repo: path.dirname(worktree), branch: "pi/test-session-id" },
   };
   const sessionFile = await run(setupNewSession(result, agentDir));
   return { sessionFile, meta: result.meta, cwd: result.cwd };
@@ -376,14 +369,14 @@ describe("worktreeCheckEffect: uses session header cwd, not stale pit metadata",
     const sm = SessionManager.open(sessionFile);
     const pitEntry = sm.getEntries().find(
       (e) => e.type === "custom" && (e as { customType?: string }).customType === "pit",
-    ) as { data: { mode: string; worktree?: string } } | undefined;
+    ) as { data: Record<string, unknown> } | undefined;
 
-    expect(pitEntry?.data.mode).toBe("no-tree");
-    // The stale field is present in the raw JSON (old session compat)
-    expect(pitEntry?.data.worktree).toBe(originalCwd);
+    // The stale fields are present in the raw JSON (old session compat)
+    expect(pitEntry?.data["mode"]).toBe("no-tree");
+    expect(pitEntry?.data["worktree"]).toBe(originalCwd);
     // But worktreeCheckEffect must use the session header cwd, not the stale worktree
     const result = await Effect.runPromise(
-      worktreeCheckEffect({ meta: pitEntry!.data as ExistingSession["meta"], cwd: sm.getCwd()! })
+      worktreeCheckEffect({ meta: pitEntry!.data as unknown as ExistingSession["meta"], cwd: sm.getCwd()! })
         .pipe(Effect.provide(NodeContext.layer)),
     );
     expect(result.cwd).toBe(handoffTarget);
@@ -410,6 +403,221 @@ describe("worktreeCheckEffect: uses session header cwd, not stale pit metadata",
         worktreeCheckEffect({ meta: pitEntry!.data, cwd: sm.getCwd()! })
           .pipe(Effect.provide(NodeContext.layer)),
       ),
-    ).resolves.toMatchObject({ mode: "no-tree", cwd: handoffTarget });
+    ).resolves.toMatchObject({ cwd: handoffTarget });
+  });
+});
+
+// ── 6. worktreeCheckEffect — new branch/no-tree logic ─────────────────────────
+//
+// Tests for the new metadata design where:
+//   branch === "" → no-tree (no recovery possible when dir is gone)
+//   branch !== "" → worktree (recovery attempted when dir is missing)
+//   mode is no longer stored; dir existence + git state are authoritative
+
+// Note: makeGitRepo and git-dependent worktreeCheckEffect tests live in
+// pit/tests/worktree-check.test.ts where spawnSync is not mocked.
+
+describe("worktreeCheckEffect — branch-based no-tree detection", () => {
+
+  // ── directory exists (no git needed) ────────────────────────────────────────
+
+  it("dir exists + branch non-empty: returns cwd immediately, no git ops", async () => {
+    const cwd = makeTmp("wc-existing-");
+    const meta = { repo: "/irrelevant/repo", branch: "pi/abc12345" };
+    const result = await Effect.runPromise(
+      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContext.layer)),
+    );
+    expect(result.cwd).toBe(cwd);
+    expect(result.meta).toEqual(meta);
+  });
+
+  it("dir exists + branch empty: returns cwd immediately, no git ops", async () => {
+    const cwd = makeTmp("wc-notree-");
+    const meta = { repo: cwd, branch: "" };
+    const result = await Effect.runPromise(
+      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContext.layer)),
+    );
+    expect(result.cwd).toBe(cwd);
+    expect(result.meta).toEqual(meta);
+  });
+
+  // ── directory missing, no-tree (no git needed) ───────────────────────────────
+
+  it("dir missing + branch empty: no recreation, returns cwd as-is", async () => {
+    const cwd = makeTmp("wc-gone-") + "-does-not-exist";
+    const meta = { repo: cwd, branch: "" };
+    // Must not throw WorktreeMissingError or WorktreeCreationError
+    const result = await Effect.runPromise(
+      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContext.layer)),
+    );
+    expect(result.cwd).toBe(cwd);
+  });
+
+  // ── git-dependent cases: see pit/tests/worktree-check.test.ts ──────────────
+
+  it.todo("dir missing + branch exists: recreates worktree");
+  it.todo("dir missing + branch deleted: throws WorktreeMissingError");
+});
+// ── 7. New session path — metadata shape ───────────────────────────────────────
+//
+// Verifies that sessions created without an existing session produce
+// the correct PitMetadata shape (branch: "" for no-tree, no extra fields).
+
+// Note: git-dependent new session tests live in pit/tests/worktree-check.test.ts.
+// Here we only test the metadata shape guarantee that requires no real git.
+
+describe("new session metadata shape (worktreeCheckEffect with no existing)", () => {
+  let savedCwd: string;
+  beforeEach(() => { savedCwd = process.cwd(); });
+  afterEach(() => { try { process.chdir(savedCwd); } catch { /* ignore */ } });
+
+  it("no-tree (no git repo): meta has branch \'\' and repo === cwd", async () => {
+    const cwd = makeTmp("notree-cwd-");
+    process.chdir(cwd);
+    const result = await Effect.runPromise(
+      worktreeCheckEffect(undefined, false).pipe(Effect.provide(NodeContext.layer)),
+    );
+    expect(result.meta.branch).toBe("");
+    expect(result.meta.repo).toBe(cwd);
+  });
+
+  it("no-tree: meta stores no mode, id, created, or noTreeReason fields", async () => {
+    const cwd = makeTmp("notree-fields-");
+    process.chdir(cwd);
+    const result = await Effect.runPromise(
+      worktreeCheckEffect(undefined, false).pipe(Effect.provide(NodeContext.layer)),
+    );
+    const raw = result.meta as unknown as Record<string, unknown>;
+    expect(raw["mode"]).toBeUndefined();
+    expect(raw["id"]).toBeUndefined();
+    expect(raw["created"]).toBeUndefined();
+    expect(raw["noTreeReason"]).toBeUndefined();
+  });
+
+  // git-dependent (require real git init — see pit/tests/worktree-check.test.ts)
+  it.todo("no-tree forced (git repo + forceNoTree): repo === git root");
+  it.todo("new worktree: branch stored in metadata, cwd is worktree path");
+});
+// ── 8. showPicker CWD fix: session UUID and cwd from header ───────────────────
+//
+// Verifies the underlying invariants that the showPicker fix relies on.
+// showPicker now uses sm.getCwd() and sm.getSessionId() — these must be
+// readable from session files regardless of whether a pit entry exists.
+
+describe("showPicker invariants: cwd and UUID readable from session header", () => {
+
+  it("session without pit entry: getCwd() returns the header cwd", async () => {
+    const agentDir = makeTmp("picker-agent-");
+    const cwd = makeTmp("picker-cwd-");
+    // Write a session with NO pit entry — just the header
+    const bucket = "--" + cwd.replace(/^\//, "").replace(/\//g, "-") + "--";
+    const dir = path.join(agentDir, "sessions", bucket);
+    fs.mkdirSync(dir, { recursive: true });
+    const sessionId = "picker-test-uuid-1234";
+    const sessionFile = path.join(dir, `2026-01-01T00-00-00-000Z_${sessionId}.jsonl`);
+    fs.writeFileSync(sessionFile,
+      JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION,
+        id: sessionId, timestamp: "2026-01-01T00:00:00.000Z", cwd }) + "\n",
+    );
+
+    const sm = SessionManager.open(sessionFile);
+    // getCwd() must return the session's own cwd, not process.cwd()
+    expect(sm.getCwd()).toBe(cwd);
+  });
+
+  it("session UUID from getSessionId() matches the header id field", async () => {
+    const agentDir = makeTmp("picker-agent-");
+    const { sessionFile } = await makeWorktreeSession(makeTmp("picker-wt-"), agentDir);
+    const sm = SessionManager.open(sessionFile);
+    const header = JSON.parse(fs.readFileSync(sessionFile, "utf8").split("\n")[0]);
+    expect(sm.getSessionId()).toBe(header.id);
+  });
+
+  it("session with pit entry: getCwd() still returns the header cwd (not from meta)", async () => {
+    const agentDir = makeTmp("picker-agent-");
+    const cwd = makeTmp("picker-cwd-");
+    const { sessionFile } = await makeWorktreeSession(cwd, agentDir);
+    const sm = SessionManager.open(sessionFile);
+    expect(sm.getCwd()).toBe(cwd);
+  });
+});
+
+// ── 9. Backward compat: old-format session metadata ───────────────────────────
+//
+// Old sessions carry extra fields (id, mode, noTreeReason, created, worktree).
+// New code reads only repo and branch — extra fields must be silently ignored.
+
+describe("backward compat: old-format session metadata", () => {
+
+  function writeOldFormatSession(sessionFile: string, cwd: string): void {
+    const header = { type: "session", version: CURRENT_SESSION_VERSION,
+      id: "old-session-uuid", timestamp: "2026-01-01T00:00:00.000Z", cwd };
+    const pitEntry = {
+      type: "custom", id: "old-pit-id", parentId: null,
+      timestamp: "2026-01-01T00:00:00.000Z", customType: "pit",
+      data: {
+        id: "deadbeef",
+        repo: cwd,
+        worktree: cwd,
+        branch: "pi/deadbeef",
+        created: "2026-01-01T00:00:00.000Z",
+        mode: "worktree",
+        noTreeReason: undefined,
+      },
+    };
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [header, pitEntry].map(e => JSON.stringify(e)).join("\n") + "\n");
+  }
+
+  it("repo and branch readable from old-format session", () => {
+    const cwd = makeTmp("compat-cwd-");
+    const sessionFile = path.join(makeTmp("compat-sess-"), "session.jsonl");
+    writeOldFormatSession(sessionFile, cwd);
+
+    const sm = SessionManager.open(sessionFile);
+    const pitEntry = sm.getEntries().find(
+      (e) => e.type === "custom" && (e as { customType?: string }).customType === "pit",
+    ) as { data: { repo?: string; branch?: string } } | undefined;
+
+    expect(pitEntry?.data.repo).toBe(cwd);
+    expect(pitEntry?.data.branch).toBe("pi/deadbeef");
+  });
+
+  it("worktreeCheckEffect handles old-format session: uses ExistingSession cwd, ignores worktree field", async () => {
+    const cwd = makeTmp("compat-dir-");
+    const sessionFile = path.join(makeTmp("compat-sess-"), "session.jsonl");
+    writeOldFormatSession(sessionFile, cwd);
+
+    const sm = SessionManager.open(sessionFile);
+    const pitEntry = sm.getEntries().find(
+      (e) => e.type === "custom" && (e as { customType?: string }).customType === "pit",
+    ) as { data: Record<string, unknown> } | undefined;
+
+    const result = await Effect.runPromise(
+      worktreeCheckEffect({
+        meta: pitEntry!.data as unknown as ExistingSession["meta"],
+        cwd: sm.getCwd()!,
+      }).pipe(Effect.provide(NodeContext.layer)),
+    );
+    // Must use the session header cwd, not the stale worktree field
+    expect(result.cwd).toBe(cwd);
+  });
+
+  it("old id/mode/created fields are ignored — only repo and branch are used", () => {
+    const cwd = makeTmp("compat-fields-");
+    const sessionFile = path.join(makeTmp("compat-sess-"), "session.jsonl");
+    writeOldFormatSession(sessionFile, cwd);
+
+    const sm = SessionManager.open(sessionFile);
+    const pitEntry = sm.getEntries().find(
+      (e) => e.type === "custom" && (e as { customType?: string }).customType === "pit",
+    ) as { data: Record<string, unknown> } | undefined;
+
+    // The old fields are present in raw JSON but new code doesn't depend on them
+    expect(pitEntry?.data["id"]).toBe("deadbeef");   // present in JSON
+    expect(pitEntry?.data["mode"]).toBe("worktree"); // present in JSON
+    // New code reads only these:
+    expect(pitEntry?.data["repo"]).toBe(cwd);
+    expect(pitEntry?.data["branch"]).toBe("pi/deadbeef");
   });
 });

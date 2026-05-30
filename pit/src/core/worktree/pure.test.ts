@@ -58,50 +58,33 @@ describe("parseFlags", () => {
 });
 
 describe("buildNoTreeMeta", () => {
-  it("sets mode to 'no-tree'", () => {
-    expect(buildNoTreeMeta("/cwd", "/repo", "no-repo", "abc", "ts").mode).toBe("no-tree");
-  });
-  it("sets noTreeReason for all variants", () => {
-    expect(buildNoTreeMeta("/cwd", "/repo", "no-repo",         "a", "t").noTreeReason).toBe("no-repo");
-    expect(buildNoTreeMeta("/cwd", "/repo", "forced",          "a", "t").noTreeReason).toBe("forced");
-    expect(buildNoTreeMeta("/cwd", "/repo", "linked-worktree", "a", "t").noTreeReason).toBe("linked-worktree");
-  });
-  it("uses supplied id and timestamp", () => {
-    const m = buildNoTreeMeta("/cwd", "/repo", "no-repo", "deadbeef", "2026-06-01T12:00:00.000Z");
-    expect(m.id).toBe("deadbeef");
-    expect(m.created).toBe("2026-06-01T12:00:00.000Z");
-  });
   it("sets repo", () => {
-    const m = buildNoTreeMeta("/my/cwd", "/my/repo", "forced", "id", "ts");
-    expect(m.repo).toBe("/my/repo");
+    expect(buildNoTreeMeta("/my/repo").repo).toBe("/my/repo");
   });
   it("branch is always empty", () => {
-    expect(buildNoTreeMeta("/cwd", "/repo", "no-repo", "id", "ts").branch).toBe("");
+    expect(buildNoTreeMeta("/repo").branch).toBe("");
   });
-  it("does not store worktree (cwd lives in session header)", () => {
-    const m = buildNoTreeMeta("/my/cwd", "/my/repo", "forced", "id", "ts");
-    expect((m as unknown as Record<string, unknown>)["worktree"]).toBeUndefined();
+  it("does not store mode, noTreeReason, id, created", () => {
+    const m = buildNoTreeMeta("/repo") as unknown as Record<string, unknown>;
+    expect(m["mode"]).toBeUndefined();
+    expect(m["noTreeReason"]).toBeUndefined();
+    expect(m["id"]).toBeUndefined();
+    expect(m["created"]).toBeUndefined();
   });
 });
 
 describe("buildWorktreeMeta", () => {
-  it("sets mode to 'worktree'", () => {
-    expect(buildWorktreeMeta("/repo", "abc12345", "ts").mode).toBe("worktree");
+  it("stores repo", () => {
+    expect(buildWorktreeMeta("/my/repo", "pi/abc12345").repo).toBe("/my/repo");
   });
-  it("derives branch as pi/<id>", () => {
-    expect(buildWorktreeMeta("/repo", "abc12345", "ts").branch).toBe("pi/abc12345");
+  it("stores supplied branch", () => {
+    expect(buildWorktreeMeta("/repo", "pi/abc12345").branch).toBe("pi/abc12345");
   });
-  it("does not store worktree path (lives in session header cwd)", () => {
-    const m = buildWorktreeMeta("/home/user/repo", "abc12345", "ts");
-    expect((m as unknown as Record<string, unknown>)["worktree"]).toBeUndefined();
-  });
-  it("uses supplied id and timestamp", () => {
-    const m = buildWorktreeMeta("/repo", "deadbeef", "2026-06-01T00:00:00.000Z");
-    expect(m.id).toBe("deadbeef");
-    expect(m.created).toBe("2026-06-01T00:00:00.000Z");
-  });
-  it("sets repo", () => {
-    expect(buildWorktreeMeta("/my/repo", "id", "ts").repo).toBe("/my/repo");
+  it("does not store mode, id, created", () => {
+    const m = buildWorktreeMeta("/repo", "pi/abc") as unknown as Record<string, unknown>;
+    expect(m["mode"]).toBeUndefined();
+    expect(m["id"]).toBeUndefined();
+    expect(m["created"]).toBeUndefined();
   });
 });
 
@@ -112,5 +95,44 @@ describe("worktreePathFor", () => {
   });
   it("uses the repo basename, not the full path", () => {
     expect(worktreePathFor("/a/b/myrepo", "ff00")).toBe("/a/b/myrepo-wt-ff00");
+  });
+});
+
+// ── backward compat: old-format PitMetadata ───────────────────────────────────
+//
+// Old sessions carry extra fields that new code doesn't write.
+// At runtime (JSON.parse), the extra fields are present in the object.
+// New code must only rely on repo and branch — extra fields are noise.
+
+describe("PitMetadata backward compat: old extra fields ignored", () => {
+  it("object with old fields still provides repo and branch", () => {
+    // Simulate what JSON.parse produces for an old session file
+    const old = {
+      id: "deadbeef",
+      repo: "/home/user/repo",
+      worktree: "/home/user/repo-wt-deadbeef",
+      branch: "pi/deadbeef",
+      created: "2026-01-01T00:00:00.000Z",
+      mode: "worktree",
+    } as unknown as import("../../types.ts").PitMetadata;
+
+    expect(old.repo).toBe("/home/user/repo");
+    expect(old.branch).toBe("pi/deadbeef");
+  });
+
+  it("old no-tree session (branch: '') is recoverable as no-tree", () => {
+    const old = {
+      id: "abc12345",
+      repo: "/home/user/project",
+      worktree: "/home/user/project",
+      branch: "",
+      created: "2026-01-01T00:00:00.000Z",
+      mode: "no-tree",
+      noTreeReason: "no-repo",
+    } as unknown as import("../../types.ts").PitMetadata;
+
+    // New code uses branch === "" to detect no-tree — must work with old objects
+    expect(old.branch).toBe("");
+    expect(old.repo).toBe("/home/user/project");
   });
 });
