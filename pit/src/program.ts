@@ -57,9 +57,19 @@ const applyEscapeEffect = (
 
 // ── picker discovery (extracted for testability) ──────────────────────────
 
-// SessionManager.list return type is opaque from this module; we only need
-// path/name/firstMessage/modified, so we use any for the element type.
-type SessionItem = any;
+/** 
+ * Represents a session loaded for the picker. Ensures we fulfill the
+ * UI component's render contract at compile time.
+ */
+export interface PickerSession {
+  path: string;
+  modified: Date;
+  firstMessage?: string;
+  name?: string;
+  cwd?: string | null;
+  messageCount?: number;
+  [key: string]: unknown; // Allow passthrough of other SessionManager fields
+}
 
 /**
  * Discover sessions for the picker by combining live git worktree data
@@ -85,12 +95,12 @@ export const discoverSessionsForPicker = async (
     agentDir: string;
   }>,
   deps: Readonly<{
-    listSessions: (cwd: string) => Promise<readonly SessionItem[]>;
+    listSessions: (cwd: string) => Promise<readonly PickerSession[]>;
     readWorktreeBranch: (wt: string) => Promise<string | null>;
     existsSync: (p: string) => boolean;
-    scanSessionsByRepo: (repo: string, agentDir: string) => Promise<readonly SessionItem[]>;
+    scanSessionsByRepo: (repo: string, agentDir: string) => Promise<readonly PickerSession[]>;
   }>,
-): Promise<readonly SessionItem[]> => {
+): Promise<readonly PickerSession[]> => {
   // 2.3: Worktree isolation — when inside a linked worktree, only show
   // sessions for THIS worktree, not siblings or the parent repo.
   if (opts.isLinked) {
@@ -114,10 +124,10 @@ export const discoverSessionsForPicker = async (
 
   const [mainGroups, wtGroups] = await Promise.all([
     Promise.all(
-      mainPaths.map((p) => deps.listSessions(p).catch(() => [] as SessionItem[])),
+      mainPaths.map((p) => deps.listSessions(p).catch(() => [] as PickerSession[])),
     ),
     Promise.all(
-      opts.worktrees.map((wt) => deps.listSessions(wt).catch(() => [] as SessionItem[])),
+      opts.worktrees.map((wt) => deps.listSessions(wt).catch(() => [] as PickerSession[])),
     ),
   ]);
 
@@ -133,18 +143,24 @@ export const discoverSessionsForPicker = async (
     }),
   );
 
-  // 2.1: Metadata scan for pruned worktrees
+  // 2.1: Metadata scan for pruned worktrees — only include sessions whose
+  // paths are NOT already known from SessionManager.list() (git worktree list
+  // or main repo). Pruned scan returns minimal objects; we must not overwrite
+  // full SessionManager.list() objects which have id, cwd, messageCount, etc.
+  const knownPaths = new Set([
+    ...mainGroups.flat().map((s) => s.path),
+    ...marked.map((s) => s.path),
+  ]);
+
   const prunedSessions = opts.repo
-    ? await deps.scanSessionsByRepo(opts.repo, opts.agentDir).catch(() => [] as SessionItem[])
+    ? (await deps.scanSessionsByRepo(opts.repo, opts.agentDir).catch(() => [] as PickerSession[]))
+        .filter((s) => !knownPaths.has(s.path))
     : [];
 
-  // Deduplicate by path, preferring labeled results over pruned scan results
-  const deduped = [...mainGroups.flat(), ...marked, ...prunedSessions].reduce<Record<string, SessionItem>>(
-    (acc, s) => ({ ...acc, [s.path]: s }),
-    {},
-  );
+  // Combine without dedup needed — prunedSessions are already filtered to novel paths
+  const combined = [...mainGroups.flat(), ...marked, ...prunedSessions];
 
-  return Object.values(deduped)
+  return combined
     .sort((a, b) => b.modified.getTime() - a.modified.getTime());
 };
 
@@ -202,7 +218,7 @@ export const showPicker = async (
         const sessions = await discoverSessionsForPicker(
           { cwd, repo, isLinked, worktrees, agentDir: AGENT_DIR },
           {
-            listSessions: (p) => SessionManager.list(p, undefined, progress).catch(() => []),
+            listSessions: (p) => SessionManager.list(p, undefined, progress).catch(() => []) as unknown as Promise<PickerSession[]>,
             readWorktreeBranch: (wt) =>
               Effect.runPromise(readWorktreeBranch(wt).pipe(Effect.provide(NodeContextLayer))),
             existsSync,

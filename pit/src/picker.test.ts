@@ -35,23 +35,15 @@ function writeSessionFile(
   return { path: file, modified: new Date() };
 }
 
-// Simple SessionInfo shape matching what SessionManager.list returns
-interface SessionInfo {
-  path: string;
-  name?: string;
-  firstMessage?: string;
-  modified: Date;
-}
+import { discoverSessionsForPicker, type PickerSession } from "./program.ts";
 
 // Mock deps that will be injected into discoverSessionsForPicker
 interface DiscoveryDeps {
-  listSessions: (cwd: string) => Promise<SessionInfo[]>;
+  listSessions: (cwd: string) => Promise<PickerSession[]>;
   readWorktreeBranch: (wt: string) => Promise<string | null>;
   existsSync: (p: string) => boolean;
-  scanSessionsByRepo: (repo: string, agentDir: string) => Promise<SessionInfo[]>;
+  scanSessionsByRepo: (repo: string, agentDir: string) => Promise<PickerSession[]>;
 }
-
-import { discoverSessionsForPicker } from "./program.ts";
 
 // ═════════════════════════════════════════════════════════════════════════════
 // TESTS

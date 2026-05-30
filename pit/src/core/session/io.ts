@@ -63,14 +63,14 @@ export const findPitSession = (
 export const scanSessionsByRepo = async (
   repo: string,
   agentDir: string,
-): Promise<Array<{ path: string; modified: Date }>> => {
+): Promise<Array<{ path: string; modified: Date; firstMessage: string; messageCount: number; cwd: string | null }>> => {
   const sessionsDir = join(agentDir, "sessions");
   const { readdir, readFile, stat } = await import("node:fs/promises");
 
   let buckets: string[] = [];
   try { buckets = await readdir(sessionsDir); } catch { return []; }
 
-  let found: Array<{ path: string; modified: Date }> = [];
+  let found: Array<{ path: string; modified: Date; firstMessage: string; messageCount: number; cwd: string | null }> = [];
 
   for (const bucket of buckets) {
     const bucketDir = join(sessionsDir, bucket);
@@ -92,25 +92,48 @@ export const scanSessionsByRepo = async (
 
     const mostRecent = join(bucketDir, jsonlFiles[0]!.name);
 
-    const shouldInclude = await (async () => {
+    const scanResult = await (async () => {
       try {
         const content = await readFile(mostRecent, "utf8");
-        const lines = content.split("\n");
+        const lines = content.split("\n").filter((l) => l.trim());
+
+        // Extract cwd from session header (first line)
+        let cwd: string | null = null;
+        try {
+          const header = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+          if (header["type"] === "session") cwd = (header["cwd"] as string) ?? null;
+        } catch { /* ignore */ }
+
+        // Count model_change entries as a proxy for messageCount
+        const messageCount = lines.filter((l) => {
+          try {
+            const e = JSON.parse(l) as Record<string, unknown>;
+            return e["type"] === "model_change";
+          } catch { return false; }
+        }).length;
+
         const pitLine = lines.find((l) => {
-          if (!l.trim()) return false;
           try {
             const e = JSON.parse(l) as Record<string, unknown>;
             return e["type"] === "custom" && e["customType"] === "pit";
           } catch { return false; }
         });
-        if (!pitLine) return false;
-        const entry = JSON.parse(pitLine) as { data?: { repo?: string } };
-        return entry.data?.repo === repo;
-      } catch { return false; }
+        if (!pitLine) return null;
+        const entry = JSON.parse(pitLine) as { data?: { repo?: string; branch?: string } };
+        if (entry.data?.repo !== repo) return null;
+        const branch = entry.data?.branch ?? "unknown";
+        return {
+          path: mostRecent,
+          modified: jsonlFiles[0]!.mtime,
+          firstMessage: `[pruned worktree branch:${branch}]`,
+          messageCount,
+          cwd,
+        };
+      } catch { return null; }
     })();
 
-    if (shouldInclude) {
-      found = [...found, { path: mostRecent, modified: jsonlFiles[0]!.mtime }];
+    if (scanResult) {
+      found = [...found, scanResult];
     }
   }
 
