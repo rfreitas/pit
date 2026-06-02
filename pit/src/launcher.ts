@@ -3,7 +3,7 @@
  * pit-escape out-of-sandbox helper.
  */
 
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, linkSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -40,20 +40,6 @@ export const setupProxyAgent = (): void => {
     headersTimeout: 300_000,
   }));
   undici.install?.();
-};
-
-// ── extension args ────────────────────────────────────────────────────────────
-
-export const extensionArgs = (): string[] => {
-  const d = resolve(dirname(process.argv[1]));
-  return [
-    join(d, "src", "extensions", "hooks", "reload.ts"),
-    join(d, "src", "extensions", "tools", "git.ts"),
-    join(d, "src", "extensions", "commands", "merge", "index.ts"),
-    join(d, "src", "extensions", "status", "loc-diff.ts"),
-    join(d, "src", "extensions", "status", "merge-status.ts"),
-    join(d, "src", "extensions", "commands", "rename-branch", "index.ts"),
-  ].flatMap((f) => ["--extension", f]);
 };
 
 // ── sandbox helpers ───────────────────────────────────────────────────────────
@@ -163,13 +149,6 @@ export const resolveSandboxMountsEffect = (
 
 // ── bwrap launch ──────────────────────────────────────────────────────────────
 
-const shadowAgentMountArgs = (agentDirReal: string, settingsPath: string): string[] => {
-  return [
-    "--bind", agentDirReal, "/pit-agent",
-    "--bind", settingsPath, "/pit-agent/settings.json",
-  ];
-};
-
 /**
  * Build the shared bwrap argument array (everything before the -- separator).
  * Used by bwrapLaunch for production and by test helpers for sandbox probes.
@@ -180,11 +159,6 @@ export const buildBwrapArgs = (
     cwd: string;
     /** Required for pit mount resolution. Omit if running an arbitrary script. */
     scriptPath?: string;
-    /** Optional shadow agent dir for filtered settings.
-     *  Requires settingsPath to also be set. */
-    settingsPath?: string;
-    /** Override the agent dir path for shadow mounts (defaults to production AGENT_DIR). */
-    agentDir?: string;
   }>,
 ): string[] => {
   const roArgs = mounts.ro.flatMap(m =>
@@ -202,39 +176,12 @@ export const buildBwrapArgs = (
        "--ro-bind", pitMounts.pitNodeModules, pitMounts.pitNodeModules]
     : [];
 
-  const agentDirReal = opts.agentDir ?? realpathSync(AGENT_DIR);
-  const shadowArgs = opts.settingsPath ? shadowAgentMountArgs(agentDirReal, opts.settingsPath) : [];
-
   return [
     "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
     ...roArgs, ...rwArgs, ...overlayArgs, ...dynamicMountArgs,
-    ...shadowArgs,
     "--unshare-user", "--unshare-pid", "--die-with-parent",
     "--chdir", opts.cwd,
   ];
-};
-
-/**
- * If settings.json in agentDirReal is a symlink, replace it with a regular
- * file copy so bwrap can bind-mount over it (bwrap cannot bind over a symlink).
- * Returns a restore function that recreates the original symlink.
- * Using a copy (not a hardlink) avoids EXDEV when /tmp and the agent dir
- * are on different filesystems.
- */
-export const replaceSymlinkForBwrap = (agentDirReal: string, settingsPath: string): (() => void) => {
-  const settingsFile = join(agentDirReal, "settings.json");
-  const target = ((): string | null => {
-    try { return readlinkSync(settingsFile); } catch { return null; }
-  })();
-  if (target === null) return () => {};
-
-  unlinkSync(settingsFile);
-  copyFileSync(settingsPath, settingsFile);
-
-  return () => {
-    try { unlinkSync(settingsFile); } catch { /* already gone */ }
-    symlinkSync(target, settingsFile);
-  };
 };
 
 // ── env helpers ─────────────────────────────────────────────────────────────
@@ -279,7 +226,6 @@ export const bwrapLaunch = (
   piArgs: Readonly<string[]>,
   mounts: Readonly<SandboxMounts>,
   pitConfig: Readonly<PitConfig>,
-  settingsPath?: string,
   escapeToken?: string,
 ): never => {
   const bwrap = findBwrap()!;
@@ -287,13 +233,6 @@ export const bwrapLaunch = (
   const nodeDir = dirname(dirname(nodeBin));
   const scriptPath = process.argv[1]!;
   const pitInnerScript = resolve(dirname(scriptPath), "src", "inner.ts");
-  const agentDirReal = realpathSync(AGENT_DIR);
-
-  // If settings.json is a symlink (e.g. Nix-managed dotfile), bwrap can't
-  // bind-mount over it. Replace it with a hardlink to the filtered file first.
-  const restoreSymlink = settingsPath ? replaceSymlinkForBwrap(agentDirReal, settingsPath) : () => {};
-
-  const agentDirEnv = settingsPath ? ["--setenv", "PI_CODING_AGENT_DIR", "/pit-agent"] : [];
 
   const envArgs: string[] = [
     "--clearenv",
@@ -311,49 +250,16 @@ export const bwrapLaunch = (
   ];
 
   const args: Readonly<string[]> = [
-    ...buildBwrapArgs(mounts, { cwd, scriptPath, settingsPath, agentDir: agentDirReal }),
+    ...buildBwrapArgs(mounts, { cwd, scriptPath }),
     ...envArgs,
-    ...agentDirEnv,
     "--", nodeBin, "--experimental-strip-types", pitInnerScript, ...piArgs,
   ];
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
-  restoreSymlink();
-  if (settingsPath) try { unlinkSync(settingsPath); } catch { /* already gone */ }
   process.exit(result.status ?? 1);
 };
 
 // ── macOS sandbox-exec launch ─────────────────────────────────────────────────────
-
-// Known agentDir subdirs pi creates at runtime (tools, sessions etc).
-// Pre-created so they exist before mirroring and get symlinks, not fresh dirs.
-const AGENT_KNOWN_SUBDIRS = ["sessions", "bin", "themes", "prompts", "git"] as const;
-
-/**
- * Create a symlink mirror of agentDirReal at mirrorDir for macOS dir remap.
- * - Each entry in agentDirReal is symlinked into mirrorDir.
- * - settings.json is hardlinked to settingsPath (same inode): writes from
- *   inside the sandbox propagate to settingsPath, which pit-escape reads
- *   for /reload.
- * - Known subdirs are pre-created in agentDirReal so they get symlinks,
- *   not fresh dirs that would be lost when the mirror is deleted on exit.
- */
-const createSymlinkMirror = (
-  agentDirReal: string,
-  mirrorDir: string,
-  settingsPath: string,
-): void => {
-  for (const sub of AGENT_KNOWN_SUBDIRS) {
-    mkdirSync(join(agentDirReal, sub), { recursive: true });
-  }
-  for (const entry of readdirSync(agentDirReal)) {
-    symlinkSync(join(agentDirReal, entry), join(mirrorDir, entry));
-  }
-  // Hardlink overrides the settings.json symlink: same inode as settingsPath.
-  const link = join(mirrorDir, "settings.json");
-  try { unlinkSync(link); } catch { /* not present */ }
-  linkSync(settingsPath, link);
-};
 
 /**
  * Spawn the sandboxed pi session via macOS sandbox-exec.
@@ -366,7 +272,6 @@ export const sbplLaunch = (
   piArgs: Readonly<string[]>,
   mounts: Readonly<SandboxMounts>,
   pitConfig: Readonly<PitConfig>,
-  settingsPath?: string,
   escapeToken?: string,
 ): Promise<never> => {
   const nodeBin = process.execPath;
@@ -374,26 +279,10 @@ export const sbplLaunch = (
   const scriptPath = process.argv[1]!;
   const pitInnerScript = resolve(dirname(scriptPath), "src", "inner.ts");
 
-  // Set up symlink mirror for dir remap
-  let mirrorDir: string | undefined;
-  let effectiveMounts: SandboxMounts = { ...mounts };
-  let mirrorEnv: Record<string, string> = {};
-
-  if (settingsPath) {
-    mirrorDir = mkdtempSync("/private/tmp/pit-agent-");
-    const agentDirReal = realpathSync(AGENT_DIR);
-    createSymlinkMirror(agentDirReal, mirrorDir, settingsPath);
-    effectiveMounts = {
-      ...mounts,
-      rw: [...mounts.rw, { path: mirrorDir, label: "Pi config dir (mirror)" }],
-    };
-    mirrorEnv = { PI_CODING_AGENT_DIR: mirrorDir };
-  }
-
   // Resolve rw paths to real (symlink-free) paths — SBPL matches on real paths.
   const resolvedMounts: SandboxMounts = {
-    ...effectiveMounts,
-    rw: effectiveMounts.rw.map(m => {
+    ...mounts,
+    rw: mounts.rw.map(m => {
       try { return { ...m, path: realpathSync(m.path) }; }
       catch { return m; } // path doesn't exist yet, use as-is
     }),
@@ -403,14 +292,7 @@ export const sbplLaunch = (
   const env = {
     ...buildSealedEnv(pitConfig, process.env as Record<string, string | undefined>, nodeDir),
     ...(escapeToken ? { PIT_ESCAPE_TOKEN: escapeToken } : {}),
-    ...mirrorEnv,
   };
-
-  const cleanup = () => {
-    if (settingsPath) try { unlinkSync(settingsPath); } catch { /* gone */ }
-    if (mirrorDir) try { rmSync(mirrorDir, { recursive: true, force: true }); } catch { /* gone */ }
-  };
-  process.on("exit", cleanup);
 
   const child = spawn(
     "/usr/bin/sandbox-exec",
@@ -427,13 +309,11 @@ export const sbplLaunch = (
     child.on("error", (err) => {
       process.off("SIGTERM", sigterm);
       process.off("SIGINT",  sigint);
-      cleanup();
       reject(err);
     });
     child.on("exit", (code) => {
       process.off("SIGTERM", sigterm);
       process.off("SIGINT",  sigint);
-      cleanup();
       process.exit(code ?? 1);
     });
   });
@@ -443,7 +323,6 @@ export const launchEffect = (
   cwd: string,
   piArgs: string[],
   sandbox: boolean,
-  settingsPath?: string,
   mounts?: SandboxMounts,
   pitConfig?: PitConfig,
   escapeHandle?: EscapeHandle,
@@ -458,7 +337,7 @@ export const launchEffect = (
         ));
         // sbplLaunch exits the process; promise never resolves
         yield* Effect.promise(() =>
-          sbplLaunch(cwd, piArgs, m, pitConfig ?? {}, settingsPath, escapeHandle?.token)
+          sbplLaunch(cwd, piArgs, m, pitConfig ?? {}, escapeHandle?.token)
         );
         return;
       }
@@ -467,7 +346,7 @@ export const launchEffect = (
           cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(),
           dirname(dirname(process.execPath)), pitConfig,
         ));
-        bwrapLaunch(cwd, piArgs, m, pitConfig ?? {}, settingsPath, escapeHandle?.token); // never returns
+        bwrapLaunch(cwd, piArgs, m, pitConfig ?? {}, escapeHandle?.token); // never returns
       }
       yield* Effect.logWarning(
         process.platform === "darwin"
@@ -496,7 +375,6 @@ export type EscapeHandle = { socketPath: string; token: string };
 export const startPitEscapeEffect = (
   worktreeCwd: string,
   sessionId: string,
-  settingsPath: string,
 ): Effect.Effect<Option.Option<EscapeHandle>, SocketAliveError, NodeContext> =>
   Effect.gen(function* () {
     // Escape server starts whenever sandboxed — individual ops
@@ -516,7 +394,7 @@ export const startPitEscapeEffect = (
         process.execPath,
         [
           "--experimental-strip-types", escapeScript,
-          token, socketPath, worktreeCwd, realpathSync(AGENT_DIR), PIT_DIR, settingsPath,
+          token, socketPath, worktreeCwd, realpathSync(AGENT_DIR), PIT_DIR,
         ],
         { stdio: ["ignore", "pipe", "inherit"] },
       );

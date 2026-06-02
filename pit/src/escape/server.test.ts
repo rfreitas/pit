@@ -51,7 +51,6 @@ function makeDir(): string {
 async function spawnEscape(opts: {
   agentDir: string;
   pitDir: string;
-  hostSettingsPath: string;
   worktreePath?: string;
   token?: string;
 }): Promise<{ socketPath: string; token: string }> {
@@ -69,7 +68,6 @@ async function spawnEscape(opts: {
       worktreePath,
       opts.agentDir,
       opts.pitDir,
-      opts.hostSettingsPath,
     ],
     { stdio: ["ignore", "pipe", "inherit"] }
   );
@@ -103,139 +101,6 @@ function send(socketPath: string, token: string, req: object): Promise<Record<st
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
-
-describe("pit-escape refresh-settings op", () => {
-  const denylist = [
-    "npm:@casualjim/pi-heimdall",
-    "npm:@spences10/pi-confirm-destructive",
-    "npm:@jerryan/pi-sanity",
-  ];
-
-  const allPackages = [...denylist, "npm:pi-agent-browser-native", "npm:agent-browser"];
-
-  it("responds { ok: true } on success", async () => {
-    const agentDir = makeDir();
-    const pitDir = makeDir();
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: allPackages })
-    );
-    fs.writeFileSync(
-      path.join(pitDir, "config.json"),
-      JSON.stringify({ denyPackages: denylist })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    const resp = await send(socketPath, token, { op: "refresh-settings" });
-    expect(resp.ok).toBe(true);
-    expect(resp.error).toBeUndefined();
-  });
-
-  it("writes the filtered settings file to hostSettingsPath", async () => {
-    const agentDir = makeDir();
-    const pitDir = makeDir();
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: allPackages })
-    );
-    fs.writeFileSync(
-      path.join(pitDir, "config.json"),
-      JSON.stringify({ denyPackages: denylist })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    await send(socketPath, token, { op: "refresh-settings" });
-
-    expect(fs.existsSync(hostSettingsPath)).toBe(true);
-    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    for (const p of denylist) {
-      expect(written.packages).not.toContain(p);
-    }
-    expect(written.packages).toContain("npm:pi-agent-browser-native");
-    expect(written.packages).toContain("npm:agent-browser");
-  });
-
-  it("without a pit config, passes all packages through unchanged", async () => {
-    const agentDir = makeDir();
-    const pitDir = makeDir(); // no config.json
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: allPackages })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    await send(socketPath, token, { op: "refresh-settings" });
-
-    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    expect(written.packages).toEqual(allPackages);
-  });
-
-  it("picks up changes to settings.json on a second call (the /reload case)", async () => {
-    // Simulate: user runs `pi install npm:new-package` outside the session.
-    // A subsequent /reload in the pit session should pick it up (minus denylist).
-    const agentDir = makeDir();
-    const pitDir = makeDir();
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: allPackages })
-    );
-    fs.writeFileSync(
-      path.join(pitDir, "config.json"),
-      JSON.stringify({ denyPackages: denylist })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-
-    // First call — baseline
-    await send(socketPath, token, { op: "refresh-settings" });
-    const before = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    expect(before.packages).not.toContain("npm:brand-new-package");
-
-    // Host settings change (global install outside the session)
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: [...allPackages, "npm:brand-new-package"] })
-    );
-
-    // Second call — should pick up the new package (and still apply denylist)
-    await send(socketPath, token, { op: "refresh-settings" });
-    const after = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    expect(after.packages).toContain("npm:brand-new-package");
-    for (const p of denylist) {
-      expect(after.packages).not.toContain(p);
-    }
-  });
-
-  it("absent settings.json produces an empty-packages output without crashing", async () => {
-    const agentDir = makeDir(); // no settings.json
-    const pitDir = makeDir();
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(pitDir, "config.json"),
-      JSON.stringify({ denyPackages: denylist })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    const resp = await send(socketPath, token, { op: "refresh-settings" });
-    expect(resp.ok).toBe(true);
-    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    expect(written.packages ?? []).toEqual([]);
-  });
-});
 
 // ── rename-branch op ──────────────────────────────────────────────────────────
 
@@ -275,10 +140,9 @@ describe("pit-escape rename-branch op", () => {
     const base = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
     const { worktreeDir, branchName } = setupWorktree(base);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "rename-branch", newBranch: "pi/new-name" });
 
     expect(resp.code).toBe(0);
@@ -290,9 +154,8 @@ describe("pit-escape rename-branch op", () => {
   it("returns an error when newBranch is missing", async () => {
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir });
     const resp = await send(socketPath, token, { op: "rename-branch" });
 
     expect(resp.error).toMatch(/newBranch/);
@@ -302,14 +165,13 @@ describe("pit-escape rename-branch op", () => {
     const base = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
     const { worktreeDir } = setupWorktree(base);
 
     // create a second branch in the repo so the name is taken
     const repoDir = path.join(base, "repo");
     execFileSync("git", ["-C", repoDir, "branch", "pi/already-exists"]);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "rename-branch", newBranch: "pi/already-exists" });
 
     expect(resp.code).not.toBe(0);
@@ -330,10 +192,9 @@ describe("git log and diff ops for rename-branch context", () => {
     const base = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
     const { worktreeDir } = setupWorktree(base);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const parentBranch = await getParentBranch(socketPath, token);
     const resp = await send(socketPath, token, { op: "git", args: ["log", `${parentBranch}..HEAD`, "--oneline"] });
 
@@ -345,7 +206,6 @@ describe("git log and diff ops for rename-branch context", () => {
     const base = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
     const { worktreeDir } = setupWorktree(base);
 
     const file = path.join(worktreeDir, "change.txt");
@@ -354,7 +214,7 @@ describe("git log and diff ops for rename-branch context", () => {
     execFileSync("git", ["-C", worktreeDir, "commit", "-m", "add change file"],
       { env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" } });
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const parentBranch = await getParentBranch(socketPath, token);
     const resp = await send(socketPath, token, { op: "git", args: ["log", `${parentBranch}..HEAD`, "--oneline"] });
 
@@ -366,7 +226,6 @@ describe("git log and diff ops for rename-branch context", () => {
     const base = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
     const { worktreeDir } = setupWorktree(base);
 
     const file = path.join(worktreeDir, "feature.ts");
@@ -375,7 +234,7 @@ describe("git log and diff ops for rename-branch context", () => {
     execFileSync("git", ["-C", worktreeDir, "commit", "-m", "add feature"],
       { env: { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "t@t" } });
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const parentBranch = await getParentBranch(socketPath, token);
     const resp = await send(socketPath, token, { op: "git", args: ["diff", "--stat", `${parentBranch}...HEAD`] });
 
@@ -477,139 +336,6 @@ function openSubscription(socketPath: string, token: string): Subscription {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-describe("pit-escape refresh-settings op", () => {
-  const denylist = [
-    "npm:@casualjim/pi-heimdall",
-    "npm:@spences10/pi-confirm-destructive",
-    "npm:@jerryan/pi-sanity",
-  ];
-
-  const allPackages = [...denylist, "npm:pi-agent-browser-native", "npm:agent-browser"];
-
-  it("responds { ok: true } on success", async () => {
-    const agentDir = makeDir();
-    const pitDir = makeDir();
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: allPackages })
-    );
-    fs.writeFileSync(
-      path.join(pitDir, "config.json"),
-      JSON.stringify({ denyPackages: denylist })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    const resp = await send(socketPath, token, { op: "refresh-settings" });
-    expect(resp.ok).toBe(true);
-    expect(resp.error).toBeUndefined();
-  });
-
-  it("writes the filtered settings file to hostSettingsPath", async () => {
-    const agentDir = makeDir();
-    const pitDir = makeDir();
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: allPackages })
-    );
-    fs.writeFileSync(
-      path.join(pitDir, "config.json"),
-      JSON.stringify({ denyPackages: denylist })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    await send(socketPath, token, { op: "refresh-settings" });
-
-    expect(fs.existsSync(hostSettingsPath)).toBe(true);
-    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    for (const p of denylist) {
-      expect(written.packages).not.toContain(p);
-    }
-    expect(written.packages).toContain("npm:pi-agent-browser-native");
-    expect(written.packages).toContain("npm:agent-browser");
-  });
-
-  it("without a pit config, passes all packages through unchanged", async () => {
-    const agentDir = makeDir();
-    const pitDir = makeDir(); // no config.json
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: allPackages })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    await send(socketPath, token, { op: "refresh-settings" });
-
-    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    expect(written.packages).toEqual(allPackages);
-  });
-
-  it("picks up changes to settings.json on a second call (the /reload case)", async () => {
-    // Simulate: user runs `pi install npm:new-package` outside the session.
-    // A subsequent /reload in the pit session should pick it up (minus denylist).
-    const agentDir = makeDir();
-    const pitDir = makeDir();
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: allPackages })
-    );
-    fs.writeFileSync(
-      path.join(pitDir, "config.json"),
-      JSON.stringify({ denyPackages: denylist })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-
-    // First call — baseline
-    await send(socketPath, token, { op: "refresh-settings" });
-    const before = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    expect(before.packages).not.toContain("npm:brand-new-package");
-
-    // Host settings change (global install outside the session)
-    fs.writeFileSync(
-      path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: [...allPackages, "npm:brand-new-package"] })
-    );
-
-    // Second call — should pick up the new package (and still apply denylist)
-    await send(socketPath, token, { op: "refresh-settings" });
-    const after = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    expect(after.packages).toContain("npm:brand-new-package");
-    for (const p of denylist) {
-      expect(after.packages).not.toContain(p);
-    }
-  });
-
-  it("absent settings.json produces an empty-packages output without crashing", async () => {
-    const agentDir = makeDir(); // no settings.json
-    const pitDir = makeDir();
-    const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
-
-    fs.writeFileSync(
-      path.join(pitDir, "config.json"),
-      JSON.stringify({ denyPackages: denylist })
-    );
-
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    const resp = await send(socketPath, token, { op: "refresh-settings" });
-    expect(resp.ok).toBe(true);
-    const written = JSON.parse(fs.readFileSync(hostSettingsPath, "utf8"));
-    expect(written.packages ?? []).toEqual([]);
-  });
-});
-
 // ── is-merged op ──────────────────────────────────────────────────────────────
 describe("pit-escape is-merged op", () => {
   it("returns merged:false for an unmerged branch with unique commits", async () => {
@@ -617,13 +343,12 @@ describe("pit-escape is-merged op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
     addCommit(worktreeDir); // diverges from master
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "is-merged" });
 
     expect(resp.merged).toBe(false);
@@ -638,7 +363,6 @@ describe("pit-escape is-merged op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
@@ -647,7 +371,7 @@ describe("pit-escape is-merged op", () => {
     // Fast-forward master to include the worktree branch's commit
     execFileSync("git", ["-C", mainRepo, "merge", "--ff-only", "pi/test"]);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "is-merged" });
 
     expect(resp.merged).toBe(true);
@@ -662,13 +386,12 @@ describe("pit-escape is-merged op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
     // No extra commits — branch tip equals master tip; branch IS an ancestor of master
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "is-merged" });
 
     expect(resp.merged).toBe(true);
@@ -682,13 +405,12 @@ describe("pit-escape is-merged op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo, "main");
     createWorktree(mainRepo, worktreeDir, "pi/test");
     addCommit(worktreeDir);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "is-merged" });
 
     expect(resp.merged).toBe(false);
@@ -702,13 +424,12 @@ describe("pit-escape is-merged op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo, "trunk"); // neither master nor main
     createWorktree(mainRepo, worktreeDir, "pi/test");
     addCommit(worktreeDir);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "is-merged" });
 
     expect(resp.merged).toBe(false);
@@ -720,9 +441,8 @@ describe("pit-escape is-merged op", () => {
   it("returns merged:false with null branch when worktreePath is not a linked worktree", async () => {
     const agentDir = makeDir(); // plain temp dir — no .git file
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: agentDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: agentDir });
     const resp = await send(socketPath, token, { op: "is-merged" });
 
     expect(resp.merged).toBe(false);
@@ -737,14 +457,13 @@ describe("pit-escape is-merged op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
     addCommit(worktreeDir);
     addCommit(worktreeDir);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "is-merged" });
 
     expect(resp.merged).toBe(false);
@@ -757,7 +476,6 @@ describe("pit-escape is-merged op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
@@ -769,7 +487,7 @@ describe("pit-escape is-merged op", () => {
     addCommit(mainRepo);
     addCommit(mainRepo);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const resp = await send(socketPath, token, { op: "is-merged" });
 
     expect(resp.merged).toBe(false);
@@ -786,12 +504,11 @@ describe("pit-escape subscribe op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const sub = openSubscription(socketPath, token);
     const ack = await sub.waitForMessage();
     sub.close();
@@ -805,13 +522,12 @@ describe("pit-escape subscribe op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
     addCommit(worktreeDir);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const sub = openSubscription(socketPath, token);
 
     // Wait for ack before triggering — ensures watcher is set up first
@@ -831,12 +547,11 @@ describe("pit-escape subscribe op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const sub = openSubscription(socketPath, token);
     await sub.waitForMessage(); // ack
 
@@ -852,9 +567,8 @@ describe("pit-escape subscribe op", () => {
   it("sends error and closes when worktreePath is not a linked worktree", async () => {
     const agentDir = makeDir(); // plain dir, no .git file
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: agentDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: agentDir });
     const sub = openSubscription(socketPath, token);
     const resp = await sub.waitForMessage();
     sub.close();
@@ -868,12 +582,11 @@ describe("pit-escape subscribe op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo, "trunk");
     createWorktree(mainRepo, worktreeDir, "pi/test");
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const sub = openSubscription(socketPath, token);
     const resp = await sub.waitForMessage();
     sub.close();
@@ -887,13 +600,12 @@ describe("pit-escape subscribe op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
     addCommit(worktreeDir);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const sub = openSubscription(socketPath, token);
     await sub.waitForMessage(); // ack
 
@@ -913,13 +625,12 @@ describe("pit-escape subscribe op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
     addCommit(worktreeDir);
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
 
     // Open subscription, wait for ack, then close it
     const sub = openSubscription(socketPath, token);
@@ -939,12 +650,11 @@ describe("pit-escape subscribe op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/original-name");
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const sub = openSubscription(socketPath, token);
     await sub.waitForMessage(); // ack
 
@@ -965,12 +675,11 @@ describe("pit-escape subscribe op", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
 
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/original-name");
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir });
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, worktreePath: worktreeDir });
     const sub = openSubscription(socketPath, token);
     await sub.waitForMessage(); // ack — watcher targeting "pi/original-name"
 
@@ -994,15 +703,14 @@ describe("pit-escape auth token", () => {
   it("rejects request with missing token", async () => {
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(makeDir(), "settings.json");
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
 
-    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
+    const { socketPath } = await spawnEscape({ agentDir, pitDir });
 
     const resp = await new Promise<Record<string, unknown>>((resolve) => {
       const sock = net.createConnection(socketPath);
       let buf = "";
-      sock.once("connect", () => { sock.write(JSON.stringify({ op: "refresh-settings" }) + "\n"); });
+      sock.once("connect", () => { sock.write(JSON.stringify({ op: "get-state" }) + "\n"); });
       sock.on("data", (c: Buffer) => { buf += c.toString(); });
       sock.once("end", () => { try { resolve(JSON.parse(buf.trim())); } catch { resolve({ error: "parse error" }); } });
       sock.once("error", (e: Error) => resolve({ error: e.message }));
@@ -1013,15 +721,14 @@ describe("pit-escape auth token", () => {
   it("rejects request with wrong token", async () => {
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(makeDir(), "settings.json");
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
 
-    const { socketPath } = await spawnEscape({ agentDir, pitDir, hostSettingsPath, token: "correct-token" });
+    const { socketPath } = await spawnEscape({ agentDir, pitDir, token: "correct-token" });
 
     const resp = await new Promise<Record<string, unknown>>((resolve) => {
       const sock = net.createConnection(socketPath);
       let buf = "";
-      sock.once("connect", () => { sock.write(JSON.stringify({ op: "refresh-settings", token: "wrong-token" }) + "\n"); });
+      sock.once("connect", () => { sock.write(JSON.stringify({ op: "get-state", token: "wrong-token" }) + "\n"); });
       sock.on("data", (c: Buffer) => { buf += c.toString(); });
       sock.once("end", () => { try { resolve(JSON.parse(buf.trim())); } catch { resolve({ error: "parse error" }); } });
       sock.once("error", (e: Error) => resolve({ error: e.message }));
@@ -1033,11 +740,10 @@ describe("pit-escape auth token", () => {
     const agentDir = makeDir();
     const pitDir = makeDir();
     const outDir = makeDir();
-    const hostSettingsPath = path.join(outDir, "settings.json");
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
 
-    const { socketPath, token } = await spawnEscape({ agentDir, pitDir, hostSettingsPath });
-    const resp = await send(socketPath, token, { op: "refresh-settings" });
-    expect(resp["ok"]).toBe(true);
+    const { socketPath, token } = await spawnEscape({ agentDir, pitDir });
+    const resp = await send(socketPath, token, { op: "get-state" });
+    expect(resp).toHaveProperty("branch");
   });
 });

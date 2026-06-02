@@ -58,13 +58,12 @@ describe("launchEffect mode-based extension passing", () => {
     vi.spyOn(process, "chdir").mockImplementation(() => undefined);
   });
 
-  const launch = (sandbox: boolean, pitConfig?: Parameters<typeof launchEffect>[6]) =>
+  const launch = (sandbox: boolean, pitConfig?: Parameters<typeof launchEffect>[4]) =>
     run(
       launchEffect(
         "/tmp/test-cwd",           // cwd
         ["--some-pi-flag"],        // piArgs
         sandbox,                   // sandbox
-        undefined,                 // settingsPath
         undefined,                 // mounts
         pitConfig,                 // pitConfig
       ),

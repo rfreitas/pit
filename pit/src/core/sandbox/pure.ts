@@ -212,23 +212,6 @@ export const buildSandboxMountSpec = (params: Readonly<{
   };
 };
 
-// ── settings filtering ────────────────────────────────────────────────────────
-
-/**
- * Filter a settings object by removing denied packages.
- * Pure — returns a new object, never mutates the original.
- */
-export const applyDenylist = (
-  settings: Record<string, unknown>,
-  denyPackages: string[],
-): Record<string, unknown> => {
-  if (denyPackages.length === 0) return settings;
-  const deny = new Set(denyPackages);
-  return {
-    ...settings,
-    packages: ((settings.packages as string[] | undefined) ?? []).filter((p) => !deny.has(p)),
-  };
-};
 
 /**
  * Build --extension flags from pit config's nonSandboxExtensions.

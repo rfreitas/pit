@@ -247,11 +247,9 @@ describe("session file accessible inside bwrap", () => {
         bwrap,
         [
           ...buildBwrapArgs(mounts, { cwd: worktree }),
-          // Pit mounts agentDirReal at its real path AND as /pit-agent
-          "--bind", agentDir, "/pit-agent",
           "--setenv", "HOME",   process.env.HOME!,
           "--setenv", "PATH",   "/usr/bin:/bin",
-          "--setenv", "PI_CODING_AGENT_DIR", "/pit-agent",
+          "--setenv", "PI_CODING_AGENT_DIR", agentDir,
           "--",
           // Use grep (from /usr/bin) rather than node to keep the test minimal
           "/usr/bin/grep", "-c", "sentinel-001", sessionFile,

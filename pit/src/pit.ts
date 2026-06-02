@@ -23,7 +23,6 @@ import {
   WorktreeMissingError,
   SocketAliveError,
   SessionWriteError,
-  SettingsWriteError,
 } from "./errors.ts";
 
 // ── logger ───────────────────────────────────────────────────────────────────
@@ -47,8 +46,7 @@ type PitError =
   | WorktreeCreationError
   | WorktreeMissingError
   | SocketAliveError
-  | SessionWriteError
-  | SettingsWriteError;
+  | SessionWriteError;
 
 Effect.runPromise(
   program.pipe(

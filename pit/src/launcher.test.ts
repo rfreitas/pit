@@ -75,7 +75,7 @@ const launch = (opts: {
     const exitStub = vi.spyOn(process, "exit").mockImplementation(
       () => undefined as never,
     );
-    bwrapLaunch("/work", [], dummyMounts, opts.pitConfig ?? baseConfig, undefined, opts.escapeToken);
+    bwrapLaunch("/work", [], dummyMounts, opts.pitConfig ?? baseConfig, opts.escapeToken);
     exitStub.mockRestore();
   } finally {
     process.argv[1] = origArgv1;

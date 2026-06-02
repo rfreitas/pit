@@ -4,7 +4,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { run } from "../../tests/helpers.ts";
-import { resolveUnversionedDirs, readPitConfig, writeFilteredSettings } from "./io.ts";
+import { readPitConfig, resolveUnversionedDirs } from "./io.ts";
+
 
 const { makeTmp, makeSandbox } = useTmpDirs();
 
@@ -114,94 +115,9 @@ describe("readPitConfig", () => {
   it("returns empty object when config.json does not exist", async () => {
     expect(await run(readPitConfig(makeSandbox("pit-config-")))).toEqual({});
   });
-  it("parses denyPackages from config.json", async () => {
-    const d = makeSandbox("pit-config-");
-    fs.writeFileSync(path.join(d, "config.json"), JSON.stringify({ denyPackages: ["npm:@casualjim/pi-heimdall"] }));
-    expect((await run(readPitConfig(d))).denyPackages).toEqual(["npm:@casualjim/pi-heimdall"]);
-  });
   it("returns empty object for malformed JSON (does not throw)", async () => {
     const d = makeSandbox("pit-config-");
     fs.writeFileSync(path.join(d, "config.json"), "{ invalid json }");
     expect(await run(readPitConfig(d))).toEqual({});
-  });
-  it("returns empty object when denyPackages is absent from valid JSON", async () => {
-    // Distinguishes "missing file" from "valid JSON without denyPackages key".
-    // The function must not crash on missing key access.
-    const d = makeSandbox("pit-config-");
-    fs.writeFileSync(path.join(d, "config.json"), JSON.stringify({}));
-    expect((await run(readPitConfig(d))).denyPackages).toBeUndefined();
-  });
-});
-
-// ── writeFilteredSettings ─────────────────────────────────────────────────────
-//
-// Reads settings.json, applies the denylist, and writes filtered result.
-
-describe("writeFilteredSettings", () => {
-  const rawSettings = {
-    defaultModel: "claude-sonnet",
-    packages: [
-      "npm:@casualjim/pi-heimdall",
-      "npm:@spences10/pi-confirm-destructive",
-      "npm:pi-agent-browser-native",
-    ],
-  };
-
-  it("writes a file at the given path", async () => {
-    const agentDir = makeSandbox("pit-settings-agent-");
-    const outDir = makeSandbox("pit-settings-out-");
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
-    const outPath = path.join(outDir, "settings.json");
-    await run(writeFilteredSettings(agentDir, {}, outPath));
-    expect(fs.existsSync(outPath)).toBe(true);
-  });
-  it("output is valid JSON", async () => {
-    const agentDir = makeSandbox("pit-settings-agent-");
-    const outDir = makeSandbox("pit-settings-out-");
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
-    await run(writeFilteredSettings(agentDir, {}, path.join(outDir, "settings.json")));
-    expect(() => JSON.parse(fs.readFileSync(path.join(outDir, "settings.json"), "utf8"))).not.toThrow();
-  });
-  it("removes denied packages from the output", async () => {
-    const agentDir = makeSandbox("pit-settings-agent-");
-    const outDir = makeSandbox("pit-settings-out-");
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
-    const outPath = path.join(outDir, "settings.json");
-    await run(writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath));
-    const r = JSON.parse(fs.readFileSync(outPath, "utf8"));
-    expect(r.packages).not.toContain("npm:@casualjim/pi-heimdall");
-    expect(r.packages).toContain("npm:pi-agent-browser-native");
-  });
-  it("with empty denylist, output packages match input exactly", async () => {
-    const agentDir = makeSandbox("pit-settings-agent-");
-    const outDir = makeSandbox("pit-settings-out-");
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
-    const outPath = path.join(outDir, "settings.json");
-    await run(writeFilteredSettings(agentDir, {}, outPath));
-    expect(JSON.parse(fs.readFileSync(outPath, "utf8")).packages).toEqual(rawSettings.packages);
-  });
-  it("creates parent directories if they don't exist", async () => {
-    const agentDir = makeSandbox("pit-settings-agent-");
-    const outDir = makeSandbox("pit-settings-out-");
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
-    const outPath = path.join(outDir, "nested", "deep", "settings.json");
-    await run(writeFilteredSettings(agentDir, {}, outPath));
-    expect(fs.existsSync(outPath)).toBe(true);
-  });
-  it("preserves non-packages keys in the output", async () => {
-    // applyDenylist must not strip keys other than packages.
-    const agentDir = makeSandbox("pit-settings-agent-");
-    const outDir = makeSandbox("pit-settings-out-");
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(rawSettings));
-    const outPath = path.join(outDir, "settings.json");
-    await run(writeFilteredSettings(agentDir, { denyPackages: ["npm:@casualjim/pi-heimdall"] }, outPath));
-    expect(JSON.parse(fs.readFileSync(outPath, "utf8")).defaultModel).toBe("claude-sonnet");
-  });
-  it("absent settings.json produces an empty object (no throw)", async () => {
-    const agentDir = makeSandbox("pit-settings-agent-");
-    const outDir = makeSandbox("pit-settings-out-");
-    const outPath = path.join(outDir, "settings.json");
-    await run(writeFilteredSettings(agentDir, {}, outPath));
-    expect(JSON.parse(fs.readFileSync(outPath, "utf8"))).toEqual({});
   });
 });
