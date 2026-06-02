@@ -25,7 +25,7 @@ import { layer as NodeContextLayer, type NodeContext } from "../src/node-context
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { findBwrap, buildBwrapArgs } from "../src/launcher.ts";
+import { findBwrap, buildBwrapArgs, hardlinkOverSymlink } from "../src/launcher.ts";
 import { writeFilteredSettings } from "../src/core/sandbox/io.ts";
 import { linuxPlatformRoMounts } from "../src/core/sandbox/pure.ts";
 import type { SandboxMounts } from "../src/types.ts";
@@ -324,6 +324,10 @@ describe("shadow agent dir bwrap wiring", () => {
       ],
     };
 
+    // If settings.json is a symlink, bwrap can't bind-mount over it.
+    // Replace it with a hardlink to the filtered file first, restore after.
+    const restoreSymlink = hardlinkOverSymlink(agentDir, filteredSettingsPath);
+
     try {
       const result = spawnSync(
         bwrap,
@@ -339,6 +343,7 @@ describe("shadow agent dir bwrap wiring", () => {
       );
       return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", status: result.status ?? 1 };
     } finally {
+      restoreSymlink();
       fs.rmSync(scriptFile, { force: true });
     }
   }
@@ -448,6 +453,33 @@ describe("shadow agent dir bwrap wiring", () => {
       expect(JSON.parse(fs.readFileSync(filteredPath, "utf8")).packages).toEqual(["written"]);
       // Real settings untouched
       expect(JSON.parse(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8")).packages).toEqual(["real"]);
+    }
+  );
+
+  it.skipIf(!hasBwrapUserNS)(
+    "settings.json symlink is overridden by filtered bind (settings.json is a symlink to an external file)",
+    async () => {
+      // Real-world scenario: settings.json is a symlink to a repo-managed file
+      // (e.g. ~/.pi/agent/settings.json -> ~/repos/agent/pi_wsl/settings.json).
+      // The shadow agent bind must override the symlink with the filtered file.
+      const agentDir = makeAgentDir();
+      const realSettingsPath = path.join(makeTmpDir(), "real-settings.json");
+      fs.writeFileSync(realSettingsPath, JSON.stringify({ packages: [...denylist, allowedPkg] }));
+      fs.symlinkSync(realSettingsPath, path.join(agentDir, "settings.json"));
+
+      const filteredPath = path.join(makeTmpDir(), "settings.json");
+      await run(writeFilteredSettings(agentDir, { denyPackages: denylist }, filteredPath));
+
+      const result = runWithShadowAgent(agentDir, filteredPath, `
+        import { readFileSync } from "node:fs";
+        const s = JSON.parse(readFileSync(process.env.PI_CODING_AGENT_DIR + "/settings.json", "utf8"));
+        process.stdout.write(JSON.stringify(s.packages));
+      `);
+      expect(result.status, result.stderr).toBe(0);
+      const packages: string[] = JSON.parse(result.stdout);
+      // Filtered: denied packages removed, allowed packages present
+      expect(packages).toContain(allowedPkg);
+      for (const p of denylist) expect(packages).not.toContain(p);
     }
   );
 });

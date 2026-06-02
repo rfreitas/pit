@@ -3,7 +3,7 @@
  * pit-escape out-of-sandbox helper.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, linkSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, linkSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -214,6 +214,27 @@ export const buildBwrapArgs = (
   ];
 };
 
+/**
+ * If settings.json in agentDirReal is a symlink, replace it with a hardlink
+ * to the filtered settings file so bwrap can bind-mount over it.
+ * Returns a restore function that recreates the symlink.
+ */
+export const hardlinkOverSymlink = (agentDirReal: string, settingsPath: string): (() => void) => {
+  const settingsFile = join(agentDirReal, "settings.json");
+  const target = ((): string | null => {
+    try { return readlinkSync(settingsFile); } catch { return null; }
+  })();
+  if (target === null) return () => {};
+
+  unlinkSync(settingsFile);
+  linkSync(settingsPath, settingsFile);
+
+  return () => {
+    try { unlinkSync(settingsFile); } catch { /* already gone */ }
+    symlinkSync(target, settingsFile);
+  };
+};
+
 // ── env helpers ─────────────────────────────────────────────────────────────
 
 /** Return ["--setenv", name, value] if the var is set in process.env, else []. */
@@ -264,6 +285,11 @@ export const bwrapLaunch = (
   const nodeDir = dirname(dirname(nodeBin));
   const scriptPath = process.argv[1]!;
   const pitInnerScript = resolve(dirname(scriptPath), "src", "inner.ts");
+  const agentDirReal = realpathSync(AGENT_DIR);
+
+  // If settings.json is a symlink (e.g. Nix-managed dotfile), bwrap can't
+  // bind-mount over it. Replace it with a hardlink to the filtered file first.
+  const restoreSymlink = settingsPath ? hardlinkOverSymlink(agentDirReal, settingsPath) : () => {};
 
   const agentDirEnv = settingsPath ? ["--setenv", "PI_CODING_AGENT_DIR", "/pit-agent"] : [];
 
@@ -283,13 +309,14 @@ export const bwrapLaunch = (
   ];
 
   const args: Readonly<string[]> = [
-    ...buildBwrapArgs(mounts, { cwd, scriptPath, settingsPath }),
+    ...buildBwrapArgs(mounts, { cwd, scriptPath, settingsPath, agentDir: agentDirReal }),
     ...envArgs,
     ...agentDirEnv,
     "--", nodeBin, "--experimental-strip-types", pitInnerScript, ...piArgs,
   ];
 
   const result = spawnSync(bwrap, args, { stdio: "inherit" });
+  restoreSymlink();
   if (settingsPath) try { unlinkSync(settingsPath); } catch { /* already gone */ }
   process.exit(result.status ?? 1);
 };
