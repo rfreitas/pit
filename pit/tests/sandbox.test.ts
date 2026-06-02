@@ -25,19 +25,13 @@ import { layer as NodeContextLayer, type NodeContext } from "../src/node-context
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { findBwrap } from "../src/launcher.ts";
 import { writeFilteredSettings } from "../src/core/sandbox/io.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function findBwrap(): string | null {
-  for (const p of ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
 
 function getAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME!, ".pi", "agent");

@@ -24,19 +24,13 @@ import { spawnSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { setupNewSession } from "../src/core/session/io.ts";
 import { cwdToBucket } from "../src/core/session/pure.ts";
+import { findBwrap } from "../src/launcher.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
 import type { WorktreeResult } from "../src/types.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function findBwrap(): string | null {
-  for (const p of ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
 
 // All test artifacts live inside the repo under pit/test-sandbox/
 // so they're accessible regardless of sandbox boundaries.

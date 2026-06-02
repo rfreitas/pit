@@ -14,11 +14,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Effect } from "effect";
 import { layer as NodeContextLayer } from "./node-context.ts";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execSync } from "node:child_process";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { useTmpDirs, run } from "./tests/helpers.ts";
 import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { setupNewSession } from "./core/session/io.ts";
+import { findBwrap } from "./launcher.ts";
 import type { WorktreeResult } from "./types.ts";
 
 // ── mocks ─────────────────────────────────────────────────────────────────────
@@ -45,8 +46,10 @@ vi.mock("node:fs", async (orig) => {
     ...real,
     realpathSync: (p: string) => p,
     existsSync: (p: string) => {
-      // Make bwrap look installed so findBwrap() returns a path
-      if (p === "/usr/bin/bwrap" || p === "/usr/local/bin/bwrap") return true;
+      // Make bwrap look installed so the imported findBwrap() returns a path
+      // for unit tests (bwrapLaunch, etc.). Integration tests use
+      // findBwrapReal() which calls execSync to locate the real binary.
+      if (p.endsWith("/bwrap")) return true;
       return real.existsSync(p);
     },
   };
@@ -56,12 +59,15 @@ vi.mock("node:fs", async (orig) => {
 
 const { makeTmp, makeSandbox } = useTmpDirs();
 
+/** Like findBwrap from launcher.ts but bypasses the node:fs mock. */
 function findBwrapReal(): string | null {
-  if (fs.existsSync("/usr/bin/bwrap")) return "/usr/bin/bwrap";
-  if (fs.existsSync("/usr/local/bin/bwrap")) return "/usr/local/bin/bwrap";
-  return null;
+  try {
+    return execSync("command -v bwrap", { encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
+  }
 }
-const hasBwrap = !!(fs.existsSync("/usr/bin/bwrap") || fs.existsSync("/usr/local/bin/bwrap"));
+const hasBwrap = !!findBwrapReal();
 
 async function makeWorktreeSession(worktree: string, agentDir: string) {
   const result: WorktreeResult = {

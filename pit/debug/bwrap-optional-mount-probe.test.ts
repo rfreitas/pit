@@ -7,9 +7,10 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { findBwrap } from "../src/launcher.ts";
 
 const isMacos = process.platform === "darwin";
-const bwrapPath = ["/usr/bin/bwrap", "/usr/local/bin/bwrap"].find(p => fs.existsSync(p)) ?? null;
+const bwrapPath = findBwrap();
 const nodeDir = path.dirname(path.dirname(process.execPath));
 
 function bwrapWorks(): boolean {

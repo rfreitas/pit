@@ -58,9 +58,11 @@ export const extensionArgs = (): string[] => {
 
 // ── sandbox helpers ───────────────────────────────────────────────────────────
 
-export const findBwrap = (): string | null => {
-  return ["/usr/bin/bwrap", "/usr/local/bin/bwrap"].find(p => existsSync(p)) ?? null;
-};
+export const findBwrap = (): string | null =>
+  (process.env.PATH ?? "")
+    .split(":")
+    .map(d => join(d, "bwrap"))
+    .find(p => existsSync(p)) ?? null;
 
 export const findSandboxExec = (): string | null =>
   process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec")

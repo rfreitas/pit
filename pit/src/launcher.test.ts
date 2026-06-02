@@ -18,11 +18,19 @@ vi.mock("node:child_process", async (importOriginal) => ({
   execSync: mockExecSync,
 }));
 
-// Stub realpathSync so tests don't hit the real filesystem for /usr/bin/pi
-vi.mock("node:fs", async (importOriginal) => ({
-  ...await importOriginal<typeof import("node:fs")>(),
-  realpathSync: (p: string) => p,
-}));
+// Stub realpathSync so tests don't hit the real filesystem for /usr/bin/pi.
+// Also stub existsSync so findBwrap() works regardless of bwrap's real location.
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...real,
+    realpathSync: (p: string) => p,
+    existsSync: (p: string) => {
+      if (p.endsWith("/bwrap")) return true;
+      return real.existsSync(p);
+    },
+  };
+});
 
 import type { SandboxMounts, PitConfig } from "./types.ts";
 import { bwrapLaunch } from "./launcher.ts";
