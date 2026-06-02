@@ -97,7 +97,7 @@ function runPit(
         HTTP_PROXY: "http://127.0.0.1:1",        ...opts.extraEnv,
       },
       encoding: "utf8",
-      timeout: 5000,
+      timeout: 15000, // match vitest default testTimeout; CI first-run bwrap can be slower
     }
   );
   return {
