@@ -3,7 +3,7 @@
 > Sandboxed Pi with Git Worktrees — controlled agents running free.
 
 > [!WARNING]
-> This project is still in development. Expect rough edges and breaking changes.
+> This project is not ready for production. Expect rough edges, breaking changes, and plenty of vibe code. It's a personal tool used by me, for me — use at your own risk.
 
 `pit` is a transparent wrapper around the [Pi coding agent](https://pi.dev) that does two things every time you start a session:
 
