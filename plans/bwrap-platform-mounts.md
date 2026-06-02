@@ -40,6 +40,78 @@ The `plans/` dir already has `pit-non-interactive-modes.md` which touches on tes
 
 ## Alternatives considered
 
-- **Just add `--ro-bind-try /nix /nix` to every test site**: immediate fix but continues duplication. Rejected.
-- **Make bwrapLaunch() not exit**: too invasive, changes production behavior. Rejected.
-- **Tests use bwrapLaunch() directly**: can't — it exits the process and uses `stdio: "inherit"`. Rejected.
+### A) Quick fix: add `--ro-bind-try /nix /nix` to every test site
+
+Immediate fix but continues the copy-paste pattern. Adding another platform
+would require touching 11+ sites again. Rejected.
+
+### B) Separate module with all platform-specific binary mounts
+
+A dedicated file (e.g. `platform-mounts.ts`) that exports the full set of
+`--ro-bind-try` platform mounts as a flat string array. Tests spread it into
+their args. Production code references the same array.
+
+```typescript
+// platform-mounts.ts
+export const LINUX_PLATFORM_BWRAP_ARGS = [
+  "--ro-bind-try", "/mnt/wsl",             "/mnt/wsl",
+  "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
+  "--ro-bind-try", "/nix",                 "/nix",
+  "--ro-bind-try", "/lib",                 "/lib",
+  "--ro-bind-try", "/lib64",               "/lib64",
+  "--ro-bind-try", "/bin",                 "/bin",
+  "--ro-bind-try", "/sbin",                "/sbin",
+];
+```
+
+**Pros:** Simplest to use — one spread operator. No `SandboxMounts`
+construction needed in tests.
+
+**Cons:** Duplicates data with `pure.ts` (same paths live as `RoMount[]`
+objects AND as a flat string array). Adding a mount means updating both.
+
+**Current approach uses a variant of this:** `linuxPlatformRoMounts()`
+exports `RoMount[]` objects (typed, label-bearing) rather than raw strings.
+Both production and tests consume the same list, avoiding the double-source
+problem. `buildBwrapArgs()` converts the objects to bwrap flags.
+
+### C) Mount entire host filesystem read-only as base
+
+The macOS sandbox-exec backend uses deny-by-default: `/` is mounted read-only,
+then specific paths are selectively allowed. Bwrap could do the same:
+
+```bash
+bwrap --ro-bind / / --bind /tmp /tmp --bind /home/user/work /home/user/work ...
+```
+
+Instead of `--tmpfs /` (empty base + selective mounts), we'd `--ro-bind / /`
+(full filesystem, read-only) + selective `--bind` for writable paths.
+
+**Pros:**
+- Zero platform-specific mounts needed. `/nix`, `/mnt/wsl`, `/lib` — all
+already visible because `/` is mounted.
+- Same mental model as macOS sandbox-exec (one sandbox strategy, not two).
+- Future-proof: new distro quirks don't need new mounts.
+
+**Cons:**
+- **Security:** read-only `/` exposes far more of the host filesystem than
+`--tmpfs /`. All of `/etc`, `/home`, `/var`, etc. becomes readable. The
+current `--tmpfs /` approach guarantees the sandbox sees nothing except
+explicitly mounted paths.
+- **Leaks host paths:** `ls /home` shows real usernames, `cat /etc/passwd`
+works. Current approach keeps these invisible.
+- **Bwrap order sensitivity:** `--ro-bind / /` followed by `--bind /tmp /tmp`
+works (later bind overrides earlier ro-bind). But this is subtle and easy to
+get wrong — if a mount order changes, a writable path could accidentally
+become read-only.
+- **Accidental exposure:** a poorly-sandboxed script can `require('fs').readFileSync('/etc/shadow')`
+if the host has it readable. With `--tmpfs /`, that path doesn't exist at all.
+
+**Verdict:** The security regression is significant. The current `--tmpfs /`
+approach is the stronger sandbox — nothing exists unless explicitly granted.
+However, we could consider a hybrid: `--ro-bind / /` only for test helpers
+(where security doesn't matter, correctness does) while production keeps
+`--tmpfs /`.
+
+This is worth discussing but is out of scope for this change. Would require
+a full security review and likely a config flag (`--sandbox-mode strict|permissive`).
