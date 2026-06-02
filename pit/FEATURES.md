@@ -101,6 +101,8 @@ This lets the agent run tests, execute build scripts, and import packages withou
 
 Pi's config directory (`~/.pi/agent`) is mounted read-write in the sandbox. Pi reads and writes `settings.json` directly — there is no filtering, no virtual path, and no temp file. All config files (sessions, auth, settings) are accessible normally and changes persist across sessions.
 
+**Symlinks:** the kernel resolves symlinks to their final target before checking mount permissions. If `settings.json` is a symlink to a path outside the sandbox (e.g. a dotfiles-managed path elsewhere in the home directory), reads and writes fail with `ENOENT`. pit does not automatically follow or translate symlinks. The recommended setup is a real file or hardlink at `~/.pi/agent/settings.json`. If you must use a symlink, mount the target path via `sandbox.allowRead` / `sandbox.allowWrite` in [config](#config).
+
 ### Package filtering
 
 Packages listed in `settings.json` load unrestricted inside the sandbox. The escape socket uses token authentication to prevent unauthorised access — a loaded package cannot abuse pit-escape without the token. For extensions that should only run outside the sandbox, use [`nonSandboxExtensions`](#config) in pit config.
