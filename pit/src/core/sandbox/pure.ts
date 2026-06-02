@@ -229,3 +229,12 @@ export const applyDenylist = (
     packages: ((settings.packages as string[] | undefined) ?? []).filter((p) => !deny.has(p)),
   };
 };
+
+/**
+ * Build --extension flags from pit config's nonSandboxExtensions.
+ * Returns empty array when undefined or empty — safe to spread into piArgs.
+ */
+export const nonSandboxExtensionFlags = (
+  pitConfig: Readonly<PitConfig> | undefined,
+): string[] =>
+  pitConfig?.nonSandboxExtensions?.flatMap(p => ["--extension", p]) ?? [];

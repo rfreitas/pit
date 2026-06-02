@@ -25,7 +25,7 @@ import { layer as NodeContextLayer, type NodeContext } from "../src/node-context
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { findBwrap, buildBwrapArgs, hardlinkOverSymlink } from "../src/launcher.ts";
+import { findBwrap, buildBwrapArgs, replaceSymlinkForBwrap } from "../src/launcher.ts";
 import { writeFilteredSettings } from "../src/core/sandbox/io.ts";
 import { linuxPlatformRoMounts } from "../src/core/sandbox/pure.ts";
 import type { SandboxMounts } from "../src/types.ts";
@@ -268,6 +268,28 @@ describe("pit bwrap sandbox", () => {
     // This test verifies the SDK initialises and DNS resolves without crashing.
     expect(count, "no models — DNS or auth broken inside bwrap").toBeGreaterThanOrEqual(0);
   });
+
+  it.skipIf(!hasBwrapUserNS)("settings.json at real agent dir path is readable and writable", () => {
+    // After removing shadow mounts, pi reads/writes settings.json directly
+    // from the rw-mounted agent dir — no /pit-agent, no filtered temp file.
+    const agentDir = fs.mkdtempSync(path.join("/tmp", "pit-agent-rw-"));
+    tmpDirs.push(agentDir);
+    const settingsPath = path.join(agentDir, "settings.json");
+    fs.writeFileSync(settingsPath, JSON.stringify({ theme: "test" }));
+
+    const result = runInBwrap(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      const p = process.env.PI_CODING_AGENT_DIR + "/settings.json";
+      const s = JSON.parse(readFileSync(p, "utf8"));
+      if (s.theme !== "test") process.exit(1);
+      writeFileSync(p, JSON.stringify({ theme: "updated" }));
+      process.stdout.write("ok");
+    `, { agentDir });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("ok");
+    // Verify write propagated to host
+    expect(JSON.parse(fs.readFileSync(settingsPath, "utf8")).theme).toBe("updated");
+  });
 });
 
 // ── shadow agent dir ────────────────────────────────────────────────────────
@@ -326,7 +348,7 @@ describe("shadow agent dir bwrap wiring", () => {
 
     // If settings.json is a symlink, bwrap can't bind-mount over it.
     // Replace it with a hardlink to the filtered file first, restore after.
-    const restoreSymlink = hardlinkOverSymlink(agentDir, filteredSettingsPath);
+    const restoreSymlink = replaceSymlinkForBwrap(agentDir, filteredSettingsPath);
 
     try {
       const result = spawnSync(

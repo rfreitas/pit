@@ -51,6 +51,29 @@ extensions — no pit coordination needed.
 ### Added
 - `nonSandboxExtensions?: string[]` to `PitConfig`
 
+### TDD tests (write BEFORE implementation, all should fail first)
+
+1. **Sandbox: pi reads/writes settings.json at real agent dir**
+   (`sandbox.test.ts` — bwrap integration). Spawn bwrap with agent dir
+   rw-mounted, `PI_CODING_AGENT_DIR` unset, verify pi reads and writes
+   `settings.json` at `~/.pi/agent/settings.json`.
+   Level: integration (`runInBwrap`), ~300ms.
+
+2. **Non-sandbox: pi reads/writes settings.json**
+   (`program.test.ts` — unit). Verify `main()` is called with args that
+   let pi use the real settings.json path (no shadow mount, no settingsPath).
+   Level: unit, instant.
+
+3. **Sandbox: nonSandboxExtensions NOT passed**
+   (`program.test.ts` — unit). When sandbox is true, `nonSandboxExtensions`
+   from pit config are NOT included in the extension flags passed to pi.
+   Level: unit, instant.
+
+4. **Non-sandbox: nonSandboxExtensions ARE passed**
+   (`program.test.ts` — unit). When sandbox is false, `nonSandboxExtensions`
+   are included as `--extension` flags in piArgs.
+   Level: unit, instant.
+
 ### Changed
 - `launchEffect` non-sandbox path: spreads `nonSandboxExtensionFlags` into piArgs
 - `createExtensionFactories`: remove `createReloadHook` from the returned array

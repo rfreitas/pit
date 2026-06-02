@@ -3,7 +3,7 @@
  * pit-escape out-of-sandbox helper.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, linkSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, linkSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -19,7 +19,7 @@ import {
   resolveWorktreeGitRwMounts,
 } from "./core/git/utils.ts";
 import { resolveUnversionedDirs } from "./core/sandbox/io.ts";
-import { buildSandboxMountSpec, allowedEnvArgs, buildSealedEnv } from "./core/sandbox/pure.ts";
+import { buildSandboxMountSpec, allowedEnvArgs, buildSealedEnv, nonSandboxExtensionFlags } from "./core/sandbox/pure.ts";
 import { buildSbplProfile } from "./core/sandbox/sbpl.ts";
 import { probeSocketEffect } from "./extensions/escape/client.ts";
 import { setPitEscapeSocket } from "./env.ts";
@@ -215,11 +215,13 @@ export const buildBwrapArgs = (
 };
 
 /**
- * If settings.json in agentDirReal is a symlink, replace it with a hardlink
- * to the filtered settings file so bwrap can bind-mount over it.
- * Returns a restore function that recreates the symlink.
+ * If settings.json in agentDirReal is a symlink, replace it with a regular
+ * file copy so bwrap can bind-mount over it (bwrap cannot bind over a symlink).
+ * Returns a restore function that recreates the original symlink.
+ * Using a copy (not a hardlink) avoids EXDEV when /tmp and the agent dir
+ * are on different filesystems.
  */
-export const hardlinkOverSymlink = (agentDirReal: string, settingsPath: string): (() => void) => {
+export const replaceSymlinkForBwrap = (agentDirReal: string, settingsPath: string): (() => void) => {
   const settingsFile = join(agentDirReal, "settings.json");
   const target = ((): string | null => {
     try { return readlinkSync(settingsFile); } catch { return null; }
@@ -227,7 +229,7 @@ export const hardlinkOverSymlink = (agentDirReal: string, settingsPath: string):
   if (target === null) return () => {};
 
   unlinkSync(settingsFile);
-  linkSync(settingsPath, settingsFile);
+  copyFileSync(settingsPath, settingsFile);
 
   return () => {
     try { unlinkSync(settingsFile); } catch { /* already gone */ }
@@ -289,7 +291,7 @@ export const bwrapLaunch = (
 
   // If settings.json is a symlink (e.g. Nix-managed dotfile), bwrap can't
   // bind-mount over it. Replace it with a hardlink to the filtered file first.
-  const restoreSymlink = settingsPath ? hardlinkOverSymlink(agentDirReal, settingsPath) : () => {};
+  const restoreSymlink = settingsPath ? replaceSymlinkForBwrap(agentDirReal, settingsPath) : () => {};
 
   const agentDirEnv = settingsPath ? ["--setenv", "PI_CODING_AGENT_DIR", "/pit-agent"] : [];
 
@@ -474,12 +476,14 @@ export const launchEffect = (
       );
     }
     // Non-sandbox: pass the same factories so extension behaviour is consistent.
+    // Also pass nonSandboxExtensions from pit config as --extension flags.
     const socketPath = escapeHandle?.socketPath ?? "";
     const token = escapeHandle?.token ?? "";
+    const extFlags = nonSandboxExtensionFlags(pitConfig);
     process.chdir(cwd);
     setupProxyAgent();
     yield* Effect.promise(() =>
-      main(piArgs, {
+      main([...piArgs, ...extFlags], {
         extensionFactories: createExtensionFactories(socketPath, token, false),
       }).catch(() => {})
     );

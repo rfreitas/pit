@@ -88,6 +88,8 @@ export interface PitConfig {
    * are silently skipped. Example: ["http_proxy", "https_proxy"].
    */
   allowEnv?: string[];
+  /** Extension paths passed as --extension flags only in non-sandbox mode. */
+  nonSandboxExtensions?: string[];
   /**
    * Per-platform read/write policy overrides.
    * allowRead: Linux → adds to ro[]; macOS → removes from readDeny[].
