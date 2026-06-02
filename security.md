@@ -31,11 +31,14 @@ The protocol is unauthenticated newline-delimited JSON. There is no token.
 `merge-to-parent` and `rename-branch` modify shared git state without user
 confirmation. Any code that can read the environment can trigger them.
 
-## Denylist
+## Sandbox
 
-`pit/config.json` `denyPackages` prevents specific packages from loading.
-A package that never loads cannot reach the socket. A package that does load
-has full socket access regardless of what it is.
+Packages listed in `settings.json` load unrestricted inside the sandbox.
+The escape socket uses token authentication — a loaded package cannot
+abuse pit-escape without the session token.
+
+For extensions that should only run outside the sandbox, use
+`nonSandboxExtensions` in `pit/config.json`.
 
 ## Network
 

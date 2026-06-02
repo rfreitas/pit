@@ -60,8 +60,6 @@ The sandbox features below use implementation-neutral names. Each has a platform
 | [Read grants](#read-grants) | A curated set of paths the agent may read: system directories, selective home dotfiles, and active Pi extensions. |
 | [Write grants](#write-grants) | A curated set of paths the agent may read and write: the worktree, Pi config dir, npm cache, mise shims, Node.js binaries. |
 | [Ephemeral layers](#ephemeral-layers) | Unversioned directories from the parent repo (e.g. `node_modules`) are overlaid onto the worktree. Writes to them are discarded when the session ends. |
-| [Dir remap](#dir-remap) | Pi's config directory is presented at a controlled path with a filtered `settings.json` substituted in. The real `settings.json` is never visible inside the sandbox. |
-| [Package filtering](#package-filtering) | Strips specified Pi packages from `settings.json` before the session starts. The real `settings.json` is never modified. |
 | [Env seal](#env-seal) | The agent starts with a clean environment. Only an explicit allowlist of variables is passed in; shell credentials and tokens are not forwarded. |
 | Process isolation | The agent runs in its own process namespace. Orphaned child processes are reaped when the session ends. |
 | Lifetime binding | The sandbox process is tied to pit's lifetime. If pit exits or the terminal closes, the sandbox is killed. |
@@ -101,21 +99,11 @@ This lets the agent run tests, execute build scripts, and import packages withou
 
 ### Dir remap
 
-Pi's config directory is presented to the agent at a controlled path. Inside that path, `settings.json` is replaced with a filtered copy (see [Package filtering](#package-filtering)). The real `settings.json` on the host is never exposed. All other config files (sessions, auth, etc.) are accessible through the remap and changes to them persist normally.
+Pi's config directory (`~/.pi/agent`) is mounted read-write in the sandbox. Pi reads and writes `settings.json` directly — there is no filtering, no virtual path, and no temp file. All config files (sessions, auth, settings) are accessible normally and changes persist across sessions.
 
 ### Package filtering
 
-Specific Pi packages can be prevented from loading inside sandbox sessions. A filtered copy of `settings.json` is written at session start and injected via [dir remap](#dir-remap). The real `settings.json` is never modified.
-
-Configure in `~/.pi/pit/config.json`:
-
-```json
-{
-  "denyPackages": ["npm:@casualjim/pi-heimdall"]
-}
-```
-
-Entries must match the package source strings in your Pi `settings.json` exactly.
+Packages listed in `settings.json` load unrestricted inside the sandbox. The escape socket uses token authentication to prevent unauthorised access — a loaded package cannot abuse pit-escape without the token. For extensions that should only run outside the sandbox, use [`nonSandboxExtensions`](#config) in pit config.
 
 ### Env seal
 
@@ -129,7 +117,7 @@ The agent process starts with a clean environment. Variables forwarded by defaul
 
 | Field | Type | What it does |
 |---|---|---|
-| `denyPackages` | `string[]` | Package sources to strip from settings inside the sandbox — see [Package filtering](#package-filtering) |
+| `nonSandboxExtensions` | `string[]` | Extension paths passed to pi only in non-sandbox mode — see [Package filtering](#package-filtering) |
 | `allowEnv` | `string[]` | Extra env var names to forward into the sandbox — see [Env seal](#env-seal) |
 | `sandbox.allowRead` | `string[]` | Linux: adds paths to the read allowlist. macOS: removes paths from the read denylist (grant read access to a path that would otherwise be denied). |
 | `sandbox.denyRead` | `string[]` | macOS only: adds paths to the read denylist beyond the defaults. No effect on Linux. |
