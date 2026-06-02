@@ -25,8 +25,10 @@ import { layer as NodeContextLayer, type NodeContext } from "../src/node-context
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { findBwrap } from "../src/launcher.ts";
+import { findBwrap, buildBwrapArgs } from "../src/launcher.ts";
 import { writeFilteredSettings } from "../src/core/sandbox/io.ts";
+import { linuxPlatformRoMounts } from "../src/core/sandbox/pure.ts";
+import type { SandboxMounts } from "../src/types.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
@@ -71,34 +73,27 @@ function runInBwrap(script: string, opts: BwrapRunOptions = {}): { stdout: strin
   const scriptFile = path.join("/tmp", `pit-test-${Date.now()}.mjs`);
   fs.writeFileSync(scriptFile, script);
 
+  const mounts: SandboxMounts = {
+    ro: [
+      { path: "/usr", label: "system dirs" },
+      { path: "/etc", label: "system dirs" },
+      { path: nodeDir, label: "runtime" },
+      ...linuxPlatformRoMounts(),
+    ],
+    rw: [
+      { path: agentDir },
+      { path: "/tmp" },
+    ],
+  };
+
   try {
     const result = spawnSync(
       bwrap,
       [
-        "--tmpfs", "/",
-        "--dev", "/dev",
-        "--proc", "/proc",
-        "--ro-bind", "/usr", "/usr",
-        "--ro-bind", "/etc", "/etc",
-        // /etc/resolv.conf → /mnt/wsl/resolv.conf on WSL (EAI_AGAIN without this)
-        "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
-        // /etc/resolv.conf → /run/systemd/resolve/stub-resolv.conf on Ubuntu 24.04+
-        "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
-        "--ro-bind-try", "/lib", "/lib",
-        "--ro-bind-try", "/lib64", "/lib64",
-        "--ro-bind-try", "/bin", "/bin",
-        "--ro-bind-try", "/sbin", "/sbin",
-        "--ro-bind", nodeDir, nodeDir,
-        // agent dir must be rw so proper-lockfile can create auth.json.lock
-        "--bind", agentDir, agentDir,
-        "--bind", "/tmp", "/tmp",
-        "--unshare-user",
-        "--unshare-pid",
-        "--die-with-parent",
+        ...buildBwrapArgs(mounts, { cwd: "/tmp" }),
         "--setenv", "HOME", process.env.HOME!,
         "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
         "--setenv", "PI_CODING_AGENT_DIR", agentDir,
-        "--chdir", "/tmp",
         "--",
         nodeBin, scriptFile,
       ],
@@ -316,34 +311,27 @@ describe("shadow agent dir bwrap wiring", () => {
     const scriptFile = path.join("/tmp", `shadow-test-${Date.now()}.mjs`);
     fs.writeFileSync(scriptFile, script);
 
+    const mounts: SandboxMounts = {
+      ro: [
+        { path: "/usr", label: "system dirs" },
+        { path: "/etc", label: "system dirs" },
+        { path: nodeDir, label: "runtime" },
+        ...linuxPlatformRoMounts(),
+      ],
+      rw: [
+        { path: "/tmp" },
+        { path: agentDir },
+      ],
+    };
+
     try {
       const result = spawnSync(
         bwrap,
         [
-          "--tmpfs", "/",
-          "--dev",   "/dev",
-          "--proc",  "/proc",
-          "--ro-bind",     "/usr",     "/usr",
-          "--ro-bind",     "/etc",     "/etc",
-          "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
-          "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
-          "--ro-bind-try", "/lib",     "/lib",
-          "--ro-bind-try", "/lib64",   "/lib64",
-          "--ro-bind-try", "/bin",     "/bin",
-          "--ro-bind-try", "/sbin",    "/sbin",
-          "--ro-bind",     nodeDir,    nodeDir,
-          "--bind",        "/tmp",     "/tmp",
-          // Shadow agent dir: rw bind so proper-lockfile can create lock files
-          // (auth.json.lock etc.) next to auth.json. Later bind overrides settings.json.
-          "--bind", agentDir,             "/pit-agent",
-          "--bind", filteredSettingsPath, "/pit-agent/settings.json",
-          "--unshare-user",
-          "--unshare-pid",
-          "--die-with-parent",
+          ...buildBwrapArgs(mounts, { cwd: "/tmp", settingsPath: filteredSettingsPath, agentDir }),
           "--setenv", "HOME",                process.env.HOME!,
           "--setenv", "PATH",                `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
           "--setenv", "PI_CODING_AGENT_DIR", "/pit-agent",
-          "--chdir",  "/tmp",
           "--",
           nodeBin, scriptFile,
         ],
@@ -500,32 +488,30 @@ describe("tmp-overlay sandbox mounts", () => {
     const nodeDir = path.dirname(path.dirname(nodeBin));
     const scriptFile = path.join("/tmp", `pit-overlay-script-${Date.now()}.mjs`);
     fs.writeFileSync(scriptFile, script);
+
+    const mounts: SandboxMounts = {
+      ro: [
+        { path: "/usr", label: "system dirs" },
+        { path: "/etc", label: "system dirs" },
+        { path: nodeDir, label: "runtime" },
+        ...linuxPlatformRoMounts(),
+      ],
+      rw: [
+        { path: "/tmp" },
+      ],
+      overlay: [
+        // dest is inside /tmp (already rw-bound above).
+        { src, dest },
+      ],
+    };
+
     try {
       const result = spawnSync(
         bwrap,
         [
-          "--tmpfs",       "/",
-          "--dev",         "/dev",
-          "--proc",        "/proc",
-          "--ro-bind",     "/usr",    "/usr",
-          "--ro-bind",     "/etc",    "/etc",
-          "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
-          "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
-          "--ro-bind-try", "/lib",    "/lib",
-          "--ro-bind-try", "/lib64",  "/lib64",
-          "--ro-bind-try", "/bin",    "/bin",
-          "--ro-bind-try", "/sbin",   "/sbin",
-          "--ro-bind",     nodeDir,   nodeDir,
-          "--bind",        "/tmp",    "/tmp",
-          // dest is inside /tmp (already rw-bound above).
-          // Syntax: --overlay-src <lower> --tmp-overlay <dest>
-          "--overlay-src", src, "--tmp-overlay", dest,
-          "--unshare-user",
-          "--unshare-pid",
-          "--die-with-parent",
+          ...buildBwrapArgs(mounts, { cwd: "/tmp" }),
           "--setenv", "HOME", process.env.HOME!,
           "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
-          "--chdir", "/tmp",
           "--",
           nodeBin, scriptFile,
         ],

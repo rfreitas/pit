@@ -19,8 +19,9 @@ import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-codi
 import { useTmpDirs, run } from "./tests/helpers.ts";
 import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { setupNewSession } from "./core/session/io.ts";
-import { findBwrap } from "./launcher.ts";
-import type { WorktreeResult } from "./types.ts";
+import { findBwrap, buildBwrapArgs } from "./launcher.ts";
+import { linuxPlatformRoMounts } from "./core/sandbox/pure.ts";
+import type { WorktreeResult, SandboxMounts } from "./types.ts";
 
 // ── mocks ─────────────────────────────────────────────────────────────────────
 
@@ -230,30 +231,27 @@ describe("session file accessible inside bwrap", () => {
       const nodeDir = path.dirname(path.dirname(nodeBin));
       const bwrap   = findBwrapReal()!;
 
+      const mounts: SandboxMounts = {
+        ro: [
+          { path: "/usr", label: "system dirs" },
+          { path: "/etc", label: "system dirs" },
+          ...linuxPlatformRoMounts(),
+        ],
+        rw: [
+          { path: worktree },
+          { path: agentDir },
+        ],
+      };
+
       const result = spawnSync(
         bwrap,
         [
-          "--tmpfs", "/",
-          "--dev",   "/dev",
-          "--proc",  "/proc",
-          "--ro-bind", "/usr", "/usr",
-          "--ro-bind", "/etc", "/etc",
-          "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
-          "--ro-bind-try", "/lib",   "/lib",
-          "--ro-bind-try", "/lib64", "/lib64",
-          "--ro-bind-try", "/bin",   "/bin",
-          "--ro-bind-try", "/sbin",  "/sbin",
-          "--bind", worktree,  worktree,
+          ...buildBwrapArgs(mounts, { cwd: worktree }),
           // Pit mounts agentDirReal at its real path AND as /pit-agent
-          "--bind", agentDir, agentDir,
           "--bind", agentDir, "/pit-agent",
-          "--unshare-user",
-          "--unshare-pid",
-          "--die-with-parent",
           "--setenv", "HOME",   process.env.HOME!,
           "--setenv", "PATH",   "/usr/bin:/bin",
           "--setenv", "PI_CODING_AGENT_DIR", "/pit-agent",
-          "--chdir", worktree,
           "--",
           // Use grep (from /usr/bin) rather than node to keep the test minimal
           "/usr/bin/grep", "-c", "sentinel-001", sessionFile,

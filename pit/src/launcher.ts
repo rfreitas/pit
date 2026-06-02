@@ -170,6 +170,50 @@ const shadowAgentMountArgs = (agentDirReal: string, settingsPath: string): strin
   ];
 };
 
+/**
+ * Build the shared bwrap argument array (everything before the -- separator).
+ * Used by bwrapLaunch for production and by test helpers for sandbox probes.
+ */
+export const buildBwrapArgs = (
+  mounts: Readonly<SandboxMounts>,
+  opts: Readonly<{
+    cwd: string;
+    /** Required for pit mount resolution. Omit if running an arbitrary script. */
+    scriptPath?: string;
+    /** Optional shadow agent dir for filtered settings.
+     *  Requires settingsPath to also be set. */
+    settingsPath?: string;
+    /** Override the agent dir path for shadow mounts (defaults to production AGENT_DIR). */
+    agentDir?: string;
+  }>,
+): string[] => {
+  const roArgs = mounts.ro.flatMap(m =>
+    [m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path],
+  );
+  const rwArgs = mounts.rw.flatMap(m => [m.optional ? "--bind-try" : "--bind", m.path, m.path]);
+  const overlayArgs = (mounts.overlay ?? []).flatMap(m => {
+    mkdirSync(m.dest, { recursive: true });
+    return ["--overlay-src", m.src, "--tmp-overlay", m.dest];
+  });
+
+  const pitMounts = opts.scriptPath ? resolvePitMounts(opts.scriptPath, opts.cwd) : null;
+  const dynamicMountArgs = pitMounts
+    ? ["--ro-bind", pitMounts.pitDir, pitMounts.pitDir,
+       "--ro-bind", pitMounts.pitNodeModules, pitMounts.pitNodeModules]
+    : [];
+
+  const agentDirReal = opts.agentDir ?? realpathSync(AGENT_DIR);
+  const shadowArgs = opts.settingsPath ? shadowAgentMountArgs(agentDirReal, opts.settingsPath) : [];
+
+  return [
+    "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
+    ...roArgs, ...rwArgs, ...overlayArgs, ...dynamicMountArgs,
+    ...shadowArgs,
+    "--unshare-user", "--unshare-pid", "--die-with-parent",
+    "--chdir", opts.cwd,
+  ];
+};
+
 // ── env helpers ─────────────────────────────────────────────────────────────
 
 /** Return ["--setenv", name, value] if the var is set in process.env, else []. */
@@ -221,25 +265,6 @@ export const bwrapLaunch = (
   const scriptPath = process.argv[1]!;
   const pitInnerScript = resolve(dirname(scriptPath), "src", "inner.ts");
 
-  const roArgs = mounts.ro.flatMap(m =>
-    [m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path],
-  );
-  const rwArgs = mounts.rw.flatMap(m => [m.optional ? "--bind-try" : "--bind", m.path, m.path]);
-  const overlayArgs = (mounts.overlay ?? []).flatMap(m => {
-    mkdirSync(m.dest, { recursive: true });
-    return ["--overlay-src", m.src, "--tmp-overlay", m.dest];
-  });
-
-  const pitMounts = resolvePitMounts(scriptPath, cwd);
-  const dynamicMountArgs = pitMounts
-    ? ["--ro-bind", pitMounts.pitDir, pitMounts.pitDir,
-       "--ro-bind", pitMounts.pitNodeModules, pitMounts.pitNodeModules]
-    : [];
-
-  const mountArgs = [...roArgs, ...rwArgs, ...overlayArgs, ...dynamicMountArgs];
-
-  const agentDirReal = realpathSync(AGENT_DIR);
-  const shadowArgs = settingsPath ? shadowAgentMountArgs(agentDirReal, settingsPath) : [];
   const agentDirEnv = settingsPath ? ["--setenv", "PI_CODING_AGENT_DIR", "/pit-agent"] : [];
 
   const envArgs: string[] = [
@@ -258,12 +283,9 @@ export const bwrapLaunch = (
   ];
 
   const args: Readonly<string[]> = [
-    "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
-    ...mountArgs, ...shadowArgs,
-    "--unshare-user", "--unshare-pid", "--die-with-parent",
+    ...buildBwrapArgs(mounts, { cwd, scriptPath, settingsPath }),
     ...envArgs,
     ...agentDirEnv,
-    "--chdir", cwd,
     "--", nodeBin, "--experimental-strip-types", pitInnerScript, ...piArgs,
   ];
 

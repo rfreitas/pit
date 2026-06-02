@@ -24,11 +24,12 @@ import { spawnSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { setupNewSession } from "../src/core/session/io.ts";
 import { cwdToBucket } from "../src/core/session/pure.ts";
-import { findBwrap } from "../src/launcher.ts";
+import { findBwrap, buildBwrapArgs } from "../src/launcher.ts";
+import { linuxPlatformRoMounts } from "../src/core/sandbox/pure.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
-import type { WorktreeResult } from "../src/types.ts";
+import type { WorktreeResult, SandboxMounts } from "../src/types.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -157,28 +158,25 @@ describe("bwrap sandbox bound to worktree not launch dir", () => {
     fs.mkdirSync(worktree);
     fs.mkdirSync(launchDir);
 
+    const mounts: SandboxMounts = {
+      ro: [
+        { path: "/usr", label: "system dirs" },
+        { path: "/etc", label: "system dirs" },
+        { path: nodeDir, label: "runtime" },
+        ...linuxPlatformRoMounts(),
+      ],
+      rw: [
+        // Only bind the worktree — launchDir is intentionally NOT bound
+        { path: worktree },
+      ],
+    };
+
     const result = spawnSync(
       findBwrap()!,
       [
-        "--tmpfs", "/",
-        "--dev", "/dev",
-        "--proc", "/proc",
-        "--ro-bind", "/usr", "/usr",
-        "--ro-bind", "/etc", "/etc",
-        "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
-        "--ro-bind-try", "/lib", "/lib",
-        "--ro-bind-try", "/lib64", "/lib64",
-        "--ro-bind-try", "/bin", "/bin",
-        "--ro-bind-try", "/sbin", "/sbin",
-        "--ro-bind", nodeDir, nodeDir,
-        // Only bind the worktree — launchDir is intentionally NOT bound
-        "--bind", worktree, worktree,
-        "--unshare-user",
-        "--unshare-pid",
-        "--die-with-parent",
+        ...buildBwrapArgs(mounts, { cwd: worktree }),
         "--setenv", "HOME", worktree, // HOME=worktree avoids creating /home as a tmpfs parent
         "--setenv", "PATH", `${nodeDir}/bin:/usr/bin:/bin`,
-        "--chdir", worktree,
         "--",
         nodeBin, "-e", `
           const fs = require('fs');

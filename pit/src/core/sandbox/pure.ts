@@ -112,6 +112,25 @@ const MACOS_DEFAULT_READ_DENY: Array<{ label: string; segments: string[] }> = [
 ];
 
 /**
+ * Platform-specific optional ro-bind mounts for Linux.
+ * Use in SandboxMounts.ro to get DNS resolution, Nix store access, etc.
+ * All entries are optional — silently skipped when the path doesn't exist.
+ */
+export const linuxPlatformRoMounts = (): readonly RoMount[] => [
+  // WSL: /etc/resolv.conf → /mnt/wsl/resolv.conf
+  { path: "/mnt/wsl", label: "system dirs", optional: true },
+  // Ubuntu 24.04+: /etc/resolv.conf → /run/systemd/resolve/stub-resolv.conf.
+  // Without this mount the symlink is dangling inside bwrap and all DNS fails.
+  { path: "/run/systemd/resolve", label: "system dirs", optional: true },
+  // Nix: node binary + shared libs + ELF interpreter all live under /nix/store.
+  { path: "/nix",    label: "system dirs", optional: true },
+  { path: "/lib",     label: "system dirs", optional: true },
+  { path: "/lib64",   label: "system dirs", optional: true },
+  { path: "/bin",     label: "system dirs", optional: true },
+  { path: "/sbin",    label: "system dirs", optional: true },
+];
+
+/**
  * Build the canonical SandboxMounts struct from pre-resolved inputs.
  * All IO (resolveMainRepo, resolveUnversionedDirs, fs.statSync,
  * resolveWorktreeGitRwMounts) must be done by the caller before calling this.
@@ -147,14 +166,7 @@ export const buildSandboxMountSpec = (params: Readonly<{
       ? [
           { path: "/usr",     label: "system dirs" },
           { path: "/etc",     label: "system dirs" },
-          { path: "/mnt/wsl", label: "system dirs", optional: true },
-          // Ubuntu 24.04+: /etc/resolv.conf → /run/systemd/resolve/stub-resolv.conf.
-          // Without this mount the symlink is dangling inside bwrap and all DNS fails.
-          { path: "/run/systemd/resolve", label: "system dirs", optional: true },
-          { path: "/lib",     label: "system dirs", optional: true },
-          { path: "/lib64",   label: "system dirs", optional: true },
-          { path: "/bin",     label: "system dirs", optional: true },
-          { path: "/sbin",    label: "system dirs", optional: true },
+          ...linuxPlatformRoMounts(),
         ]
       : [
           { path: "/usr",     label: "system dirs" },
