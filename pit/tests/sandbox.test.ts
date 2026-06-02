@@ -21,14 +21,14 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer, type NodeContext } from "../src/node-context.ts";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { writeFilteredSettings } from "../src/core/sandbox/io.ts";
 
-const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
-  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
+const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

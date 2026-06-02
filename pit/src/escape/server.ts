@@ -13,7 +13,7 @@ import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import { unlinkSync } from "node:fs";
 import * as Effect from "effect/Effect";
-import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
+import { layer as NodeContextLayer, type NodeContext } from "../node-context.ts";
 import { gitEffect } from "./core/ops/git.ts";
 import { opGetState } from "./core/ops/state.ts";
 import { opMergeToParent, opIsMerged } from "./core/ops/merge.ts";

@@ -7,7 +7,7 @@
 
 import { afterEach } from "vitest";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer, type NodeContext } from "../node-context.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -24,8 +24,8 @@ export const TEST_SANDBOX = path.join(
 
 // ── Effect runner ─────────────────────────────────────────────────────────────
 
-export const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>): Promise<A> =>
-  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
+export const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>): Promise<A> =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
 
 // ── tmp dir lifecycle ─────────────────────────────────────────────────────────
 

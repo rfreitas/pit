@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer, type NodeContext } from "../src/node-context.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,8 +22,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { setupNewSession, findPitSession } from "../src/core/session/io.ts";
 import { listRepoWorktrees } from "../src/core/git/utils.ts";
 
-const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
-  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
+const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
 import { cwdToBucket } from "../src/core/session/pure.ts";
 import type { WorktreeResult, PitMetadata } from "../src/types.ts";
 

@@ -8,7 +8,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
-import { type NodeContext } from "@effect/platform-node/NodeContext";
+import { type NodeContext } from "../../../node-context.ts";
 import {
   resolveMainRepo,
   readWorktreeGitdir,

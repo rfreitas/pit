@@ -4,7 +4,7 @@
 
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
+import { layer as NodeContextLayer, type NodeContext } from "./node-context.ts";
 import {
   main,
   SessionManager,

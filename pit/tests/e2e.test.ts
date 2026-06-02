@@ -89,8 +89,12 @@ function runPit(
       env: {
         ...process.env,
         PI_CODING_AGENT_DIR: opts.agentDir,
-        PI_SKIP_VERSION_CHECK: "1",
-        ...opts.extraEnv,
+        PI_SKIP_VERSION_CHECK: "1",        // Fast-fail proxy: pi-coding-agent sets undici's global dispatcher
+        // to EnvHttpProxyAgent, which reads these env vars. Pointing at a
+        // port that immediately refuses connections causes LLM HTTP calls
+        // to fail in <1ms (ECONNREFUSED) instead of hanging for 30s.
+        HTTPS_PROXY: "http://127.0.0.1:1",
+        HTTP_PROXY: "http://127.0.0.1:1",        ...opts.extraEnv,
       },
       encoding: "utf8",
       timeout: 5000,

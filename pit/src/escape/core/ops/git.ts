@@ -9,7 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Chunk from "effect/Chunk";
 import { make as makeCommand, start as startCommand, workingDirectory as commandWorkingDirectory } from "@effect/platform/Command";
-import { type NodeContext } from "@effect/platform-node/NodeContext";
+import { type NodeContext } from "../../../node-context.ts";
 
 export type GitResult = { stdout: string; stderr: string; code: number };
 

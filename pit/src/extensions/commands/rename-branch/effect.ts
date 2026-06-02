@@ -5,7 +5,7 @@
  */
 
 import { Effect, Option } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { type NodeContext } from "../../../node-context.ts";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { readWorktreeBranch } from "../../../core/git/utils.ts";
@@ -104,7 +104,7 @@ export const renameBranchEffect = (
   ctx: ExtensionCommandContext,
   socketPath: string,
   token: string,
-): Effect.Effect<void, Error, NodeContext.NodeContext> =>
+): Effect.Effect<void, Error, NodeContext> =>
   Effect.gen(function* () {
     const cwd = process.cwd();
     const currentBranch = yield* readWorktreeBranch(cwd);

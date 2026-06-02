@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer, type NodeContext } from "../src/node-context.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -44,8 +44,8 @@ function makeGitRepo(): string {
   return repo;
 }
 
-const run = <A, E>(eff: Effect.Effect<A, E, NodeContext.NodeContext>) =>
-  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
+const run = <A, E>(eff: Effect.Effect<A, E, NodeContext>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
 
 // ── worktreeCheckEffect — git-dependent ───────────────────────────────────────
 

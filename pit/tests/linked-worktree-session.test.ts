@@ -16,15 +16,15 @@
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, afterEach } from "vitest";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer, type NodeContext } from "../src/node-context.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { setupNewSession, findOrCreateLinkedSession } from "../src/core/session/io.ts";
 import { cwdToBucket } from "../src/core/session/pure.ts";
 import type { WorktreeResult, PitMetadata } from "../src/types.ts";
 
-const run = <A>(eff: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
-  Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)));
+const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

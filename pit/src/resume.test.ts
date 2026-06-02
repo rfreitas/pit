@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer } from "./node-context.ts";
 import { spawnSync } from "node:child_process";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { useTmpDirs, run } from "./tests/helpers.ts";
@@ -110,7 +110,7 @@ describe("launchEffect non-sandbox: passes --session to main()", () => {
         cwd,
         ["--session", sessionFile, "--append-system-prompt", "pit session"],
         false,  // no sandbox — goes to main() directly
-      ).pipe(Effect.provide(NodeContext.layer))
+      ).pipe(Effect.provide(NodeContextLayer))
     );
 
     expect(mockMain).toHaveBeenCalledOnce();
@@ -128,7 +128,7 @@ describe("launchEffect non-sandbox: passes --session to main()", () => {
 
     await Effect.runPromise(
       launchEffect(cwd, ["--session", existingSession], false).pipe(
-        Effect.provide(NodeContext.layer)
+        Effect.provide(NodeContextLayer)
       )
     );
 
@@ -147,7 +147,7 @@ describe("launchEffect non-sandbox: passes --session to main()", () => {
 
     await Effect.runPromise(
       launchEffect(cwd, ["--session", sessionFile], false).pipe(
-        Effect.provide(NodeContext.layer)
+        Effect.provide(NodeContextLayer)
       )
     );
 
@@ -377,7 +377,7 @@ describe("worktreeCheckEffect: uses session header cwd, not stale pit metadata",
     // But worktreeCheckEffect must use the session header cwd, not the stale worktree
     const result = await Effect.runPromise(
       worktreeCheckEffect({ meta: pitEntry!.data as unknown as ExistingSession["meta"], cwd: sm.getCwd()! })
-        .pipe(Effect.provide(NodeContext.layer)),
+        .pipe(Effect.provide(NodeContextLayer)),
     );
     expect(result.cwd).toBe(handoffTarget);
     expect(result.cwd).not.toBe(originalCwd);
@@ -401,7 +401,7 @@ describe("worktreeCheckEffect: uses session header cwd, not stale pit metadata",
     await expect(
       Effect.runPromise(
         worktreeCheckEffect({ meta: pitEntry!.data, cwd: sm.getCwd()! })
-          .pipe(Effect.provide(NodeContext.layer)),
+          .pipe(Effect.provide(NodeContextLayer)),
       ),
     ).resolves.toMatchObject({ cwd: handoffTarget });
   });
@@ -425,7 +425,7 @@ describe("worktreeCheckEffect — branch-based no-tree detection", () => {
     const cwd = makeTmp("wc-existing-");
     const meta = { repo: "/irrelevant/repo", branch: "pi/abc12345" };
     const result = await Effect.runPromise(
-      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContext.layer)),
+      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContextLayer)),
     );
     expect(result.cwd).toBe(cwd);
     expect(result.meta).toEqual(meta);
@@ -435,7 +435,7 @@ describe("worktreeCheckEffect — branch-based no-tree detection", () => {
     const cwd = makeTmp("wc-notree-");
     const meta = { repo: cwd, branch: "" };
     const result = await Effect.runPromise(
-      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContext.layer)),
+      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContextLayer)),
     );
     expect(result.cwd).toBe(cwd);
     expect(result.meta).toEqual(meta);
@@ -448,7 +448,7 @@ describe("worktreeCheckEffect — branch-based no-tree detection", () => {
     const meta = { repo: cwd, branch: "" };
     // Must not throw WorktreeMissingError or WorktreeCreationError
     const result = await Effect.runPromise(
-      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContext.layer)),
+      worktreeCheckEffect({ meta, cwd }).pipe(Effect.provide(NodeContextLayer)),
     );
     expect(result.cwd).toBe(cwd);
   });
@@ -475,7 +475,7 @@ describe("new session metadata shape (worktreeCheckEffect with no existing)", ()
     const cwd = makeTmp("notree-cwd-");
     process.chdir(cwd);
     const result = await Effect.runPromise(
-      worktreeCheckEffect(undefined, false).pipe(Effect.provide(NodeContext.layer)),
+      worktreeCheckEffect(undefined, false).pipe(Effect.provide(NodeContextLayer)),
     );
     expect(result.meta.branch).toBe("");
     expect(result.meta.repo).toBe(cwd);
@@ -485,7 +485,7 @@ describe("new session metadata shape (worktreeCheckEffect with no existing)", ()
     const cwd = makeTmp("notree-fields-");
     process.chdir(cwd);
     const result = await Effect.runPromise(
-      worktreeCheckEffect(undefined, false).pipe(Effect.provide(NodeContext.layer)),
+      worktreeCheckEffect(undefined, false).pipe(Effect.provide(NodeContextLayer)),
     );
     const raw = result.meta as unknown as Record<string, unknown>;
     expect(raw["mode"]).toBeUndefined();
@@ -597,7 +597,7 @@ describe("backward compat: old-format session metadata", () => {
       worktreeCheckEffect({
         meta: pitEntry!.data as unknown as ExistingSession["meta"],
         cwd: sm.getCwd()!,
-      }).pipe(Effect.provide(NodeContext.layer)),
+      }).pipe(Effect.provide(NodeContextLayer)),
     );
     // Must use the session header cwd, not the stale worktree field
     expect(result.cwd).toBe(cwd);

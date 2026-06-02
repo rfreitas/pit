@@ -3,7 +3,7 @@ import { run, useTmpDirs, TEST_SANDBOX } from "../../tests/helpers.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer, type NodeContext } from "../../node-context.ts";
 import { isLinkedWorktree, resolveMainRepo, readWorktreeBranch } from "./utils.ts";
 
 const { makeTmp } = useTmpDirs();

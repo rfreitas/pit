@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import * as undici from "undici";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { layer as NodeContextLayer, type NodeContext } from "@effect/platform-node/NodeContext";
+import { layer as NodeContextLayer, type NodeContext } from "./node-context.ts";
 import { main } from "@earendil-works/pi-coding-agent";
 import type { PitMetadata, PitConfig, SandboxMounts, OverlayMount } from "./types.ts";
 import { HOME, AGENT_DIR, PIT_DIR } from "./core/constants.ts";
@@ -466,10 +466,13 @@ export const startPitEscapeEffect = (
         { stdio: ["ignore", "pipe", "inherit"] },
       );
 
-      process.on("exit", () => {
+      const killEscape = () => {
         try { child.kill("SIGTERM"); } catch { /* gone */ }
         try { unlinkSync(socketPath); } catch { /* gone */ }
-      });
+      };
+      process.on("exit", killEscape);
+      process.on("SIGTERM", () => { killEscape(); process.exit(1); });
+      process.on("SIGINT",  () => { killEscape(); process.exit(130); });
 
       const timer = setTimeout(() => {
         resume(
@@ -479,7 +482,11 @@ export const startPitEscapeEffect = (
         );
       }, 3000);
 
-      child.stdout!.once("data", () => { clearTimeout(timer); resume(Effect.succeed(Option.some({ socketPath, token }))); });
+      child.stdout!.once("data", () => {
+        clearTimeout(timer);
+        child.stdout!.destroy(); // release the pipe so the event loop can drain naturally
+        resume(Effect.succeed(Option.some({ socketPath, token })));
+      });
       child.once("error", (err) => {
         clearTimeout(timer);
         resume(

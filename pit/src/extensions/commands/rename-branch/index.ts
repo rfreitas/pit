@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
+import { layer as NodeContextLayer } from "../../../node-context.ts";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { renameBranchEffect } from "./effect.ts";
 
@@ -15,7 +15,7 @@ export const createRenameBranchCommand = (
           Effect.catchAll((e) =>
             Effect.sync(() => ctx.ui.notify(e.message, "error")),
           ),
-          Effect.provide(NodeContext.layer),
+          Effect.provide(NodeContextLayer),
         ),
       );
     },

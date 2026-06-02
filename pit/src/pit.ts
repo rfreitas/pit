@@ -16,7 +16,7 @@ if (process.env.PIT_IS_INNER === "1") {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
-import { layer as NodeContextLayer } from "@effect/platform-node/NodeContext";
+import { layer as NodeContextLayer } from "./node-context.ts";
 import { program } from "./program.ts";
 import {
   WorktreeCreationError,
