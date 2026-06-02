@@ -28,7 +28,7 @@ export const runInner = async (
   const socketPath = env.PIT_ESCAPE_SOCKET ?? "";
 
   await main(argv, {
-    extensionFactories: createExtensionFactories(socketPath, token),
+    extensionFactories: createExtensionFactories(socketPath, token, true),
   });
 };
 

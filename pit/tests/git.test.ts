@@ -183,7 +183,7 @@ describe("git tool registration", () => {
 
   it("does NOT register tools when socketPath is empty (mode footer only)", async () => {
     const { createExtensionFactories } = await import("../src/extensions/index.ts");
-    expect(createExtensionFactories("", "token")).toHaveLength(1); // mode footer only
+    expect(createExtensionFactories("", "token", false)).toHaveLength(1); // mode footer only
   });
 });
 
@@ -262,7 +262,7 @@ describe("/merge registration", () => {
 
   it("does NOT register commands when socketPath is empty (mode footer only)", async () => {
     const { createExtensionFactories } = await import("../src/extensions/index.ts");
-    expect(createExtensionFactories("", "token")).toHaveLength(1); // mode footer only
+    expect(createExtensionFactories("", "token", false)).toHaveLength(1); // mode footer only
   });
 });
 

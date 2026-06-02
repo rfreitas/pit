@@ -633,14 +633,14 @@ describe("backward compat: old-format session metadata", () => {
 describe("createExtensionFactories: mode footer always present", () => {
   it("returns at least one factory even when socketPath is empty (mode footer)", async () => {
     const { createExtensionFactories } = await import("./extensions/index.ts");
-    const factories = createExtensionFactories("", "");
+    const factories = createExtensionFactories("", "", false);
     expect(factories.length).toBeGreaterThan(0);
   });
 
   it("returns more factories when socketPath is set (full suite)", async () => {
     const { createExtensionFactories } = await import("./extensions/index.ts");
-    const noSocket = createExtensionFactories("", "");
-    const withSocket = createExtensionFactories("/tmp/test.sock", "token");
+    const noSocket = createExtensionFactories("", "", false);
+    const withSocket = createExtensionFactories("/tmp/test.sock", "token", false);
     expect(withSocket.length).toBeGreaterThan(noSocket.length);
   });
 });

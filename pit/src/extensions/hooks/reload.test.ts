@@ -112,7 +112,7 @@ describe("bundled reload extension", () => {
   it("does NOT register any handler when created with empty socketPath", async () => {
     // The mode footer is always registered; escape-based factories are gated on socketPath.
     const { createExtensionFactories } = await import("../../extensions/index.ts");
-    const factories = createExtensionFactories("", "token");
+    const factories = createExtensionFactories("", "token", false);
     expect(factories).toHaveLength(1); // mode footer only
   });
 

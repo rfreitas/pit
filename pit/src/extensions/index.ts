@@ -15,9 +15,10 @@ import { createSyncBranchHook } from "../core/session/sync-branch.ts";
 export const createExtensionFactories = (
   socketPath: string,
   token: string,
+  sandbox: boolean,
 ): ExtensionFactory[] => {
   return [
-    createModeStatus(socketPath),
+    createModeStatus(sandbox),
     ...(socketPath ? [
       createSyncBranchHook(socketPath, token),
       createReloadHook(socketPath, token),

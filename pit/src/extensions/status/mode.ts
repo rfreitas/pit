@@ -15,7 +15,7 @@ import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-a
 import { isLinkedWorktreeSync } from "../../core/git/utils-sync.ts";
 
 export const createModeStatus = (
-  socketPath: string,
+  sandbox: boolean,
 ): ExtensionFactory => (pi: ExtensionAPI) => {
   pi.on("session_start", async (_event, ctx) => {
     const cwd = ctx.cwd;
@@ -26,7 +26,6 @@ export const createModeStatus = (
       ctx.ui.setStatus("pit-mode", "no-tree");
     }
 
-    // Sandbox: escape socket present ↔ sandbox active
-    ctx.ui.setStatus("pit-sandbox", socketPath ? "sandbox" : "no sandbox");
+    ctx.ui.setStatus("pit-sandbox", sandbox ? "sandbox" : "no sandbox");
   });
 };

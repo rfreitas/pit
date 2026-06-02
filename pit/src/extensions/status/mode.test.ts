@@ -67,7 +67,7 @@ describe("createModeStatus — pit-mode status key", () => {
   it("sets 'no-tree' for a plain directory (not a git worktree)", async () => {
     const cwd = makeTmp("notree-");
     const { api, statuses, triggerSessionStart } = makeMockApi();
-    createModeStatus("")(api);
+    createModeStatus(false)(api);
     await triggerSessionStart(cwd);
     expect(statuses["pit-mode"]).toBe("no-tree");
   });
@@ -78,7 +78,7 @@ describe("createModeStatus — pit-mode status key", () => {
     makeLinkedWorktree(cwd, "pi/abc12345", mainRepo);
 
     const { api, statuses, triggerSessionStart } = makeMockApi();
-    createModeStatus("")(api);
+    createModeStatus(false)(api);
     await triggerSessionStart(cwd);
     expect(statuses["pit-mode"]).toBe("worktree");
   });
@@ -93,25 +93,25 @@ describe("createModeStatus — pit-mode status key", () => {
     // No HEAD file written
 
     const { api, statuses, triggerSessionStart } = makeMockApi();
-    createModeStatus("")(api);
+    createModeStatus(false)(api);
     await triggerSessionStart(cwd);
     expect(statuses["pit-mode"]).toBe("worktree");
   });
 });
 
 describe("createModeStatus — pit-sandbox status key", () => {
-  it("sets 'sandbox' when socketPath is non-empty", async () => {
+  it("sets 'sandbox' when sandbox is true", async () => {
     const cwd = makeTmp("sb-");
     const { api, statuses, triggerSessionStart } = makeMockApi();
-    createModeStatus("/tmp/pit-test.sock")(api);
+    createModeStatus(true)(api);
     await triggerSessionStart(cwd);
     expect(statuses["pit-sandbox"]).toBe("sandbox");
   });
 
-  it("sets 'no sandbox' when socketPath is empty", async () => {
+  it("sets 'no sandbox' when sandbox is false", async () => {
     const cwd = makeTmp("nosb-");
     const { api, statuses, triggerSessionStart } = makeMockApi();
-    createModeStatus("")(api);
+    createModeStatus(false)(api);
     await triggerSessionStart(cwd);
     expect(statuses["pit-sandbox"]).toBe("no sandbox");
   });
@@ -119,7 +119,7 @@ describe("createModeStatus — pit-sandbox status key", () => {
   it("always sets both status keys regardless of mode", async () => {
     const cwd = makeTmp("both-");
     const { api, statuses, triggerSessionStart } = makeMockApi();
-    createModeStatus("/tmp/pit.sock")(api);
+    createModeStatus(false)(api);
     await triggerSessionStart(cwd);
     expect("pit-mode" in statuses).toBe(true);
     expect("pit-sandbox" in statuses).toBe(true);
@@ -129,7 +129,7 @@ describe("createModeStatus — pit-sandbox status key", () => {
 describe("createModeStatus — extension registration", () => {
   it("registers a session_start handler", () => {
     const { api } = makeMockApi();
-    createModeStatus("")(api);
+    createModeStatus(false)(api);
     expect(api.on).toHaveBeenCalledWith("session_start", expect.any(Function));
   });
 
@@ -138,7 +138,7 @@ describe("createModeStatus — extension registration", () => {
     // metadata might say. The extension never reads session metadata.
     const cwd = makeTmp("live-");
     const { api, statuses, triggerSessionStart } = makeMockApi();
-    createModeStatus("")(api);
+    createModeStatus(false)(api);
     await triggerSessionStart(cwd);
     expect(statuses["pit-mode"]).toBe("no-tree");
   });

@@ -429,7 +429,7 @@ export const launchEffect = (
     setupProxyAgent();
     yield* Effect.promise(() =>
       main(piArgs, {
-        extensionFactories: createExtensionFactories(socketPath, token),
+        extensionFactories: createExtensionFactories(socketPath, token, false),
       }).catch(() => {})
     );
   });
