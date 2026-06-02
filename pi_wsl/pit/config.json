@@ -1,1 +1,6 @@
-{"denyPackages":["npm:@casualjim/pi-heimdall","npm:@spences10/pi-confirm-destructive","npm:@jerryan/pi-sanity"]}
+{
+  "denyPackages":["npm:@casualjim/pi-heimdall","npm:@spences10/pi-confirm-destructive","npm:@jerryan/pi-sanity"],
+  "sandbox": {
+    "allowWrite": ["/home/ricfr/repos/agent/pi_wsl"]
+  }
+}
