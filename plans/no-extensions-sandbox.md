@@ -1,5 +1,7 @@
 # Plan: per-mode extension configuration, remove settings filtering
 
+**Status: done.**
+
 ## Confirmed facts (from code + tests)
 
 **PI_CODING_AGENT_DIR:**
