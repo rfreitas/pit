@@ -5,6 +5,7 @@
  */
 
 import { existsSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Socket } from "node:net";
 import { detectParentBranch } from "./git.ts";
@@ -121,6 +122,46 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
       })()
     : null;
 
+  // ── index watcher — detects staged changes ────────────────────────────
+  //
+  // Watches the git index file. git add / git reset / git commit all touch
+  // this file, so a single watch covers all staged-change scenarios.
+
+  const indexWatcher: FSWatcher | null = worktreeGitdir
+    ? makeWatcher(join(worktreeGitdir, "index"))
+    : null;
+
+  // ── poll for unstaged changes ───────────────────────────────────────────
+  //
+  // fs.watch on the worktree itself would risk ENOSPC on large repos.
+  // Instead, run a cheap git diff --numstat on a configurable interval.
+  // Only pushes ref-change when the output differs from the last known
+  // state — idle polls are silent.
+
+  const pollMs = Math.max(
+    100,
+    parseInt(process.env.PIT_ESCAPE_POLL_MS ?? "2000", 10) || 2000,
+  );
+  let lastUnstagedHash = "";
+
+  const pollUnstaged = (): void => {
+    try {
+      const out = execFileSync("git", ["diff", "--numstat"], {
+        cwd: worktreePath,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (out !== lastUnstagedHash) {
+        lastUnstagedHash = out;
+        notify();
+      }
+    } catch { /* ignore errors during teardown */ }
+  };
+
+  // Run the first poll synchronously to seed lastUnstagedHash
+  pollUnstaged();
+  const pollTimer = setInterval(pollUnstaged, pollMs);
+
   // ── static watchers ───────────────────────────────────────────────────────
 
   const staticWatchers = [
@@ -129,17 +170,19 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
     ...(existsSync(reftableDir) ? [makeWatcher(reftableDir)] : []),
   ];
 
-  const allWatchers = [...staticWatchers, branchWatcher, headWatcher]
-    .filter((w): w is FSWatcher => w !== null);
+  const allWatchers = [
+    ...staticWatchers, branchWatcher, headWatcher, indexWatcher,
+  ].filter((w): w is FSWatcher => w !== null);
 
   if (allWatchers.length === 0) {
     socket.write(JSON.stringify({ watchDegraded: true }) + "\n");
   }
 
   const cleanup = () => {
-    [...staticWatchers, branchWatcher, headWatcher]
+    [...staticWatchers, branchWatcher, headWatcher, indexWatcher]
       .forEach(w => { if (w) { try { w.close(); } catch { /* */ } } });
     if (debounce) { clearTimeout(debounce); debounce = null; }
+    clearInterval(pollTimer);
   };
   socket.once("close", cleanup);
   socket.once("error", cleanup);
