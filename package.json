@@ -7,10 +7,14 @@
     "pi-package"
   ],
   "type": "module",
+  "workspaces": [
+    "pit",
+    "packages/*"
+  ],
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "typecheck": "tsc",
-    "lint": "node --experimental-strip-types node_modules/.bin/eslint 'pit/**/*.ts' && node --experimental-strip-types pit/scripts/check-no-disable.ts",
+    "lint": "tsx node_modules/.bin/eslint 'pit/**/*.ts' && tsx pit/scripts/check-no-disable.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -30,12 +34,8 @@
     "eslint": "^10.4.0",
     "eslint-plugin-functional": "^9.0.5",
     "eslint-plugin-import-x": "^4.16.2",
+    "tsx": "^4.22.4",
     "typescript": "^5.0.0",
     "vitest": "^4.1.6"
-  },
-  "dependencies": {
-    "@effect/platform": "^0.96.1",
-    "@effect/platform-node": "^0.106.0",
-    "effect": "^3.21.2"
   }
 }

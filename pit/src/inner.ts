@@ -4,10 +4,10 @@
  * Replicates the pi binary bootstrap then calls main() with pit's own
  * extensions registered as closures (no jiti, no --extension flags).
  */
-import * as undici from "undici";
 import { main } from "@earendil-works/pi-coding-agent";
 import { deletePitEscapeToken, deletePitIsInner, bootstrapProcess } from "./env.ts";
 import { createExtensionFactories } from "./extensions/index.ts";
+import { setupProxyAgent } from "./launcher.ts";
 
 /**
  * Bootstrap and run inner pit.
@@ -19,12 +19,7 @@ export const runInner = async (
 ): Promise<void> => {
   // Bootstrap — mirrors what the pi binary does before calling main()
   bootstrapProcess();
-  undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent({
-    allowH2: false,
-    bodyTimeout: 300_000,
-    headersTimeout: 300_000,
-  }));
-  undici.install?.();
+  setupProxyAgent();
 
   // Read and delete env vars before any child process is spawned
   deletePitIsInner();

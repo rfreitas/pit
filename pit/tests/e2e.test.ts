@@ -93,7 +93,7 @@ function runPit(
         ...opts.extraEnv,
       },
       encoding: "utf8",
-      timeout: 30000,
+      timeout: 5000,
     }
   );
   return {
