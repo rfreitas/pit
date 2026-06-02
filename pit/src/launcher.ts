@@ -475,6 +475,7 @@ export const startPitEscapeEffect = (
       process.on("SIGINT",  () => { killEscape(); process.exit(130); });
 
       const timer = setTimeout(() => {
+        child.unref();
         resume(
           Effect.logWarning("pit: pit-escape timed out — git tool and settings refresh unavailable").pipe(
             Effect.as(Option.none<EscapeHandle>()),
@@ -484,11 +485,13 @@ export const startPitEscapeEffect = (
 
       child.stdout!.once("data", () => {
         clearTimeout(timer);
-        child.stdout!.destroy(); // release the pipe so the event loop can drain naturally
+        child.stdout!.destroy(); // release the pipe
+        child.unref(); // don't keep pit's event loop alive for the background escape server
         resume(Effect.succeed(Option.some({ socketPath, token })));
       });
       child.once("error", (err) => {
         clearTimeout(timer);
+        child.unref();
         resume(
           Effect.logWarning(`pit: pit-escape: ${err.message}`).pipe(
             Effect.as(Option.none<EscapeHandle>()),
