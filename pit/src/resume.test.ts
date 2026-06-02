@@ -14,12 +14,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Effect } from "effect";
 import { layer as NodeContextLayer } from "./node-context.ts";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execSync } from "node:child_process";
 import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { useTmpDirs, run } from "./tests/helpers.ts";
 import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { setupNewSession } from "./core/session/io.ts";
-import type { WorktreeResult } from "./types.ts";
+import { findBwrap, buildBwrapArgs } from "./launcher.ts";
+import { linuxPlatformRoMounts } from "./core/sandbox/pure.ts";
+import type { WorktreeResult, SandboxMounts } from "./types.ts";
 
 // ── mocks ─────────────────────────────────────────────────────────────────────
 
@@ -45,8 +47,10 @@ vi.mock("node:fs", async (orig) => {
     ...real,
     realpathSync: (p: string) => p,
     existsSync: (p: string) => {
-      // Make bwrap look installed so findBwrap() returns a path
-      if (p === "/usr/bin/bwrap" || p === "/usr/local/bin/bwrap") return true;
+      // Make bwrap look installed so the imported findBwrap() returns a path
+      // for unit tests (bwrapLaunch, etc.). Integration tests use
+      // findBwrapReal() which calls execSync to locate the real binary.
+      if (p.endsWith("/bwrap")) return true;
       return real.existsSync(p);
     },
   };
@@ -56,12 +60,15 @@ vi.mock("node:fs", async (orig) => {
 
 const { makeTmp, makeSandbox } = useTmpDirs();
 
+/** Like findBwrap from launcher.ts but bypasses the node:fs mock. */
 function findBwrapReal(): string | null {
-  if (fs.existsSync("/usr/bin/bwrap")) return "/usr/bin/bwrap";
-  if (fs.existsSync("/usr/local/bin/bwrap")) return "/usr/local/bin/bwrap";
-  return null;
+  try {
+    return execSync("command -v bwrap", { encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
+  }
 }
-const hasBwrap = !!(fs.existsSync("/usr/bin/bwrap") || fs.existsSync("/usr/local/bin/bwrap"));
+const hasBwrap = !!findBwrapReal();
 
 async function makeWorktreeSession(worktree: string, agentDir: string) {
   const result: WorktreeResult = {
@@ -224,30 +231,25 @@ describe("session file accessible inside bwrap", () => {
       const nodeDir = path.dirname(path.dirname(nodeBin));
       const bwrap   = findBwrapReal()!;
 
+      const mounts: SandboxMounts = {
+        ro: [
+          { path: "/usr", label: "system dirs" },
+          { path: "/etc", label: "system dirs" },
+          ...linuxPlatformRoMounts(),
+        ],
+        rw: [
+          { path: worktree },
+          { path: agentDir },
+        ],
+      };
+
       const result = spawnSync(
         bwrap,
         [
-          "--tmpfs", "/",
-          "--dev",   "/dev",
-          "--proc",  "/proc",
-          "--ro-bind", "/usr", "/usr",
-          "--ro-bind", "/etc", "/etc",
-          "--ro-bind-try", "/mnt/wsl", "/mnt/wsl",
-          "--ro-bind-try", "/lib",   "/lib",
-          "--ro-bind-try", "/lib64", "/lib64",
-          "--ro-bind-try", "/bin",   "/bin",
-          "--ro-bind-try", "/sbin",  "/sbin",
-          "--bind", worktree,  worktree,
-          // Pit mounts agentDirReal at its real path AND as /pit-agent
-          "--bind", agentDir, agentDir,
-          "--bind", agentDir, "/pit-agent",
-          "--unshare-user",
-          "--unshare-pid",
-          "--die-with-parent",
+          ...buildBwrapArgs(mounts, { cwd: worktree }),
           "--setenv", "HOME",   process.env.HOME!,
           "--setenv", "PATH",   "/usr/bin:/bin",
-          "--setenv", "PI_CODING_AGENT_DIR", "/pit-agent",
-          "--chdir", worktree,
+          "--setenv", "PI_CODING_AGENT_DIR", agentDir,
           "--",
           // Use grep (from /usr/bin) rather than node to keep the test minimal
           "/usr/bin/grep", "-c", "sentinel-001", sessionFile,

@@ -20,6 +20,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findBwrap } from "../src/launcher.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -27,13 +28,6 @@ const PIT_SCRIPT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../pit.ts"
 );
-
-function findBwrap(): string | null {
-  for (const p of ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
 
 const hasBwrap = !!findBwrap();
 

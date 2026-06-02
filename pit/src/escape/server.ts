@@ -19,14 +19,13 @@ import { opGetState } from "./core/ops/state.ts";
 import { opMergeToParent, opIsMerged } from "./core/ops/merge.ts";
 import { opLocDiff } from "./core/ops/diff.ts";
 import { opBranchStatus } from "./core/ops/branch-status.ts";
-import { opRefreshSettings } from "./core/ops/settings.ts";
 import { handleSubscribe } from "./core/ops/subscribe.ts";
 
-const [, , token, socketPath, worktreePath, agentDir, pitDir, hostSettingsPath] =
+const [, , token, socketPath, worktreePath, agentDir, pitDir] =
   process.argv;
-if (!token || !socketPath || !worktreePath || !agentDir || !pitDir || !hostSettingsPath) {
+if (!token || !socketPath || !worktreePath || !agentDir || !pitDir) {
   process.stderr.write(
-    "usage: pit-escape <token> <socket-path> <worktree-path> <agent-dir> <pit-dir> <host-settings-path>\n",
+    "usage: pit-escape <token> <socket-path> <worktree-path> <agent-dir> <pit-dir>\n",
   );
   process.exit(1);
 }
@@ -76,8 +75,6 @@ const dispatchEffect = (
         return { result: yield* opLocDiff(worktreePath), keepOpen: false };
       case "is-merged":
         return { result: yield* opIsMerged(worktreePath), keepOpen: false };
-      case "refresh-settings":
-        return { result: yield* opRefreshSettings(agentDir, pitDir, hostSettingsPath), keepOpen: false };
       case "rename-branch": {
         const { newBranch } = req;
         if (!newBranch || typeof newBranch !== "string") {
