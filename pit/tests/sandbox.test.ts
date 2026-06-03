@@ -26,8 +26,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { findBwrap, buildBwrapArgs } from "../src/launcher.ts";
-import { linuxPlatformRoMounts } from "../src/core/sandbox/pure.ts";
-import type { SandboxMounts } from "../src/types.ts";
+import { buildSandboxMountSpec } from "../src/core/sandbox/pure.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
@@ -72,18 +71,17 @@ function runInBwrap(script: string, opts: BwrapRunOptions = {}): { stdout: strin
   const scriptFile = path.join("/tmp", `pit-test-${Date.now()}.mjs`);
   fs.writeFileSync(scriptFile, script);
 
-  const mounts: SandboxMounts = {
-    ro: [
-      { path: "/usr", label: "system dirs" },
-      { path: "/etc", label: "system dirs" },
-      { path: nodeDir, label: "runtime" },
-      ...linuxPlatformRoMounts(),
-    ],
-    rw: [
-      { path: agentDir },
-      { path: "/tmp" },
-    ],
-  };
+  const mounts = buildSandboxMountSpec({
+    home: process.env.HOME!,
+    cwd: "/tmp",
+    agentDir,
+    agentDirReal: agentDir,
+    extensionMounts: [],
+    nodeDir,
+    gitRwMounts: [],
+    overlayDirs: [],
+    platform: "linux",
+  });
 
   try {
     const result = spawnSync(
@@ -328,21 +326,17 @@ describe("tmp-overlay sandbox mounts", () => {
     const scriptFile = path.join("/tmp", `pit-overlay-script-${Date.now()}.mjs`);
     fs.writeFileSync(scriptFile, script);
 
-    const mounts: SandboxMounts = {
-      ro: [
-        { path: "/usr", label: "system dirs" },
-        { path: "/etc", label: "system dirs" },
-        { path: nodeDir, label: "runtime" },
-        ...linuxPlatformRoMounts(),
-      ],
-      rw: [
-        { path: "/tmp" },
-      ],
-      overlay: [
-        // dest is inside /tmp (already rw-bound above).
-        { src, dest },
-      ],
-    };
+    const mounts = buildSandboxMountSpec({
+      home: process.env.HOME!,
+      cwd: "/tmp",
+      agentDir: getAgentDir(),
+      agentDirReal: fs.realpathSync(getAgentDir()),
+      extensionMounts: [],
+      nodeDir,
+      gitRwMounts: [],
+      overlayDirs: [{ src, dest }],
+      platform: "linux",
+    });
 
     try {
       const result = spawnSync(

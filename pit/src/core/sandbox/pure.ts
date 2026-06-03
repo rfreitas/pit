@@ -180,6 +180,7 @@ export const buildSandboxMountSpec = (params: Readonly<{
   const rw = [
     ...gitRwMounts,
     { path: cwd },
+    { path: "/tmp",                                 label: "temp dir" },
     { path: agentDirReal,                               label: "Pi config dir" },
     ...(agentDir !== agentDirReal ? [{ path: agentDir, label: "Pi config dir (symlink)" }] : []),
     { path: join(home, ".npm"),                    label: "npm cache",   optional: true as const },
