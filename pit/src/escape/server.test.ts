@@ -718,13 +718,11 @@ describe("pit-escape subscribe op — staged/unstaged notifications", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
-
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
 
     const { socketPath, token } = await spawnEscape({
-      agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir,
+      agentDir, pitDir, worktreePath: worktreeDir,
       env: fastPollEnv,
     });
     const sub = openSubscription(socketPath, token);
@@ -746,8 +744,6 @@ describe("pit-escape subscribe op — staged/unstaged notifications", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
-
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
 
@@ -757,7 +753,7 @@ describe("pit-escape subscribe op — staged/unstaged notifications", () => {
     stageFile(worktreeDir, "staged.txt");
 
     const { socketPath, token } = await spawnEscape({
-      agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir,
+      agentDir, pitDir, worktreePath: worktreeDir,
       env: fastPollEnv,
     });
     const sub = openSubscription(socketPath, token);
@@ -777,13 +773,11 @@ describe("pit-escape subscribe op — staged/unstaged notifications", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
-
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
 
     const { socketPath, token } = await spawnEscape({
-      agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir,
+      agentDir, pitDir, worktreePath: worktreeDir,
       env: fastPollEnv,
     });
     const sub = openSubscription(socketPath, token);
@@ -803,13 +797,11 @@ describe("pit-escape subscribe op — staged/unstaged notifications", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
-
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
 
     const { socketPath, token } = await spawnEscape({
-      agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir,
+      agentDir, pitDir, worktreePath: worktreeDir,
       env: fastPollEnv,
     });
     const sub = openSubscription(socketPath, token);
@@ -827,13 +819,11 @@ describe("pit-escape subscribe op — staged/unstaged notifications", () => {
     const worktreeDir = makeDir();
     const agentDir = makeDir();
     const pitDir = makeDir();
-    const hostSettingsPath = path.join(agentDir, "settings.json");
-
     initGitRepo(mainRepo);
     createWorktree(mainRepo, worktreeDir, "pi/test");
 
     const { socketPath, token } = await spawnEscape({
-      agentDir, pitDir, hostSettingsPath, worktreePath: worktreeDir,
+      agentDir, pitDir, worktreePath: worktreeDir,
       env: fastPollEnv,
     });
     const sub = openSubscription(socketPath, token);
