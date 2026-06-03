@@ -28,15 +28,9 @@ Production code (`pure.ts`) defines platform mounts as data. `launcher.ts` bwrap
    - `pit/src/resume.test.ts` — 1 invocation site
    - `pit/debug/bwrap-optional-mount-probe.test.ts` — 2 invocation sites
 
-### Phase 2 (separate audit, not in this change)
+### Phase 2 (separate audit — see [test-audit.md](test-audit.md) for approach, [test-audit-research.md](test-audit-research.md) for findings)
 
-Audit ALL tests for app code duplication — create a separate plan. Known candidates:
-- Git repo setup helpers (repeated across e2e, resume, sandbox tests)
-- Session setup helpers
-- Tmp dir management
-- Agent dir creation
-
-The `plans/` dir already has `pit-non-interactive-modes.md` which touches on test infrastructure — link to this.
+Audit ALL tests for app code duplication. Seven categories identified: tmp dir lifecycle, git repo creation, bwrap availability checks, git worktree helpers, session file factories, pi mock helpers, escape mock server. Prioritised by duplication count and impact. Escape mock server deferred as low-value/high-churn.
 
 ## Alternatives considered
 
