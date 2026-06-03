@@ -60,8 +60,7 @@ The sandbox features below use implementation-neutral names. Each has a platform
 | [Read grants](#read-grants) | A curated set of paths the agent may read: system directories, selective home dotfiles, and active Pi extensions. |
 | [Write grants](#write-grants) | A curated set of paths the agent may read and write: the worktree, Pi config dir, npm cache, mise shims, Node.js binaries. |
 | [Ephemeral layers](#ephemeral-layers) | Unversioned directories from the parent repo (e.g. `node_modules`) are overlaid onto the worktree. Writes to them are discarded when the session ends. |
-| [Dir remap](#dir-remap) | Pi's config directory is presented at a controlled path with a filtered `settings.json` substituted in. The real `settings.json` is never visible inside the sandbox. |
-| [Package filtering](#package-filtering) | Strips specified Pi packages from `settings.json` before the session starts. The real `settings.json` is never modified. |
+| [Non-sandbox extensions](#non-sandbox-extensions) | Extension paths that only load when the sandbox is disabled. Security or audit extensions that need host filesystem access. |
 | [Env seal](#env-seal) | The agent starts with a clean environment. Only an explicit allowlist of variables is passed in; shell credentials and tokens are not forwarded. |
 | Process isolation | The agent runs in its own process namespace. Orphaned child processes are reaped when the session ends. |
 | Lifetime binding | The sandbox process is tied to pit's lifetime. If pit exits or the terminal closes, the sandbox is killed. |
@@ -99,23 +98,23 @@ Unversioned directories present in the parent repo (not tracked by git — e.g. 
 
 This lets the agent run tests, execute build scripts, and import packages without reinstalling dependencies in every new worktree.
 
-### Dir remap
+### Non-sandbox extensions
 
-Pi's config directory is presented to the agent at a controlled path. Inside that path, `settings.json` is replaced with a filtered copy (see [Package filtering](#package-filtering)). The real `settings.json` on the host is never exposed. All other config files (sessions, auth, etc.) are accessible through the remap and changes to them persist normally.
+Extensions listed in `nonSandboxExtensions` are passed as `--extension` flags only when the sandbox is **disabled** (`--no-sandbox`). They are ignored in sandbox mode.
 
-### Package filtering
-
-Specific Pi packages can be prevented from loading inside sandbox sessions. A filtered copy of `settings.json` is written at session start and injected via [dir remap](#dir-remap). The real `settings.json` is never modified.
+Use this for extensions that assume full host filesystem access — security auditors, credential scanners, or tools that talk to host daemons. Inside the sandbox they would be blocked by the kernel and crash.
 
 Configure in `~/.pi/pit/config.json`:
 
 ```json
 {
-  "denyPackages": ["npm:@casualjim/pi-heimdall"]
+  "nonSandboxExtensions": [
+    "npm:@someone/my-auditor"
+  ]
 }
 ```
 
-Entries must match the package source strings in your Pi `settings.json` exactly.
+Entries use the same format as `packages` in `settings.json` — npm specifiers (`npm:`), git URLs (`github:`), or local filesystem paths.
 
 ### Env seal
 
@@ -129,7 +128,7 @@ The agent process starts with a clean environment. Variables forwarded by defaul
 
 | Field | Type | What it does |
 |---|---|---|
-| `denyPackages` | `string[]` | Package sources to strip from settings inside the sandbox — see [Package filtering](#package-filtering) |
+| `nonSandboxExtensions` | `string[]` | Package sources to load only when sandbox is disabled. Same format as `packages` in `settings.json` — see [Non-sandbox extensions](#non-sandbox-extensions) |
 | `allowEnv` | `string[]` | Extra env var names to forward into the sandbox — see [Env seal](#env-seal) |
 | `sandbox.allowRead` | `string[]` | Linux: adds paths to the read allowlist. macOS: removes paths from the read denylist (grant read access to a path that would otherwise be denied). |
 | `sandbox.denyRead` | `string[]` | macOS only: adds paths to the read denylist beyond the defaults. No effect on Linux. |

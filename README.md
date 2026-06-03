@@ -75,9 +75,7 @@ Create `~/.pi/pit/config.json` to customise pit's behaviour. All fields are opti
 
 ```json
 {
-  "denyPackages": [
-    "npm:@casualjim/pi-heimdall"
-  ],
+  "nonSandboxExtensions": [],
   "allowEnv": [],
   "sandbox": {
     "allowRead": [],
@@ -89,7 +87,7 @@ Create `~/.pi/pit/config.json` to customise pit's behaviour. All fields are opti
 
 | Field | Platform | What it does |
 |---|---|---|
-| `denyPackages` | both | Strip these package sources from `settings.json` before the session starts. Never modifies the real file. |
+| `nonSandboxExtensions` | both | Package sources to load only when sandbox is disabled. Same format as `packages` in `settings.json`. Passed as `--extension` flags in non-sandbox mode; ignored when sandboxed. |
 | `allowEnv` | both | Extra env var names to forward into the sandbox beyond the built-in defaults. |
 | `sandbox.allowRead` | Linux: adds to read allowlist · macOS: removes from read denylist | Grant read access to specific paths. |
 | `sandbox.denyRead` | macOS only | Block read access to additional credential paths beyond the defaults. No effect on Linux. |
