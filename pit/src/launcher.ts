@@ -101,7 +101,6 @@ export const getExtensionMounts = (): string[] => {
 export const buildSandboxMountsEffect = (
   cwd: string,
   agentDir: string,
-  agentDirReal: string,
   extensionMounts: string[],
   nodeDir: string,
   pitConfig?: Readonly<PitConfig>,
@@ -129,7 +128,7 @@ export const buildSandboxMountsEffect = (
       : [];
     const gitRwMounts = yield* resolveWorktreeGitRwMounts(cwd);
     return buildSandboxMountSpec({
-      home: HOME, cwd, agentDir, agentDirReal, extensionMounts, nodeDir,
+      home: HOME, cwd, agentDir, extensionMounts, nodeDir,
       gitRwMounts, overlayDirs, platform, pitConfig,
     });
   });
@@ -143,7 +142,7 @@ export const resolveSandboxMountsEffect = (
     if (!useSandbox || !findSandboxTool()) return undefined;
     const nodeDir = dirname(dirname(process.execPath));
     return yield* buildSandboxMountsEffect(
-      cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir, pitConfig,
+      cwd, realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir, pitConfig,
     );
   });
 
@@ -332,7 +331,7 @@ export const launchEffect = (
       const tool = findSandboxTool();
       if (tool?.kind === "sandbox-exec") {
         const m = mounts ?? (yield* buildSandboxMountsEffect(
-          cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(),
+          cwd, realpathSync(AGENT_DIR), getExtensionMounts(),
           dirname(dirname(process.execPath)), pitConfig,
         ));
         // sbplLaunch exits the process; promise never resolves
@@ -343,7 +342,7 @@ export const launchEffect = (
       }
       if (tool?.kind === "bwrap") {
         const m = mounts ?? (yield* buildSandboxMountsEffect(
-          cwd, AGENT_DIR, realpathSync(AGENT_DIR), getExtensionMounts(),
+          cwd, realpathSync(AGENT_DIR), getExtensionMounts(),
           dirname(dirname(process.execPath)), pitConfig,
         ));
         bwrapLaunch(cwd, piArgs, m, pitConfig ?? {}, escapeHandle?.token); // never returns
