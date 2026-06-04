@@ -142,7 +142,6 @@ export const buildSandboxMountSpec = (params: Readonly<{
   home: string;
   cwd: string;
   agentDir: string;
-  agentDirReal: string;
   extensionMounts: string[];
   nodeDir: string;
   gitRwMounts: Array<{ path: string; label?: string }>;
@@ -151,7 +150,7 @@ export const buildSandboxMountSpec = (params: Readonly<{
   pitConfig?: Readonly<PitConfig>;
 }>): SandboxMounts => {
   const {
-    home, cwd, agentDir, agentDirReal, extensionMounts,
+    home, cwd, agentDir, extensionMounts,
     nodeDir, gitRwMounts, overlayDirs,
     platform = 'linux',
     pitConfig,
@@ -180,8 +179,8 @@ export const buildSandboxMountSpec = (params: Readonly<{
   const rw = [
     ...gitRwMounts,
     { path: cwd },
-    { path: agentDirReal,                               label: "Pi config dir" },
-    ...(agentDir !== agentDirReal ? [{ path: agentDir, label: "Pi config dir (symlink)" }] : []),
+    { path: "/tmp",                                 label: "temp dir" },
+    { path: agentDir,                                  label: "Pi config dir" },
     { path: join(home, ".npm"),                    label: "npm cache",   optional: true as const },
     { path: join(home, ".local/share/mise/shims"), label: "mise shims", optional: true as const },
     { path: join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },

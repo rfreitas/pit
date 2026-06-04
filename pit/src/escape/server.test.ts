@@ -21,6 +21,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { readWorktreeBranchSync } from "../core/git/utils-sync.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,7 @@ async function spawnEscape(opts: {
   pitDir: string;
   worktreePath?: string;
   token?: string;
+  env?: Record<string, string>;
 }): Promise<{ socketPath: string; token: string }> {
   const socketPath = path.join(opts.agentDir, "test.sock");
   const worktreePath = opts.worktreePath ?? opts.agentDir;
@@ -69,7 +71,7 @@ async function spawnEscape(opts: {
       opts.agentDir,
       opts.pitDir,
     ],
-    { stdio: ["ignore", "pipe", "inherit"] }
+    { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, ...opts.env } }
   );
   children.push(child);
 
@@ -125,15 +127,7 @@ function setupWorktree(baseDir: string): { worktreeDir: string; branchName: stri
   return { worktreeDir, branchName };
 }
 
-function readCurrentBranch(worktreeDir: string): string | null {
-  try {
-    const gitFile = fs.readFileSync(path.join(worktreeDir, ".git"), "utf8")
-      .trim().replace(/^gitdir:\s*/, "");
-    const head = fs.readFileSync(path.join(gitFile, "HEAD"), "utf8").trim();
-    const m = head.match(/^ref: refs\/heads\/(.+)$/);
-    return m ? m[1] : null;
-  } catch { return null; }
-}
+
 
 describe("pit-escape rename-branch op", () => {
   it("renames the current branch and updates the worktree HEAD", async () => {
@@ -147,7 +141,7 @@ describe("pit-escape rename-branch op", () => {
 
     expect(resp.code).toBe(0);
     expect(resp.error).toBeUndefined();
-    expect(readCurrentBranch(worktreeDir)).toBe("pi/new-name");
+    expect(readWorktreeBranchSync(worktreeDir)).toBe("pi/new-name");
     expect(branchName).toBe("pi/test-branch"); // confirm it changed
   });
 
@@ -265,6 +259,16 @@ function addCommit(dir: string, filename = "work.txt"): void {
 /** Create a linked worktree from the main repo's HEAD. */
 function createWorktree(mainRepo: string, worktreeDir: string, branch: string): void {
   execFileSync("git", ["-C", mainRepo, "worktree", "add", "-b", branch, worktreeDir, "HEAD"]);
+}
+
+/** Stage a file in the worktree (git add). */
+function stageFile(worktreeDir: string, filename: string): void {
+  execFileSync("git", ["-C", worktreeDir, "add", filename]);
+}
+
+/** Modify a tracked file without staging (echo >>). */
+function modifyTrackedFile(worktreeDir: string, filename: string, content = "unstaged change"): void {
+  fs.appendFileSync(path.join(worktreeDir, filename), content + "\n");
 }
 
 // ── subscribe helper ──────────────────────────────────────────────────────────
@@ -694,6 +698,141 @@ describe("pit-escape subscribe op", () => {
     sub.close();
 
     expect(evt.event).toBe("ref-change");
+  });
+});
+
+// ── subscribe op — staged / unstaged notifications ──────────────────────────
+
+describe("pit-escape subscribe op — staged/unstaged notifications", () => {
+  const fastPollEnv = { PIT_ESCAPE_POLL_MS: "50" };
+
+  it("pushes ref-change when a file is staged (git add)", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+
+    const { socketPath, token } = await spawnEscape({
+      agentDir, pitDir, worktreePath: worktreeDir,
+      env: fastPollEnv,
+    });
+    const sub = openSubscription(socketPath, token);
+    await sub.waitForMessage(); // ack
+
+    // Create and stage a new file — index watcher should fire
+    const file = path.join(worktreeDir, "staged.txt");
+    fs.writeFileSync(file, "hello");
+    stageFile(worktreeDir, "staged.txt");
+
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
+
+  it("pushes ref-change when a file is unstaged (git reset)", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+
+    // Pre-stage a file so there's something to unstage
+    const file = path.join(worktreeDir, "staged.txt");
+    fs.writeFileSync(file, "hello");
+    stageFile(worktreeDir, "staged.txt");
+
+    const { socketPath, token } = await spawnEscape({
+      agentDir, pitDir, worktreePath: worktreeDir,
+      env: fastPollEnv,
+    });
+    const sub = openSubscription(socketPath, token);
+    await sub.waitForMessage(); // ack
+
+    // Unstage — index watcher should fire
+    execFileSync("git", ["-C", worktreeDir, "reset", "HEAD", "staged.txt"]);
+
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
+
+  it("pushes ref-change when a tracked file is modified (unstaged, via poll)", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+
+    const { socketPath, token } = await spawnEscape({
+      agentDir, pitDir, worktreePath: worktreeDir,
+      env: fastPollEnv,
+    });
+    const sub = openSubscription(socketPath, token);
+    await sub.waitForMessage(); // ack
+
+    // Modify a tracked file without staging — poll should pick it up
+    modifyTrackedFile(worktreeDir, "README.md");
+
+    const evt = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt.event).toBe("ref-change");
+  });
+
+  it("does not push spurious ref-change when nothing changed (idle poll)", async () => {
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+
+    const { socketPath, token } = await spawnEscape({
+      agentDir, pitDir, worktreePath: worktreeDir,
+      env: fastPollEnv,
+    });
+    const sub = openSubscription(socketPath, token);
+    await sub.waitForMessage(); // ack — sets up watchers and first poll
+
+    // Wait long enough for multiple poll cycles (3×50ms = 150ms), but with
+    // margin for debounce (100ms) and spawn timing. No file changes made.
+    await expect(sub.waitForMessage(400)).rejects.toThrow("timed out");
+    sub.close();
+  });
+
+  it("pushes ref-change on each distinct unstaged change (not just first)", async () => {
+    // Verify the poll detects a change, then resets and detects a different change.
+    const mainRepo = makeDir();
+    const worktreeDir = makeDir();
+    const agentDir = makeDir();
+    const pitDir = makeDir();
+    initGitRepo(mainRepo);
+    createWorktree(mainRepo, worktreeDir, "pi/test");
+
+    const { socketPath, token } = await spawnEscape({
+      agentDir, pitDir, worktreePath: worktreeDir,
+      env: fastPollEnv,
+    });
+    const sub = openSubscription(socketPath, token);
+    await sub.waitForMessage(); // ack
+
+    // First modification
+    modifyTrackedFile(worktreeDir, "README.md", "change one");
+    const evt1 = await sub.waitForMessage(3000);
+    expect(evt1.event).toBe("ref-change");
+
+    // Second modification — different content, should fire again
+    modifyTrackedFile(worktreeDir, "README.md", "change two");
+    const evt2 = await sub.waitForMessage(3000);
+    sub.close();
+
+    expect(evt2.event).toBe("ref-change");
   });
 });
 

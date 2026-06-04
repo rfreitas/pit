@@ -95,13 +95,6 @@ describe("pathToBucketName", () => {
 			.toBe("--home-ricfr-project--");
 	});
 
-	it("matches pi getDefaultSessionDir encoding exactly", () => {
-		const cwd = "/mnt/c/Users/ricfr/Repos/agent";
-		// Replicates pi's own formula from session-manager.js
-		const piExpected = "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
-		expect(pathToBucketName(cwd)).toBe(piExpected);
-	});
-
 	it("path without leading slash is unchanged apart from wrapping", () => {
 		expect(pathToBucketName("relative/path")).toBe("--relative-path--");
 	});

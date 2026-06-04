@@ -60,6 +60,7 @@ The sandbox features below use implementation-neutral names. Each has a platform
 | [Read grants](#read-grants) | A curated set of paths the agent may read: system directories, selective home dotfiles, and active Pi extensions. |
 | [Write grants](#write-grants) | A curated set of paths the agent may read and write: the worktree, Pi config dir, npm cache, mise shims, Node.js binaries. |
 | [Ephemeral layers](#ephemeral-layers) | Unversioned directories from the parent repo (e.g. `node_modules`) are overlaid onto the worktree. Writes to them are discarded when the session ends. |
+| [Non-sandbox extensions](#non-sandbox-extensions) | Extension paths that only load when the sandbox is disabled. Security or audit extensions that need host filesystem access. |
 | [Env seal](#env-seal) | The agent starts with a clean environment. Only an explicit allowlist of variables is passed in; shell credentials and tokens are not forwarded. |
 | Process isolation | The agent runs in its own process namespace. Orphaned child processes are reaped when the session ends. |
 | Lifetime binding | The sandbox process is tied to pit's lifetime. If pit exits or the terminal closes, the sandbox is killed. |
@@ -107,6 +108,24 @@ Pi's config directory (`~/.pi/agent`) is mounted read-write in the sandbox. Pi r
 
 Packages listed in `settings.json` load unrestricted inside the sandbox. The escape socket uses token authentication to prevent unauthorised access — a loaded package cannot abuse pit-escape without the token. For extensions that should only run outside the sandbox, use [`nonSandboxExtensions`](#config) in pit config.
 
+### Non-sandbox extensions
+
+Extensions listed in `nonSandboxExtensions` are passed as `--extension` flags only when the sandbox is **disabled** (`--no-sandbox`). They are ignored in sandbox mode.
+
+Use this for extensions that assume full host filesystem access — security auditors, credential scanners, or tools that talk to host daemons. Inside the sandbox they would be blocked by the kernel and crash.
+
+Configure in `~/.pi/pit/config.json`:
+
+```json
+{
+  "nonSandboxExtensions": [
+    "npm:@someone/my-auditor"
+  ]
+}
+```
+
+Entries use the same format as `packages` in `settings.json` — npm specifiers (`npm:`), git URLs (`github:`), or local filesystem paths.
+
 ### Env seal
 
 The agent process starts with a clean environment. Variables forwarded by default: `HOME`, `PATH`, `TERM`, `LANG`, HTTP proxy variables (`http_proxy`, `https_proxy`, `no_proxy`, and uppercase variants). Variables present in your shell that are not on the allowlist — API tokens, credentials, tool-specific env — are not forwarded. Additional variables can be added via `allowEnv` in [config](#config).
@@ -119,7 +138,7 @@ The agent process starts with a clean environment. Variables forwarded by defaul
 
 | Field | Type | What it does |
 |---|---|---|
-| `nonSandboxExtensions` | `string[]` | Extension paths passed to pi only in non-sandbox mode — see [Package filtering](#package-filtering) |
+| `nonSandboxExtensions` | `string[]` | Package sources to load only when sandbox is disabled. Same format as `packages` in `settings.json` — see [Non-sandbox extensions](#non-sandbox-extensions) |
 | `allowEnv` | `string[]` | Extra env var names to forward into the sandbox — see [Env seal](#env-seal) |
 | `sandbox.allowRead` | `string[]` | Linux: adds paths to the read allowlist. macOS: removes paths from the read denylist (grant read access to a path that would otherwise be denied). |
 | `sandbox.denyRead` | `string[]` | macOS only: adds paths to the read denylist beyond the defaults. No effect on Linux. |

@@ -21,6 +21,7 @@ import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts
 import { setupNewSession } from "./core/session/io.ts";
 import { findBwrap, buildBwrapArgs } from "./launcher.ts";
 import { linuxPlatformRoMounts } from "./core/sandbox/pure.ts";
+import { cwdToBucket } from "./core/session/pure.ts";
 import type { WorktreeResult, SandboxMounts } from "./types.ts";
 
 // ── mocks ─────────────────────────────────────────────────────────────────────
@@ -512,7 +513,7 @@ describe("showPicker invariants: cwd and UUID readable from session header", () 
     const agentDir = makeTmp("picker-agent-");
     const cwd = makeTmp("picker-cwd-");
     // Write a session with NO pit entry — just the header
-    const bucket = "--" + cwd.replace(/^\//, "").replace(/\//g, "-") + "--";
+    const bucket = cwdToBucket(cwd);
     const dir = path.join(agentDir, "sessions", bucket);
     fs.mkdirSync(dir, { recursive: true });
     const sessionId = "picker-test-uuid-1234";

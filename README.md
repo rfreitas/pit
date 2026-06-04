@@ -87,7 +87,7 @@ Create `~/.pi/pit/config.json` to customise pit's behaviour. All fields are opti
 
 | Field | Platform | What it does |
 |---|---|---|
-| `nonSandboxExtensions` | both | Extension paths passed to pi only in non-sandbox mode (e.g. security monitoring extensions that need host access). |
+| `nonSandboxExtensions` | both | Package sources loaded only in non-sandbox mode. Same format as `packages` in `settings.json`. Passed as `--extension` flags when sandbox is disabled; ignored when sandboxed. Useful for security monitoring extensions that need host access. |
 | `allowEnv` | both | Extra env var names to forward into the sandbox beyond the built-in defaults. |
 | `sandbox.allowRead` | Linux: adds to read allowlist · macOS: removes from read denylist | Grant read access to specific paths. |
 | `sandbox.denyRead` | macOS only | Block read access to additional credential paths beyond the defaults. No effect on Linux. |

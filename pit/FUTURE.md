@@ -47,3 +47,41 @@ Both bwrap and sandbox-exc treat this as a single unit — no finer granularity.
 - How does this interact with the dir-remap / symlink mirror on macOS? The mirror symlinks everything; narrowing rw to a single file means the mirror must set up the session file as a real file (or bind mount) rather than a symlink.
 
 **Security benefit:** A compromised extension or agent prompt inside one sandbox session cannot destroy or tamper with the session history of other concurrent or past sessions.
+
+---
+
+## LOC diff in session picker
+
+**Problem:** The session picker (`pit -r`) lists sessions by label and branch but gives no indication of how much work each session contains. A user with many worktrees must open each one to see what's there.
+
+**Goal:** Show `+LOC -LOC` next to each worktree session in the picker, summarising the entire diff from the worktree branch to its merge-base (including all unmerged commits + staged + unstaged changes). This lets the user gauge which session holds the most work at a glance.
+
+**Current state:** The picker currently shows session labels and, for worktree sessions, the branch name. No diff information.
+
+**Approach:**
+
+1.  **Compute the diff scope.** For each worktree, determine the merge-base between the worktree branch and its parent branch (the upstream or root branch it was forked from). The diff includes:
+    *   All commits reachable from the worktree branch but not from the merge-base (unmerged commits).
+    *   Staged changes in the worktree index.
+    *   Unstaged changes in the worktree working tree.
+    *   Untracked files should be excluded (they're not part of the branch diff).
+
+2.  **Generate the stats.** Run `git diff --stat <merge-base>...HEAD` to get LOC counts for the unmerged commits, then `git diff --stat HEAD` for staged+unstaged. Combine them into a single `+LOC -LOC` number.
+
+3.  **Display in the picker.** Append the stats to each worktree session's label, e.g.: `[worktree branch:pi/abc123] +342 -87`. If the diff is empty, show `∅` or omit entirely.
+
+4.  **Performance.** Computing `git diff --stat` for many worktrees can be slow. Options:
+    *   Compute eagerly when opening the picker (simplest; fine for < 20 worktrees).
+    *   Show a spinner and load stats asynchronously in batches.
+    *   Cache stats per session and invalidate on session resume.
+
+**Edge cases:**
+*   Detached HEAD worktree — use `HEAD` as-is; diff from the current commit to the working tree.
+*   Branch has been deleted — fall back to just the working tree diff.
+*   No merge-base found (unrelated histories) — diff from the branch tip only, or show `?`.
+*   Binary files, renamed files — `--stat` handles these gracefully; total LOC may undercount (binary changes contribute 0 lines).
+
+**Open questions:**
+- Should the stats include untracked files? The user said no, but some workflows rely on untracked generated files as part of the "work in progress".
+- Should the picker sort by diff size by default, or keep chronological order with stats as annotations?
+- How does this interact with the session resume flow? The stats are a snapshot; on resume, the actual diff may have changed (e.g. if the worktree was cleaned externally).

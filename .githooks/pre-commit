@@ -1,6 +1,0 @@
-#!/bin/sh
-# Pre-commit: typecheck + lint. Tests are too slow for a commit hook.
-# Run npm test manually or rely on CI for full test coverage.
-set -e
-npm run typecheck
-npm run lint

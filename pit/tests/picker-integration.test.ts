@@ -9,14 +9,12 @@
  * and call `.render(100)` to assert against the final string output.
  */
 import { describe, it, expect, beforeAll } from "vitest";
-import { useTmpDirs } from "../src/tests/helpers.ts";
+import { useTmpDirs, writeSessionFile } from "../src/tests/helpers.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { buildSessionLines, cwdToBucket } from "../src/core/session/pure.ts";
 import { discoverSessionsForPicker } from "../src/program.ts";
 import { scanSessionsByRepo } from "../src/core/session/io.ts";
 import { SessionSelectorComponent, initTheme } from "@earendil-works/pi-coding-agent";
-import type { WorktreeResult } from "../src/types.ts";
 
 const { makeSandbox } = useTmpDirs();
 
@@ -25,26 +23,6 @@ const { makeSandbox } = useTmpDirs();
 beforeAll(() => {
   initTheme(); // Required by TUI components
 });
-
-/** Write a real session file so scanSessionsByRepo can find it */
-function writeSessionFixture(
-  agentDir: string,
-  cwd: string,
-  meta: { repo: string; branch: string },
-): string {
-  const bucket = cwdToBucket(cwd);
-  const bucketDir = path.join(agentDir, "sessions", bucket);
-  fs.mkdirSync(bucketDir, { recursive: true });
-
-  const ts = new Date().toISOString();
-  const fileTs = ts.replace(/:/g, "-").replace(".", "-");
-  const sessionId = `test-${Math.random().toString(36).slice(2, 10)}`;
-  const file = path.join(bucketDir, `${fileTs}_${sessionId}.jsonl`);
-
-  const result: WorktreeResult = { cwd, meta };
-  fs.writeFileSync(file, buildSessionLines(result, sessionId, ts));
-  return file;
-}
 
 /** Helper to run discovery -> component -> render */
 async function getRenderedPickerUI(
@@ -79,7 +57,7 @@ describe("Picker TUI integration", () => {
     const prunedWt = "/tmp/repo-wt-pruned";
 
     // Create session file, but do NOT include it in worktrees array (simulate pruned)
-    writeSessionFixture(agentDir, prunedWt, { repo, branch: "pi/pruned-branch" });
+    writeSessionFile(agentDir, prunedWt, { repo, branch: "pi/pruned-branch" });
 
     const ui = await getRenderedPickerUI(
       { cwd: "/tmp/repo", repo, isLinked: false, worktrees: [], agentDir },
