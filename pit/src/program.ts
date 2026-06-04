@@ -127,7 +127,11 @@ export const discoverSessionsForPicker = async (
     return deps.listSessions(opts.cwd).catch(() => []);
   }
 
-  const mainPaths = opts.repo ? [opts.repo, opts.cwd] : [opts.cwd];
+  // Deduplicate: when running from the repo root, repo === cwd,
+  // so mainPaths would contain duplicates without Set.
+  const mainPaths = opts.repo
+    ? [...new Set([opts.repo, opts.cwd])]
+    : [opts.cwd];
 
   // 1. Sessions from git-known worktree paths
   const worktreeBranchInfo: Array<[string, string | null]> = await Promise.all(

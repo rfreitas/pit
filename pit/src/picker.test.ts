@@ -234,6 +234,47 @@ describe("discoverSessionsForPicker", () => {
     expect(labelField2).toContain("⚠");
   });
 
+  it("does NOT duplicate sessions when repo and cwd are the same path (mainPaths dedup)", async () => {
+    // Regression: when running pit -r from the main repo directory,
+    // opts.repo === opts.cwd, which causes mainPaths = [cwd, cwd].
+    // Without dedup, listSessions is called twice with the same cwd,
+    // producing duplicate entries in the picker.
+    const agentDir = makeSandbox("picker-");
+    const repoDir = "/tmp/test-repo";
+
+    // Write a session in the repo directory itself (not a worktree).
+    // This simulates running pit -r from the repo root — sessions live
+    // in the repo's own bucket.
+    const session1 = writeSessionFile(agentDir, repoDir, { repo: repoDir, branch: "" });
+
+    // Track how many times listSessions is called for each cwd
+    const listCalls = new Map<string, number>();
+
+    const deps: DiscoveryDeps = {
+      listSessions: async (cwd) => {
+        listCalls.set(cwd, (listCalls.get(cwd) ?? 0) + 1);
+        if (cwd === repoDir) return [{ path: session1.path, modified: session1.modified }];
+        return [];
+      },
+      readWorktreeBranch: async () => null,
+      existsSync: () => true,
+      branchExists: async () => true,
+      scanSessionsByRepo: async () => [],
+    };
+
+    const results = await discoverSessionsForPicker(
+      // repo === cwd — simulating pit -r from the main repo root
+      { cwd: repoDir, repo: repoDir, isLinked: false, worktrees: [], agentDir },
+      deps,
+    );
+
+    // BUG: mainPaths = [repo, cwd] = [repoDir, repoDir]
+    // listSessions is called twice for the same directory, producing duplicates.
+    // The session appears twice in results (2 instead of 1).
+    expect(results.length, "each session should appear only once").toBe(1);
+    expect(results[0]!.path).toBe(session1.path);
+  });
+
   it("when isLinked=true, returns only sessions for current cwd (worktree isolation)", async () => {
     const agentDir = makeSandbox("picker-");
     const currentWt = "/tmp/test-repo-wt-current";
