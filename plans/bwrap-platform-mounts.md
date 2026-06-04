@@ -28,7 +28,7 @@ Production code (`pure.ts`) defines platform mounts as data. `launcher.ts` bwrap
    - `pit/src/resume.test.ts` — 1 invocation site
    - `pit/debug/bwrap-optional-mount-probe.test.ts` — 2 invocation sites
 
-### Phase 2 (separate audit — see [test-audit.md](test-audit.md) for approach, [test-audit-research.md](test-audit-research.md) for findings)
+### Phase 2 (separate audit — see [test-audit.md](test-audit.md) for approach, [test-audit-inventory.md](test-audit-inventory.md) for per-test inventory)
 
 Audit ALL tests for app code duplication. Seven categories identified: tmp dir lifecycle, git repo creation, bwrap availability checks, git worktree helpers, session file factories, pi mock helpers, escape mock server. Prioritised by duplication count and impact. Escape mock server deferred as low-value/high-churn.
 

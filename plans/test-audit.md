@@ -1,6 +1,6 @@
 # Plan: test app-code duplication audit
 
-**Status: planned.** Findings from the pit investigation are in [test-audit-research.md](test-audit-research.md).
+**Status: planned.** Per-test inventory in [test-audit-inventory.md](test-audit-inventory.md) — 413 rows, one per `it()` block, with status, duration, and file-level duplication flag.
 
 ## Problem
 
@@ -8,133 +8,126 @@ Tests should import app code, not reimplement it. When a test copy-pastes app
 logic, the test can pass while production silently breaks — the stale copy
 masks the regression.
 
-For example this could happen for the following reasons:
-1. **App code has a side effect tests can't tolerate** (e.g. `process.exit()`).
-   Tests copy the pure part and leave the side effect behind — but the copy
-   diverges from the app over time.
-2. **Test is at the wrong layer.** Unit-testing sandbox arg construction by
-   copy-pasting the arg array is a unit test of a copy, not the code. It should
-   be an integration test that runs the real function.
+Two root causes:
+1. **App code has a side effect tests can't run** (e.g. `process.exit()`).
+   Tests copy-paste the pure part — and the copy diverges over time.
+2. **Test is at the wrong layer.** A unit test that copy-pastes bwrap arg
+   arrays is testing a copy, not the code. It should be an integration test
+   that exercises the real function.
 
-## Litmus test
+## Detection heuristic
 
-For every helper function or setup block in a test file, ask: **if the app code
-changed tomorrow in a way that should break the test, would the test's copy
-still pass?**
+To decide if a test-local function is duplicated app code, scan for:
 
-- If yes → the test is testing its own copy, not the app. Propose to fix it.
-- If no → the test is exercising the real code path. Leave it.
+- **Same function name** as an export from an imported production module
+- **Same CLI flag strings** (`--tmpfs`, `--ro-bind`, `git worktree add`, etc.)
+  that appear verbatim in production code
+- **Same file-path literals** (`/nix`, `/mnt/wsl`, `~/.pi/agent`) that
+  production mount/config logic constructs
+- **Same JSON field shapes** (session entry schemas, pit metadata objects)
+  that production serialises
 
-## Decision tree
+If the test's version would keep passing after the app's version changed,
+it's duplicated.
 
-For each occurrence of duplicated app code found in a test:
+## Process
 
-```
-Test duplicates app code
-│
-├─ App code has a side effect the test can't run?
-│  → Extract the pure logic into its own exported function.
-│    Tests import that. The imperative shell gets an integration test
-│    or stays untested.
-│
-├─ Test is at the wrong layer?
-│  → Move it up. A unit test that copy-pastes bwrap args should be
-│    an integration test that spawns real bwrap with buildBwrapArgs().
-│    Delete the unit test — it was testing a copy.
-│
-├─ Test genuinely needs different behavior?
-│  (backward compat, probe semantics, old-format fixtures)
-│  → Leave it. Add "// Intentional: testing X with old/broken/raw Y"
-│    so the next audit can skip it.
-│
-└─ Test duplicates app code that should be a shared helper?
-   → Extract to helpers.ts, parameterize for all call sites,
-     import everywhere.
+### Phase 1: baseline
+
+```bash
+cd <project>
+npx vitest run --reporter=verbose 2>&1 | tee test-baseline.log
 ```
 
-## Mocking
+Record pass/fail/skip/todo per file. This is the ground truth — any fix that
+introduces a new failure is a regression.
 
-Tests shouldn't duplicate app logic just to avoid mocking. The test's scope is
-the unit under test — everything else is noise.
+### Phase 2: inventory (one row per test)
 
-- **Mock at the closest boundary to the unit under test.** Testing
-  `worktreeCheckEffect`? Mock the git calls, not the filesystem. Testing git
-  utils? Mock `spawnSync`, not git.
-- **Never mock the unit under test itself.** If the test mocks the function
-  it's supposed to verify, the test asserts nothing.
-- **`vi.hoisted` only when the mock must run before module import.** Everything
-  else can use top-level `vi.mock` after imports.
+For every `it()` block in the baseline, fill one row in `plans/test-audit-inventory.md`.
+Group rows by file. For each test, capture:
 
-## Test layer decision guide
+- Full name (`describe > inner describe > it`)
+- Status (passed / failed / skipped / todo)
+- Duration in milliseconds
+- File-level duplication flag — does the file that contains this test define
+  local helpers that duplicate app code? (yes + what / no)
 
-| Test currently uses... | And duplicates... | Consider... |
-|---|---|---|
-| `vi.mock('child_process')` | Hand-rolled spawn args | Real `spawnSync` integration test (the process actually runs) |
-| `vi.mock('node:fs')` | File layout logic | Integration test with real tmp dirs |
-| No mocks, raw bwrap/git args | An exported function's output | Import the function instead of copy-pasting its result |
-| `vi.mock` + hand-rolled request shapes | Protocol/socket logic | Move to an integration test; unit test the command, not the socket |
-
-## Template
-
-When investigating a test file, fill in one row per duplication found:
-
-| Test file | Feature | App code duplicated | Curr. level | Curr. mocks | Proposed level | Fix | Proposed mocks |
-|---|---|---|---|---|---|---|---|
-| `path/to/test.ts` | What the test verifies | Which app function is reimplemented | unit / integration / e2e | `vi.mock('x')` or None | unit / integration / e2e | Extract, import, move up, or leave | `vi.mock('x')` or None |
-
-Fields:
-- **Test file** — path relative to repo root
-- **Feature** — what the test verifies (not what it does, what it's *for*)
-- **App code duplicated** — which production module's logic is reimplemented
-  in the test
-- **Curr. level** — unit (mocked deps) / integration (real deps, no app process)
-  / e2e (spawns the app)
-- **Curr. mocks** — what the test currently mocks (`vi.mock`, `vi.spyOn`, or
-  None for real IO)
-- **Proposed level** — where the test should live after the fix
-- **Fix** — concrete action: "Extract `functionName()` from `module.ts` and
-  import", "Move to integration test in `tests/foo.test.ts`",
-  "Replace with `vi.mock('module:fs')`", "Leave (backward compat fixture)"
-- **Proposed mocks** — what mocks should remain (or be added) after the fix
-
-## Subagent distribution
-
-The audit is distributed across subagents to keep main-thread context lean.
-Each subagent gets **one test file** and one row of the template filled in.
-
-### Why per-file, not per-category
-
-Grouping by category (e.g. "all tmp dir helpers") implies prior research has
-already clustered the files. Subagents should do the investigation
-independently — each one reads one test file, reads the app code it targets,
-and fills the template. The main thread aggregates results and spots patterns.
-
-### Per-file subagent prompt
-
-```
-Read the test file at <path> and the production module(s) it targets.
-For each function or setup block in the test that reimplements app logic
-instead of importing it, fill one row of the audit template:
-
-| Test file | Feature | App code duplicated | Curr. level | Curr. mocks | Proposed level | Fix | Proposed mocks |
-
-If no duplication is found, report "No duplication — all app code imported."
-If the duplication is intentional (backward compat, probe), mark Fix as
-"Leave (intentional: <reason>)".
+Build this table by running:
+```bash
+npx vitest run pit/ --reporter=json 2>/dev/null | python3 <script>
 ```
 
-### Aggregation
+The script extracts `assertionResults` per file, joins with a lookup table of
+file-level duplication judgments, and writes markdown rows.
 
-After all subagents report, the main thread:
-1. Groups findings by duplicated app code (multiple test files duplicating
-   the same app function → shared helper candidate).
-2. Ranks by impact (number of copies, risk of divergence).
-3. Produces the proposal table.
-4. Delegates fixes per-file to `cavecrew-builder`.
+### Phase 3: mark duplicated files
 
-### What subagents should NOT do
+Open each file flagged `yes` in the inventory. Read its local helpers.
+Compare against production imports using the detection heuristic. Confirm or
+refine the duplication judgment. If a helper genuinely doesn't duplicate app
+logic, update the flag to `no` with a comment.
 
-- Don't guess at fixes — only report what's duplicated and at what layer.
-- Don't edit code. The audit is read-only investigation.
-- Don't cross-reference other test files. Each subagent sees only its
-  assigned file.
+### Phase 4: cross-reference
+
+Group files flagged `yes` by the duplicated function name. Count copies.
+Sort by count descending — these are the highest-impact fixes.
+
+### Phase 5: proposal (one row per duplication)
+
+For each duplicated function, fill one row:
+
+| Duplicated function | Source module | Files affected | Fix |
+|---|---|---|---|
+| `buildBwrapArgs` | `launcher.ts` | `sandbox.test.ts`, `resume.test.ts`, ... | Already fixed — import |
+| `makeTmpDir` | (no central source) | 9 files listed in inventory | Add `makeTmpSync()` to `helpers.ts`, import in all 9 |
+| ... | ... | ... | ... |
+
+Fix options:
+- **Extract** — move pure logic from app to its own export, import in tests
+- **Import** — test-local copy is identical to an existing shared helper; just import
+- **Move up** — unit test at wrong layer, convert to integration test, delete unit test
+- **Mock** — replace duplicated setup with `vi.mock`, let the mock provide the value
+- **Leave** — intentional (backward compat, probe, old-format fixture)
+
+File: `plans/test-audit-proposals.md`.
+
+### Phase 6: execute
+
+For each proposal row, in priority order (most copies first).
+
+The agent processes one duplicated function at a time. For each:
+
+1. Read the affected test files and the source module
+2. Make the change (extract, import, move, or mock)
+3. Run ONLY the affected test file: `npx vitest run path/to/file.test.ts`
+4. If green, run full suite: `npx vitest run`
+5. Commit
+
+Per-file command to keep iteration fast:
+```bash
+npx vitest run pit/tests/sandbox.test.ts pit/src/resume.test.ts  # only changed files
+```
+
+Full suite only after all file-level changes in a batch are green:
+```bash
+npx vitest run pit/
+```
+
+## What NOT to touch
+
+- **Debug probes** — files under `debug/` that test tool behavior, not pit code
+- **Backward-compat fixtures** — tests that deliberately use old/broken schemas
+  to verify forward compatibility
+- **Intentional raw args** — tests that probe bwrap flag semantics (`--bind-try`
+  vs `--bind`), not pit's sandbox construction
+
+Tag these with `// Intentional: testing X with old/broken/raw Y`.
+
+## Mocking rules
+
+- Mock at the closest boundary to the unit under test (git utils → mock
+  `spawnSync`, not `child_process`)
+- Never mock the unit under test itself
+- `vi.hoisted` only when the mock must run before the module under test is
+  imported (e.g. mocking pi SDK before importing pit code)
