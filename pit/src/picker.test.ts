@@ -5,35 +5,14 @@
  * Real temp files for session JSONL; everything else is mocked.
  */
 import { describe, it, expect } from "vitest";
-import { useTmpDirs } from "./tests/helpers.ts";
+import { useTmpDirs, writeSessionFile } from "./tests/helpers.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { buildSessionLines, cwdToBucket } from "./core/session/pure.ts";
-import type { WorktreeResult } from "./types.ts";
 
 const { makeSandbox } = useTmpDirs();
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function writeSessionFile(
-  agentDir: string,
-  cwd: string,
-  meta: { repo: string; branch: string },
-): { path: string; modified: Date } {
-  const bucket = cwdToBucket(cwd);
-  const bucketDir = path.join(agentDir, "sessions", bucket);
-  fs.mkdirSync(bucketDir, { recursive: true });
-
-  const ts = new Date().toISOString();
-  const fileTs = ts.replace(/:/g, "-").replace(".", "-");
-  const sessionId = `test-${Math.random().toString(36).slice(2, 10)}`;
-  const file = path.join(bucketDir, `${fileTs}_${sessionId}.jsonl`);
-
-  const result: WorktreeResult = { cwd, meta };
-  fs.writeFileSync(file, buildSessionLines(result, sessionId, ts));
-
-  return { path: file, modified: new Date() };
-}
 
 import { discoverSessionsForPicker, type PickerSession } from "./program.ts";
 

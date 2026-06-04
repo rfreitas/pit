@@ -14,6 +14,8 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { buildSessionLines, cwdToBucket } from "../core/session/pure.ts";
+import type { WorktreeResult } from "../types.ts";
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -73,4 +75,27 @@ export const makeGitRepo = (makeTmp: (prefix: string) => string): string => {
   execFileSync("git", ["-C", repo, "add", "."], { stdio: "ignore" });
   execFileSync("git", ["-C", repo, "commit", "-m", "init"], { stdio: "ignore" });
   return repo;
+};
+
+// ── session file factory ──────────────────────────────────────────────────────
+
+/**
+ * Write a pit session file into the correct bucket under agentDir/sessions/.
+ * Uses the app's own cwdToBucket and buildSessionLines so the file format
+ * is always in sync with production code.
+ */
+export const writeSessionFile = (
+  agentDir: string,
+  cwd: string,
+  meta: { repo: string; branch: string },
+): { path: string; modified: Date } => {
+  const bucketDir = path.join(agentDir, "sessions", cwdToBucket(cwd));
+  fs.mkdirSync(bucketDir, { recursive: true });
+  const ts = new Date().toISOString();
+  const fileTs = ts.replace(/:/g, "-").replace(".", "-");
+  const sessionId = `test-${Math.random().toString(36).slice(2, 10)}`;
+  const file = path.join(bucketDir, `${fileTs}_${sessionId}.jsonl`);
+  const result: WorktreeResult = { cwd, meta };
+  fs.writeFileSync(file, buildSessionLines(result, sessionId, ts));
+  return { path: file, modified: new Date() };
 };

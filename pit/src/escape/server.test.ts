@@ -21,6 +21,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { readWorktreeBranchSync } from "../core/git/utils-sync.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -126,15 +127,7 @@ function setupWorktree(baseDir: string): { worktreeDir: string; branchName: stri
   return { worktreeDir, branchName };
 }
 
-function readCurrentBranch(worktreeDir: string): string | null {
-  try {
-    const gitFile = fs.readFileSync(path.join(worktreeDir, ".git"), "utf8")
-      .trim().replace(/^gitdir:\s*/, "");
-    const head = fs.readFileSync(path.join(gitFile, "HEAD"), "utf8").trim();
-    const m = head.match(/^ref: refs\/heads\/(.+)$/);
-    return m ? m[1] : null;
-  } catch { return null; }
-}
+
 
 describe("pit-escape rename-branch op", () => {
   it("renames the current branch and updates the worktree HEAD", async () => {
@@ -148,7 +141,7 @@ describe("pit-escape rename-branch op", () => {
 
     expect(resp.code).toBe(0);
     expect(resp.error).toBeUndefined();
-    expect(readCurrentBranch(worktreeDir)).toBe("pi/new-name");
+    expect(readWorktreeBranchSync(worktreeDir)).toBe("pi/new-name");
     expect(branchName).toBe("pi/test-branch"); // confirm it changed
   });
 
