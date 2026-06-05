@@ -68,17 +68,25 @@ export const productionBranchExists = (
 
 // ── pure labeling logic ───────────────────────────────────────────────────────
 
+/**
+ * Generates the TUI label for a worktree session based on its disk and git state.
+ * 
+ * @param branch - The branch name (from live HEAD or session metadata)
+ * @param dirExists - Whether the worktree directory physically exists on disk
+ * @param hasBranch - Whether the branch still exists in the main git repository
+ * @param inGitWorktreeList - True if git tracks this worktree (`git worktree list`); False if it was pruned/unregistered
+ */
 export const getWorktreeLabel = (
   branch: string | null | undefined,
   dirExists: boolean,
   hasBranch: boolean,
-  isRegistered: boolean,
+  inGitWorktreeList: boolean,
 ): string => {
   const isValidBranch = branch && branch !== "deleted";
 
   if (dirExists) {
     if (isValidBranch && hasBranch) {
-      return isRegistered
+      return inGitWorktreeList
         ? `[worktree branch:${branch}]`
         : `⚠ [unregistered worktree:${branch}]`;
     } else {
