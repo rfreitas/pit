@@ -66,6 +66,57 @@ export const productionBranchExists = (
     })
   );
 
+// ── pure labeling logic ───────────────────────────────────────────────────────
+
+export const getActiveWorktreeLabel = (
+  branch: string | null | undefined,
+  dirExists: boolean,
+  hasBranch: boolean,
+): string => {
+  if (dirExists) {
+    if (branch && branch !== "deleted" && hasBranch) {
+      return `[worktree branch:${branch}]`;
+    } else if (branch && branch !== "deleted" && !hasBranch) {
+      return `⚠ [deleted branch:${branch}]`;
+    } else {
+      return `⚠ [deleted branch]`;
+    }
+  } else {
+    if (branch && branch !== "deleted" && hasBranch) {
+      return `[missing worktree branch:${branch}]`;
+    } else {
+      return `[deleted branch:${branch ?? "unknown"}]`;
+    }
+  }
+};
+
+export const getPrunedWorktreeLabel = (
+  branch: string,
+  dirExists: boolean,
+  hasBranch: boolean,
+): string => {
+  if (dirExists) {
+    if (hasBranch) {
+      return `⚠ [unregistered worktree:${branch}]`;
+    } else {
+      return `⚠ [deleted branch:${branch}]`;
+    }
+  } else {
+    if (hasBranch) {
+      return `[missing worktree branch:${branch}]`;
+    } else {
+      return `[deleted branch:${branch}]`;
+    }
+  }
+};
+
+export const applySessionLabel = (s: Readonly<PickerSession>, labelText: string): PickerSession => {
+  if (!labelText) return s;
+  return s.name
+    ? { ...s, name: `${labelText} ${s.name}` }
+    : { ...s, firstMessage: `${labelText} ${s.firstMessage ?? "(no messages)"}` };
+};
+
 // ── discovery ─────────────────────────────────────────────────────────────────
 
 /**
@@ -150,26 +201,8 @@ export const discoverSessionsForPicker = async (
     const dirExists = deps.existsSync(matchedWt);
     const hasBranch = branch ? await deps.branchExists(branch) : false;
 
-    let labelText = "";
-    if (dirExists) {
-      if (branch && branch !== "deleted" && hasBranch) {
-        labelText = `[worktree branch:${branch}]`;
-      } else if (branch && branch !== "deleted" && !hasBranch) {
-        labelText = `⚠ [deleted branch:${branch}]`;
-      } else {
-        labelText = `⚠ [deleted branch]`;
-      }
-    } else {
-      if (branch && branch !== "deleted" && hasBranch) {
-        labelText = `[missing worktree branch:${branch}]`;
-      } else {
-        labelText = `[deleted branch:${branch ?? "unknown"}]`;
-      }
-    }
-
-    return s.name
-      ? { ...s, name: `${labelText} ${s.name}` }
-      : { ...s, firstMessage: `${labelText} ${s.firstMessage ?? "(no messages)"}` };
+    const labelText = getActiveWorktreeLabel(branch, dirExists, hasBranch);
+    return applySessionLabel(s, labelText);
   });
 
   const flatMarked = await Promise.all(labeledPromises);
@@ -190,24 +223,8 @@ export const discoverSessionsForPicker = async (
       const dirExists = s.cwd ? deps.existsSync(s.cwd) : false;
       const hasBranch = await deps.branchExists(b);
 
-      let labelText = "";
-      if (dirExists) {
-        if (hasBranch) {
-          labelText = `⚠ [unregistered worktree:${b}]`;
-        } else {
-          labelText = `⚠ [deleted branch:${b}]`;
-        }
-      } else {
-        if (hasBranch) {
-          labelText = `[missing worktree branch:${b}]`;
-        } else {
-          labelText = `[deleted branch:${b}]`;
-        }
-      }
-
-      return s.name
-        ? { ...s, name: `${labelText} ${s.name}` }
-        : { ...s, firstMessage: `${labelText} ${s.firstMessage ?? "(no messages)"}` };
+      const labelText = getPrunedWorktreeLabel(b, dirExists, hasBranch);
+      return applySessionLabel(s, labelText);
     })
   );
 
