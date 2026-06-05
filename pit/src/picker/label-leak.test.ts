@@ -6,10 +6,10 @@
  *  2. Active worktrees with session leakage from listSessions
  */
 import { describe, it, expect } from "vitest";
-import { useTmpDirs, writeSessionFile } from "./tests/helpers.ts";
+import { useTmpDirs, writeSessionFile } from "../tests/helpers.ts";
 import * as path from "node:path";
-import { discoverSessionsForPicker, type PickerSession } from "./picker.ts";
-import { scanSessionsByRepo } from "./core/session/io.ts";
+import { discoverSessionsForPicker, type PickerSession } from "./index.ts";
+import { scanSessionsByRepo } from "../core/session/io.ts";
 
 const { makeSandbox } = useTmpDirs();
 

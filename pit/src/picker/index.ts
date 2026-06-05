@@ -8,24 +8,24 @@
 
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { layer as NodeContextLayer, type NodeContext } from "./node-context.ts";
+import { layer as NodeContextLayer, type NodeContext } from "../node-context.ts";
 import {
   SessionManager,
   SessionSelectorComponent,
   initTheme,
   type CustomEntry,
 } from "@earendil-works/pi-coding-agent";
-import type { PitMetadata } from "./types.ts";
-import { AGENT_DIR } from "./core/constants.ts";
-import { scanSessionsByRepo } from "./core/session/io.ts";
+import type { PitMetadata } from "../types.ts";
+import { AGENT_DIR } from "../core/constants.ts";
+import { scanSessionsByRepo } from "../core/session/io.ts";
 import {
   isLinkedWorktree,
   resolveMainRepo,
   listRepoWorktrees,
   readWorktreeBranch,
   gitRepoRoot,
-} from "./core/git/utils.ts";
-import { launchEffect } from "./launcher.ts";
+} from "../core/git/utils.ts";
+import { launchEffect } from "../launcher/index.ts";
 
 // ── types ─────────────────────────────────────────────────────────────────────
 

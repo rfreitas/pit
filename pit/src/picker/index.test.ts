@@ -5,7 +5,7 @@
  * Real temp files for session JSONL; everything else is mocked.
  */
 import { describe, it, expect } from "vitest";
-import { useTmpDirs, writeSessionFile } from "./tests/helpers.ts";
+import { useTmpDirs, writeSessionFile } from "../tests/helpers.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -14,7 +14,7 @@ const { makeSandbox } = useTmpDirs();
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 
-import { discoverSessionsForPicker, type PickerSession } from "./picker.ts";
+import { discoverSessionsForPicker, type PickerSession } from "./index.ts";
 
 // Mock deps that will be injected into discoverSessionsForPicker
 interface DiscoveryDeps {

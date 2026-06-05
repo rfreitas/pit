@@ -10,21 +10,21 @@ import { randomUUID } from "node:crypto";
 import * as undici from "undici";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { layer as NodeContextLayer, type NodeContext } from "./node-context.ts";
+import { layer as NodeContextLayer, type NodeContext } from "../node-context.ts";
 import { main } from "@earendil-works/pi-coding-agent";
-import type { PitMetadata, PitConfig, SandboxMounts, OverlayMount } from "./types.ts";
-import { HOME, AGENT_DIR, PIT_DIR } from "./core/constants.ts";
+import type { PitMetadata, PitConfig, SandboxMounts, OverlayMount } from "../types.ts";
+import { HOME, AGENT_DIR, PIT_DIR } from "../core/constants.ts";
 import {
   resolveMainRepo,
   resolveWorktreeGitRwMounts,
-} from "./core/git/utils.ts";
-import { resolveUnversionedDirs } from "./core/sandbox/io.ts";
-import { buildSandboxMountSpec, allowedEnvArgs, buildSealedEnv, nonSandboxExtensionFlags } from "./core/sandbox/pure.ts";
-import { buildSbplProfile } from "./core/sandbox/sbpl.ts";
-import { probeSocketEffect } from "./extensions/escape/client.ts";
-import { setPitEscapeSocket } from "./env.ts";
-import { createExtensionFactories } from "./extensions/index.ts";
-import { SocketAliveError } from "./errors.ts";
+} from "../core/git/utils.ts";
+import { resolveUnversionedDirs } from "../core/sandbox/io.ts";
+import { buildSandboxMountSpec, allowedEnvArgs, buildSealedEnv, nonSandboxExtensionFlags } from "../core/sandbox/pure.ts";
+import { buildSbplProfile } from "../core/sandbox/sbpl.ts";
+import { probeSocketEffect } from "../extensions/escape/client.ts";
+import { setPitEscapeSocket } from "../env.ts";
+import { createExtensionFactories } from "../extensions/index.ts";
+import { SocketAliveError } from "../errors.ts";
 
 // ── shared HTTP proxy setup ──────────────────────────────────────────────────
 

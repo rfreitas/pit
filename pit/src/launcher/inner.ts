@@ -5,9 +5,9 @@
  * extensions registered as closures (no jiti, no --extension flags).
  */
 import { main } from "@earendil-works/pi-coding-agent";
-import { deletePitEscapeToken, deletePitIsInner, bootstrapProcess } from "./env.ts";
-import { createExtensionFactories } from "./extensions/index.ts";
-import { setupProxyAgent } from "./launcher.ts";
+import { deletePitEscapeToken, deletePitIsInner, bootstrapProcess } from "../env.ts";
+import { createExtensionFactories } from "../extensions/index.ts";
+import { setupProxyAgent } from "./index.ts";
 
 /**
  * Bootstrap and run inner pit.

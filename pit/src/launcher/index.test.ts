@@ -32,8 +32,8 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-import type { SandboxMounts, PitConfig } from "./types.ts";
-import { bwrapLaunch } from "./launcher.ts";
+import type { SandboxMounts, PitConfig } from "../types.ts";
+import { bwrapLaunch } from "./index.ts";
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 

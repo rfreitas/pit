@@ -19,7 +19,7 @@ import { SessionManager, CURRENT_SESSION_VERSION } from "@earendil-works/pi-codi
 import { useTmpDirs, run } from "./tests/helpers.ts";
 import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { setupNewSession } from "./core/session/io.ts";
-import { findBwrap, buildBwrapArgs } from "./launcher.ts";
+import { findBwrap, buildBwrapArgs } from "./launcher/index.ts";
 import { linuxPlatformRoMounts } from "./core/sandbox/pure.ts";
 import { cwdToBucket } from "./core/session/pure.ts";
 import type { WorktreeResult, SandboxMounts } from "./types.ts";
@@ -108,7 +108,7 @@ describe("launchEffect non-sandbox: passes --session to main()", () => {
   afterEach(() => { try { process.chdir(savedCwd); } catch { /* ignore */ } });
 
   it("calls main() with --session <path> as the first two args", async () => {
-    const { launchEffect } = await import("./launcher.ts");
+    const { launchEffect } = await import("./launcher/index.ts");
     const cwd = makeTmp("pit-cwd-");
     const sessionFile = path.join(makeTmp("pit-sess-"), "session.jsonl");
     fs.writeFileSync(sessionFile, "{}");
@@ -128,7 +128,7 @@ describe("launchEffect non-sandbox: passes --session to main()", () => {
   });
 
   it("main() receives the exact session path, not a different one", async () => {
-    const { launchEffect } = await import("./launcher.ts");
+    const { launchEffect } = await import("./launcher/index.ts");
     const cwd = makeTmp("pit-cwd-");
     const existingSession = path.join(makeTmp("pit-sess-"), "session.jsonl");
     const wrongSession   = path.join(makeTmp("pit-sess-"), "wrong.jsonl");
@@ -148,7 +148,7 @@ describe("launchEffect non-sandbox: passes --session to main()", () => {
   });
 
   it("does not add extra --session flags beyond what was passed", async () => {
-    const { launchEffect } = await import("./launcher.ts");
+    const { launchEffect } = await import("./launcher/index.ts");
     const cwd = makeTmp("pit-cwd-");
     const sessionFile = path.join(makeTmp("pit-sess-"), "session.jsonl");
     fs.writeFileSync(sessionFile, "{}");
@@ -171,7 +171,7 @@ describe("bwrapLaunch: --session arg reaches inner.ts argv", () => {
   beforeEach(() => { mockSpawnSync.mockClear(); });
 
   const launchWithSession = async (sessionFile: string) => {
-    const { bwrapLaunch } = await import("./launcher.ts");
+    const { bwrapLaunch } = await import("./launcher/index.ts");
     const mounts = { ro: [{ path: "/etc" }], rw: [{ path: "/tmp" }] };
     const exitStub = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     bwrapLaunch("/tmp", ["--session", sessionFile, "--append-system-prompt", "x"], mounts, {});

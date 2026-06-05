@@ -24,7 +24,7 @@ import { spawnSync } from "node:child_process";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { setupNewSession } from "../src/core/session/io.ts";
 import { cwdToBucket } from "../src/core/session/pure.ts";
-import { findBwrap, buildBwrapArgs } from "../src/launcher.ts";
+import { findBwrap, buildBwrapArgs } from "../src/launcher/index.ts";
 import { linuxPlatformRoMounts } from "../src/core/sandbox/pure.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>

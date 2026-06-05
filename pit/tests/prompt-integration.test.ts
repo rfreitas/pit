@@ -5,7 +5,7 @@
  * and resolves to the correct boolean based on user input.
  */
 import { describe, it, expect, beforeAll } from "vitest";
-import { showBranchDeletedPrompt } from "../src/picker.ts";
+import { showBranchDeletedPrompt } from "../src/picker/index.ts";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
 beforeAll(() => {

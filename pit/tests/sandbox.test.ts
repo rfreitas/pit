@@ -25,7 +25,7 @@ import { layer as NodeContextLayer, type NodeContext } from "../src/node-context
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { findBwrap, buildBwrapArgs } from "../src/launcher.ts";
+import { findBwrap, buildBwrapArgs } from "../src/launcher/index.ts";
 import { buildSandboxMountSpec } from "../src/core/sandbox/pure.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>

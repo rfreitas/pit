@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { useTmpDirs, writeSessionFile } from "../src/tests/helpers.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { discoverSessionsForPicker } from "../src/picker.ts";
+import { discoverSessionsForPicker } from "../src/picker/index.ts";
 import { scanSessionsByRepo } from "../src/core/session/io.ts";
 import { SessionSelectorComponent, initTheme } from "@earendil-works/pi-coding-agent";
 

@@ -20,11 +20,11 @@ import {
   resolveSandboxMountsEffect,
   startPitEscapeEffect,
   type EscapeHandle,
-} from "./launcher.ts";
+} from "./launcher/index.ts";
 import { setPitEscapeSocket } from "./env.ts";
 import { SocketAliveError } from "./errors.ts";
 import { spawnSync } from "node:child_process";
-import { showPicker, showBranchDeletedPrompt } from "./picker.ts";
+import { showPicker, showBranchDeletedPrompt } from "./picker/index.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

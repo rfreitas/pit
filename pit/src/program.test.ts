@@ -18,8 +18,8 @@ const { mockFindSandboxTool } = vi.hoisted(() => ({
   mockFindSandboxTool: vi.fn(() => null as { kind: "bwrap"; path: string } | { kind: "sandbox-exec" } | null),
 }));
 
-vi.mock("./launcher.ts", async (orig) => {
-  const real = await orig<typeof import("./launcher.ts")>();
+vi.mock("./launcher/index.ts", async (orig) => {
+  const real = await orig<typeof import("./launcher/index.ts")>();
   return {
     ...real,
     findSandboxTool: mockFindSandboxTool,
@@ -30,7 +30,7 @@ vi.mock("./launcher.ts", async (orig) => {
 import { Effect } from "effect";
 import { layer as NodeContextLayer } from "./node-context.ts";
 import { run } from "./tests/helpers.ts";
-import { launchEffect } from "./launcher.ts";
+import { launchEffect } from "./launcher/index.ts";
 import { nonSandboxExtensionFlags } from "./core/sandbox/pure.ts";
 
 // ── tests ─────────────────────────────────────────────────────────────────────
