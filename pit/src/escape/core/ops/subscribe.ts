@@ -75,7 +75,12 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
   const makeWatcher = (target: string, filter?: (f: string | null) => boolean): FSWatcher | null => {
     try {
       return watch(target, (_type, filename) => {
-        if (!filter || filter(filename)) notify();
+        // On Linux (inotify), filename is not guaranteed when watching a
+        // directory — the kernel may coalesce events and drop the name.
+        // When we can't identify the file, fire anyway: a false positive
+        // is harmless (debounce coalesces bursts), but a missed event
+        // breaks ref-change notifications for merges and renames.
+        if (!filter || filename === null || filter(filename)) notify();
       });
     } catch { return null; }
   };

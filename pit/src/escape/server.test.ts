@@ -537,6 +537,12 @@ describe("pit-escape subscribe op", () => {
     // Wait for ack before triggering — ensures watcher is set up first
     await sub.waitForMessage();
 
+    // Give pit-escape's event loop time to settle after registering watchers.
+    // Without this yield, inotify events from the git merge can arrive before
+    // the descriptors are fully active (race window in Node.js fs.watch + spawn
+    // under vitest worker threads).
+    await new Promise((r) => setTimeout(r, 50));
+
     // Fast-forward master to include the worktree commit
     execFileSync("git", ["-C", mainRepo, "merge", "--ff-only", "pi/test"]);
 
