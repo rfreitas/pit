@@ -68,44 +68,27 @@ export const productionBranchExists = (
 
 // ── pure labeling logic ───────────────────────────────────────────────────────
 
-export const getActiveWorktreeLabel = (
+export const getWorktreeLabel = (
   branch: string | null | undefined,
   dirExists: boolean,
   hasBranch: boolean,
+  isRegistered: boolean,
 ): string => {
+  const isValidBranch = branch && branch !== "deleted";
+
   if (dirExists) {
-    if (branch && branch !== "deleted" && hasBranch) {
-      return `[worktree branch:${branch}]`;
-    } else if (branch && branch !== "deleted" && !hasBranch) {
-      return `⚠ [deleted branch:${branch}]`;
+    if (isValidBranch && hasBranch) {
+      return isRegistered
+        ? `[worktree branch:${branch}]`
+        : `⚠ [unregistered worktree:${branch}]`;
     } else {
-      return `⚠ [deleted branch]`;
+      return `⚠ [deleted branch${isValidBranch ? `:${branch}` : ""}]`;
     }
   } else {
-    if (branch && branch !== "deleted" && hasBranch) {
+    if (isValidBranch && hasBranch) {
       return `[missing worktree branch:${branch}]`;
     } else {
       return `[deleted branch:${branch ?? "unknown"}]`;
-    }
-  }
-};
-
-export const getPrunedWorktreeLabel = (
-  branch: string,
-  dirExists: boolean,
-  hasBranch: boolean,
-): string => {
-  if (dirExists) {
-    if (hasBranch) {
-      return `⚠ [unregistered worktree:${branch}]`;
-    } else {
-      return `⚠ [deleted branch:${branch}]`;
-    }
-  } else {
-    if (hasBranch) {
-      return `[missing worktree branch:${branch}]`;
-    } else {
-      return `[deleted branch:${branch}]`;
     }
   }
 };
@@ -201,7 +184,7 @@ export const discoverSessionsForPicker = async (
     const dirExists = deps.existsSync(matchedWt);
     const hasBranch = branch ? await deps.branchExists(branch) : false;
 
-    const labelText = getActiveWorktreeLabel(branch, dirExists, hasBranch);
+    const labelText = getWorktreeLabel(branch, dirExists, hasBranch, true);
     return applySessionLabel(s, labelText);
   });
 
@@ -223,7 +206,7 @@ export const discoverSessionsForPicker = async (
       const dirExists = s.cwd ? deps.existsSync(s.cwd) : false;
       const hasBranch = await deps.branchExists(b);
 
-      const labelText = getPrunedWorktreeLabel(b, dirExists, hasBranch);
+      const labelText = getWorktreeLabel(b, dirExists, hasBranch, false);
       return applySessionLabel(s, labelText);
     })
   );
