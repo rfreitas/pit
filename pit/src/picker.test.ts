@@ -14,7 +14,7 @@ const { makeSandbox } = useTmpDirs();
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 
-import { discoverSessionsForPicker, type PickerSession } from "./program.ts";
+import { discoverSessionsForPicker, type PickerSession } from "./picker.ts";
 
 // Mock deps that will be injected into discoverSessionsForPicker
 interface DiscoveryDeps {
