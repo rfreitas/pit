@@ -320,7 +320,7 @@ describe("pit E2E — sandbox", () => {
 
   // ── test 7 (sandbox) ───────────────────────────────────────────────────────
 
-  it.skipIf(!hasBwrap)("sandboxed launch produces clean JSON stdout with no stderr errors", () => {
+  it("sandboxed launch produces clean JSON stdout with no stderr errors", () => {
     const repo = makeGitRepo(tmpDirs);
     const agentDir = makeAgentDir(tmpDirs);
 

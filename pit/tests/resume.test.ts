@@ -147,7 +147,7 @@ describe("session metadata extraction for pit -r", () => {
 // meta.worktree. This test verifies the isolation is correct.
 
 describe("bwrap sandbox bound to worktree not launch dir", () => {
-  it.skipIf(!hasBwrapUserNS)("writes to worktree succeed, writes to launch dir are blocked", () => {
+  it("writes to worktree succeed, writes to launch dir are blocked", () => {
     const nodeBin = process.execPath;
     const nodeDir = path.dirname(path.dirname(nodeBin));
     // Both dirs are under /tmp, but only worktree is explicitly bound.
