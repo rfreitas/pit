@@ -159,7 +159,7 @@ describe("Picker TUI integration", () => {
       {
         // BUG SIMULATION: listSessions leaks and returns ALL sessions for EVERY call
         listSessions: async () => [session1, session2] as any,
-        readWorktreeBranch: async (wt) => wt === wt1 ? "pi/branch1" : "pi/branch2",
+        readWorktreeBranch: async (wt: string) => wt === wt1 ? "pi/branch1" : "pi/branch2",
         existsSync: () => true,
         branchExists: async () => true,
         scanSessionsByRepo: async () => [],
