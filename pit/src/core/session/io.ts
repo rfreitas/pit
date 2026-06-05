@@ -58,14 +58,14 @@ export const findPitSession = (
  * matches the given repo. Used by the picker to discover pruned worktrees
  * that no longer appear in `git worktree list`.
  *
- * Returns rich SessionInfo (path, modified, firstMessage, messageCount, cwd, name, branch).
+ * Returns rich SessionInfo (sessionFilePath, modified, firstMessage, messageCount, cwd, name, branch).
  * The caller (discoverSessionsForPicker) applies labels and deduplicates.
  */
 export const scanSessionsByRepo = async (
   repo: string,
   agentDir: string,
 ): Promise<Array<{
-  path: string;
+  sessionFilePath: string;
   modified: Date;
   firstMessage: string;
   messageCount: number;
@@ -80,7 +80,7 @@ export const scanSessionsByRepo = async (
   try { buckets = await readdir(sessionsDir); } catch { return []; }
 
   let found: Array<{
-    path: string;
+    sessionFilePath: string;
     modified: Date;
     firstMessage: string;
     messageCount: number;
@@ -116,7 +116,7 @@ export const scanSessionsByRepo = async (
         if (!parsed) return null;
 
         return {
-          path: mostRecent,
+          sessionFilePath: mostRecent,
           modified: jsonlFiles[0]!.mtime,
           ...parsed,
         };

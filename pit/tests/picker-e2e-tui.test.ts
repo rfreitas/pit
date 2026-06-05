@@ -154,7 +154,7 @@ async function getRenderedPickerUI(
         }
 
         return {
-          path: full,
+          sessionFilePath: full,
           modified: s.mtime,
           firstMessage: firstMessage || "(no messages)",
           messageCount: lines.length - 2,

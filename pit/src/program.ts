@@ -60,7 +60,7 @@ const applyEscapeEffect = (
  * UI component's render contract at compile time.
  */
 export interface PickerSession {
-  path: string;
+  sessionFilePath: string;
   modified: Date;
   firstMessage?: string;
   name?: string;
@@ -187,13 +187,13 @@ export const discoverSessionsForPicker = async (
   // paths are NOT already known from SessionManager.list() (git worktree list
   // or main repo).
   const knownPaths = new Set([
-    ...mainGroups.flat().map((s) => s.path),
-    ...flatMarked.map((s) => s.path),
+    ...mainGroups.flat().map((s) => s.sessionFilePath),
+    ...flatMarked.map((s) => s.sessionFilePath),
   ]);
 
   const prunedSessions = opts.repo
     ? (await deps.scanSessionsByRepo(opts.repo, opts.agentDir).catch(() => [] as PickerSession[]))
-        .filter((s) => !knownPaths.has(s.path))
+        .filter((s) => !knownPaths.has(s.sessionFilePath))
     : [];
 
   const markedPruned = await Promise.all(
