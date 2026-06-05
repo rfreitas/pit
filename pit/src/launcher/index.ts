@@ -171,7 +171,7 @@ export const buildBwrapArgs = (
 
   const pitMounts = opts.scriptPath ? resolvePitMounts(opts.scriptPath, opts.cwd) : null;
   const dynamicMountArgs = pitMounts
-    ? ["--ro-bind", pitMounts.pitDir, pitMounts.pitDir,
+    ? ["--ro-bind", pitMounts.pitSrcDir, pitMounts.pitSrcDir,
        "--ro-bind", pitMounts.pitNodeModules, pitMounts.pitNodeModules]
     : [];
 
@@ -195,7 +195,7 @@ const passEnv = (name: string): string[] =>
  * Resolve the pit source directory and its node_modules for mounting.
  * Returns null when running from a globally-installed path (already mounted).
  */
-const resolvePitMounts = (scriptPath: string, cwd: string): { pitDir: string; pitNodeModules: string } | null => {
+const resolvePitMounts = (scriptPath: string, cwd: string): { pitSrcDir: string; pitNodeModules: string } | null => {
   const scriptDir = resolve(dirname(scriptPath));
   if (scriptDir.includes("/lib/node_modules/")) return null;
   
@@ -204,15 +204,17 @@ const resolvePitMounts = (scriptPath: string, cwd: string): { pitDir: string; pi
   // here would prevent the agent from developing pit itself.
   if (scriptDir.startsWith(cwd)) return null;
 
-  const pitDir = scriptDir;
+  // Mount the entire pit/src directory, not just pit/src/launcher
+  const pitSrcDir = resolve(scriptDir, "..");
+  
   const findNm = (curr: string): string | null => {
     const nm = join(curr, "node_modules");
     if (existsSync(nm)) return nm;
     const up = dirname(curr);
     return up === curr ? null : findNm(up);
   };
-  const pitNodeModules = findNm(pitDir);
-  return pitNodeModules ? { pitDir, pitNodeModules } : null;
+  const pitNodeModules = findNm(pitSrcDir);
+  return pitNodeModules ? { pitSrcDir, pitNodeModules } : null;
 };
 
 /**
@@ -231,7 +233,7 @@ export const bwrapLaunch = (
   const nodeBin = process.execPath;
   const nodeDir = dirname(dirname(nodeBin));
   const scriptPath = process.argv[1]!;
-  const pitInnerScript = resolve(dirname(scriptPath), "src", "inner.ts");
+  const pitInnerScript = resolve(dirname(scriptPath), "src", "launcher", "inner.ts");
 
   const envArgs: string[] = [
     "--clearenv",
@@ -276,7 +278,7 @@ export const sbplLaunch = (
   const nodeBin = process.execPath;
   const nodeDir = dirname(dirname(nodeBin));
   const scriptPath = process.argv[1]!;
-  const pitInnerScript = resolve(dirname(scriptPath), "src", "inner.ts");
+  const pitInnerScript = resolve(dirname(scriptPath), "src", "launcher", "inner.ts");
 
   // Resolve rw paths to real (symlink-free) paths — SBPL matches on real paths.
   const resolvedMounts: SandboxMounts = {
