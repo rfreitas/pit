@@ -14,7 +14,7 @@ const { makeSandbox } = useTmpDirs();
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 
-import { discoverSessionsForPicker, type PickerSession } from "./program.ts";
+import { discoverSessionsForPicker, type PickerSession } from "./picker.ts";
 
 // Mock deps that will be injected into discoverSessionsForPicker
 interface DiscoveryDeps {
@@ -40,7 +40,7 @@ describe("discoverSessionsForPicker", () => {
 
     const deps: DiscoveryDeps = {
       listSessions: async (cwd) => {
-        if (cwd === wt1) return [{ path: session1.path, modified: session1.modified }];
+        if (cwd === wt1) return [{ sessionFilePath: session1.path, modified: session1.modified }];
         return [];
       },
       readWorktreeBranch: async (wt) => (wt === wt1 ? "pi/abc123" : null),
@@ -55,7 +55,7 @@ describe("discoverSessionsForPicker", () => {
     );
 
     expect(results).toHaveLength(1);
-    expect(results[0]!.path).toBe(session1.path);
+    expect(results[0]!.sessionFilePath).toBe(session1.path);
     const labelField = results[0]!.name ?? results[0]!.firstMessage ?? "";
     expect(labelField).toContain("[worktree branch:pi/abc123]");
   });
@@ -94,7 +94,7 @@ describe("discoverSessionsForPicker", () => {
           if (!pitLine) return [];
           const entry = JSON.parse(pitLine) as { data?: { repo?: string; branch?: string } };
           return entry.data?.repo === targetRepo
-            ? [{ path: mostRecent, modified: files[0]!.mtime }]
+            ? [{ sessionFilePath: mostRecent, modified: files[0]!.mtime }]
             : [];
         });
       },
@@ -106,7 +106,7 @@ describe("discoverSessionsForPicker", () => {
     );
 
     expect(results).toHaveLength(1);
-    expect(results[0]!.path).toBe(session1.path);
+    expect(results[0]!.sessionFilePath).toBe(session1.path);
   });
 
   it("excludes sessions whose metadata.repo does not match current repo", async () => {
@@ -142,7 +142,7 @@ describe("discoverSessionsForPicker", () => {
           if (!pitLine) return [];
           const entry = JSON.parse(pitLine) as { data?: { repo?: string } };
           return entry.data?.repo === targetRepo
-            ? [{ path: mostRecent, modified: files[0]!.mtime }]
+            ? [{ sessionFilePath: mostRecent, modified: files[0]!.mtime }]
             : [];
         });
       },
@@ -165,14 +165,14 @@ describe("discoverSessionsForPicker", () => {
 
     const deps: DiscoveryDeps = {
       listSessions: async (cwd) => {
-        if (cwd === wt1) return [{ path: session1.path, modified: session1.modified }];
+        if (cwd === wt1) return [{ sessionFilePath: session1.path, modified: session1.modified }];
         return [];
       },
       readWorktreeBranch: async (wt) => (wt === wt1 ? "pi/abc123" : null),
       existsSync: () => true,
       branchExists: async () => true,
       scanSessionsByRepo: async () => [{
-        path: session1.path,
+        sessionFilePath: session1.path,
         modified: session1.modified,
       }],
     };
@@ -194,7 +194,7 @@ describe("discoverSessionsForPicker", () => {
 
     const deps: DiscoveryDeps = {
       listSessions: async (cwd) => {
-        if (cwd === wt1) return [{ path: session1.path, modified: session1.modified }];
+        if (cwd === wt1) return [{ sessionFilePath: session1.path, modified: session1.modified }];
         return [];
       },
       readWorktreeBranch: async () => null, // dir exists but not a proper linked worktree
@@ -232,7 +232,7 @@ describe("discoverSessionsForPicker", () => {
     const deps: DiscoveryDeps = {
       listSessions: async (cwd) => {
         listCalls.set(cwd, (listCalls.get(cwd) ?? 0) + 1);
-        if (cwd === repoDir) return [{ path: session1.path, modified: session1.modified }];
+        if (cwd === repoDir) return [{ sessionFilePath: session1.path, modified: session1.modified }];
         return [];
       },
       readWorktreeBranch: async () => null,
@@ -251,7 +251,7 @@ describe("discoverSessionsForPicker", () => {
     // listSessions is called twice for the same directory, producing duplicates.
     // The session appears twice in results (2 instead of 1).
     expect(results.length, "each session should appear only once").toBe(1);
-    expect(results[0]!.path).toBe(session1.path);
+    expect(results[0]!.sessionFilePath).toBe(session1.path);
   });
 
   it("when isLinked=true, returns only sessions for current cwd (worktree isolation)", async () => {
@@ -264,7 +264,7 @@ describe("discoverSessionsForPicker", () => {
 
     const deps: DiscoveryDeps = {
       listSessions: async (cwd) => {
-        if (cwd === currentWt) return [{ path: sessionCurrent.path, modified: sessionCurrent.modified }];
+        if (cwd === currentWt) return [{ sessionFilePath: sessionCurrent.path, modified: sessionCurrent.modified }];
         return [];
       },
       readWorktreeBranch: async () => null,
@@ -279,6 +279,6 @@ describe("discoverSessionsForPicker", () => {
     );
 
     expect(results).toHaveLength(1);
-    expect(results[0]!.path).toBe(sessionCurrent.path);
+    expect(results[0]!.sessionFilePath).toBe(sessionCurrent.path);
   });
 });

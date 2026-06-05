@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { buildSessionLines, cwdToBucket } from "../src/core/session/pure.ts";
-import { discoverSessionsForPicker, productionBranchExists } from "../src/program.ts";
+import { discoverSessionsForPicker, productionBranchExists } from "../src/picker.ts";
 import { scanSessionsByRepo } from "../src/core/session/io.ts";
 import { SessionSelectorComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import type { WorktreeResult } from "../src/types.ts";
@@ -154,7 +154,7 @@ async function getRenderedPickerUI(
         }
 
         return {
-          path: full,
+          sessionFilePath: full,
           modified: s.mtime,
           firstMessage: firstMessage || "(no messages)",
           messageCount: lines.length - 2,
