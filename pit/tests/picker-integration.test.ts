@@ -108,8 +108,8 @@ describe("Picker TUI integration", () => {
       { cwd: currentWt, repo: "/tmp/repo", isLinked: true, worktrees: [currentWt, siblingWt], agentDir: "/tmp/agent" },
       {
         listSessions: async (cwd: string) => {
-          if (cwd === currentWt) return [{ path: "/tmp/current.jsonl", firstMessage: "Current WT", modified: new Date() }];
-          if (cwd === siblingWt) return [{ path: "/tmp/sibling.jsonl", firstMessage: "Sibling WT", modified: new Date() }];
+          if (cwd === currentWt) return [{ path: "/tmp/current.jsonl", firstMessage: "Current WT", modified: new Date(), cwd }];
+          if (cwd === siblingWt) return [{ path: "/tmp/sibling.jsonl", firstMessage: "Sibling WT", modified: new Date(), cwd }];
           return [];
         },
         readWorktreeBranch: async () => "pi/some-branch",
@@ -132,7 +132,7 @@ describe("Picker TUI integration", () => {
         listSessions: async (cwd: string) => cwd === badWt ? [{
           path: "/tmp/bad.jsonl",
           firstMessage: "Bad WT",
-          modified: new Date()
+          modified: new Date(), cwd
         }] : [],
         // Mock git returning null (branch lost) but existsSync returning true
         readWorktreeBranch: async () => null,
@@ -146,6 +146,40 @@ describe("Picker TUI integration", () => {
     expect(ui).toContain("⚠ [deleted branch] Bad WT");
   });
 
+  it("Feature 2.5: Prevents session duplication and label leaking at the TUI level", async () => {
+    // This reproduces your exact scenario at the TUI rendering level.
+    const wt1 = "/tmp/repo-wt-111";
+    const wt2 = "/tmp/repo-wt-222";
+
+    const session1 = { path: "/tmp/sess1.jsonl", firstMessage: "Message from Branch 1", modified: new Date(), cwd: wt1 };
+    const session2 = { path: "/tmp/sess2.jsonl", firstMessage: "Message from Branch 2", modified: new Date(Date.now() - 1000), cwd: wt2 };
+
+    const ui = await getRenderedPickerUI(
+      { cwd: "/tmp/repo", repo: "/tmp/repo", isLinked: false, worktrees: [wt1, wt2], agentDir: "/tmp/agent" },
+      {
+        // BUG SIMULATION: listSessions leaks and returns ALL sessions for EVERY call
+        listSessions: async () => [session1, session2] as any,
+        readWorktreeBranch: async (wt) => wt === wt1 ? "pi/branch1" : "pi/branch2",
+        existsSync: () => true,
+        branchExists: async () => true,
+        scanSessionsByRepo: async () => [],
+      }
+    );
+
+    // 1. Label Correctness: each message should get exactly its own branch label
+    expect(ui).toContain("[worktree branch:pi/branch1] Message from Branch 1");
+    expect(ui).toContain("[worktree branch:pi/branch2] Message from Branch 2");
+
+    // 2. Cross-Contamination: no message should get the other branch's label
+    expect(ui).not.toContain("[worktree branch:pi/branch1] Message from Branch 2");
+    expect(ui).not.toContain("[worktree branch:pi/branch2] Message from Branch 1");
+
+    // 3. Duplication check: the strings should only appear exactly once in the rendered output
+    const countOccurrences = (str: string, substr: string) => str.split(substr).length - 1;
+    expect(countOccurrences(ui, "Message from Branch 1")).toBe(1);
+    expect(countOccurrences(ui, "Message from Branch 2")).toBe(1);
+  });
+
   it("Ensures the render contract does NOT crash on undefined name/firstMessage", async () => {
     // This verifies that even if we discover a session that lacks display fields,
     // the picker remains robust and renders with a clean default instead of crashing.
@@ -156,7 +190,7 @@ describe("Picker TUI integration", () => {
         readWorktreeBranch: async () => null,
         existsSync: () => false,
         // Mock a minimal scanned object lacking firstMessage and name
-        scanSessionsByRepo: async () => [{ path: "/tmp/crash.jsonl", modified: new Date() } as any],
+        scanSessionsByRepo: async () => [{ path: "/tmp/crash.jsonl", modified: new Date(), cwd: "/tmp/repo" } as any],
       }
     );
 

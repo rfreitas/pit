@@ -34,7 +34,7 @@ import { launchEffect } from "./launcher.ts";
  * UI component's render contract at compile time.
  */
 export interface PickerSession {
-  sessionFilePath: string;
+  path: string;
   modified: Date;
   firstMessage?: string;
   name?: string;
@@ -129,49 +129,59 @@ export const discoverSessionsForPicker = async (
     ),
   ]);
 
-  // Label worktree sessions dynamically based on disk and branch state
-  const markedPromises = opts.worktrees.flatMap((wt, i) =>
-    wtGroups[i].map(async (s) => {
-      const branch = worktreeBranch.get(wt);
-      const dirExists = deps.existsSync(wt);
-      const hasBranch = branch ? await deps.branchExists(branch) : false;
+  // 1. Deduplicate raw sessions by path.
+  const uniqueSessions = [
+    ...new Map([...mainGroups.flat(), ...wtGroups.flat()].map(s => [s.path, s])).values()
+  ];
 
-      let labelText = "";
-      if (dirExists) {
-        if (branch && branch !== "deleted" && hasBranch) {
-          labelText = `[worktree branch:${branch}]`;
-        } else if (branch && branch !== "deleted" && !hasBranch) {
-          labelText = `⚠ [deleted branch:${branch}]`;
-        } else {
-          labelText = `⚠ [deleted branch]`;
-        }
+  // 2. Filter out leaked sessions from other worktrees (if listSessions didn't isolate them).
+  const validSessions = uniqueSessions.filter(s => {
+    if (!s.cwd) return true; // keep old sessions without cwd
+    if (s.cwd === opts.cwd || s.cwd === opts.repo) return true;
+    return opts.worktrees.some(wt => s.cwd === wt || s.cwd!.startsWith(wt + "/"));
+  });
+
+  // 3. Label worktree sessions dynamically based on disk and branch state.
+  const labeledPromises = validSessions.map(async (s) => {
+    const matchedWt = s.cwd ? opts.worktrees.find(wt => s.cwd === wt || s.cwd!.startsWith(wt + "/")) : undefined;
+    if (!matchedWt) return s; // Not a worktree session (or no cwd), leave unlabeled.
+
+    const branch = worktreeBranch.get(matchedWt);
+    const dirExists = deps.existsSync(matchedWt);
+    const hasBranch = branch ? await deps.branchExists(branch) : false;
+
+    let labelText = "";
+    if (dirExists) {
+      if (branch && branch !== "deleted" && hasBranch) {
+        labelText = `[worktree branch:${branch}]`;
+      } else if (branch && branch !== "deleted" && !hasBranch) {
+        labelText = `⚠ [deleted branch:${branch}]`;
       } else {
-        if (branch && branch !== "deleted" && hasBranch) {
-          labelText = `[missing worktree branch:${branch}]`;
-        } else {
-          labelText = `[deleted branch:${branch ?? "unknown"}]`;
-        }
+        labelText = `⚠ [deleted branch]`;
       }
+    } else {
+      if (branch && branch !== "deleted" && hasBranch) {
+        labelText = `[missing worktree branch:${branch}]`;
+      } else {
+        labelText = `[deleted branch:${branch ?? "unknown"}]`;
+      }
+    }
 
-      return s.name
-        ? { ...s, name: `${labelText} ${s.name}` }
-        : { ...s, firstMessage: `${labelText} ${s.firstMessage ?? "(no messages)"}` };
-    }),
-  );
+    return s.name
+      ? { ...s, name: `${labelText} ${s.name}` }
+      : { ...s, firstMessage: `${labelText} ${s.firstMessage ?? "(no messages)"}` };
+  });
 
-  const flatMarked = await Promise.all(markedPromises).then((g) => g.flat());
+  const flatMarked = await Promise.all(labeledPromises);
 
   // 2.1: Metadata scan for pruned worktrees — only include sessions whose
   // paths are NOT already known from SessionManager.list() (git worktree list
   // or main repo).
-  const knownPaths = new Set([
-    ...mainGroups.flat().map((s) => s.sessionFilePath),
-    ...flatMarked.map((s) => s.sessionFilePath),
-  ]);
+  const knownPaths = new Set(flatMarked.map((s) => s.path));
 
   const prunedSessions = opts.repo
     ? (await deps.scanSessionsByRepo(opts.repo, opts.agentDir).catch(() => [] as PickerSession[]))
-        .filter((s) => !knownPaths.has(s.sessionFilePath))
+        .filter((s) => !knownPaths.has(s.path))
     : [];
 
   const markedPruned = await Promise.all(
@@ -201,11 +211,10 @@ export const discoverSessionsForPicker = async (
     })
   );
 
-  // Combine without dedup needed — prunedSessions are already filtered to novel paths
-  const combined = [...mainGroups.flat(), ...flatMarked, ...markedPruned];
+  // Combine. Everything is strictly deduplicated.
+  const combined = [...flatMarked, ...markedPruned];
 
-  return [...combined]
-    .sort((a, b) => b.modified.getTime() - a.modified.getTime());
+  return [...combined].sort((a, b) => b.modified.getTime() - a.modified.getTime());
 };
 
 // ── tui prompts ───────────────────────────────────────────────────────────────
