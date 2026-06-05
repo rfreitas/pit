@@ -5,13 +5,19 @@ describe("parseFlags", () => {
   it("sandbox defaults to true", () => {
     expect(parseFlags([]).sandbox).toBe(true);
   });
-  it("--no-sandbox opts out of bwrap", () => {
+  it("--no-sandbox disables sandbox", () => {
     expect(parseFlags(["--no-sandbox"]).sandbox).toBe(false);
   });
   it("--no-sandbox is stripped from argv forwarded to pi", () => {
     const { filteredArgv } = parseFlags(["--model", "sonnet", "--no-sandbox"]);
     expect(filteredArgv).not.toContain("--no-sandbox");
     expect(filteredArgv).toContain("--model");
+  });
+  it("-ns is a short alias for --no-sandbox", () => {
+    expect(parseFlags(["-ns"]).sandbox).toBe(false);
+  });
+  it("-ns is stripped from forwarded argv", () => {
+    expect(parseFlags(["-r", "-ns", "hello"]).filteredArgv).not.toContain("-ns");
   });
   it("noTree defaults to false", () => {
     expect(parseFlags([]).noTree).toBe(false);

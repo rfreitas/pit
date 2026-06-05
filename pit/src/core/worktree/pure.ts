@@ -51,7 +51,7 @@ export const buildWorktreeMeta = (repo: string, branch: string): PitMetadata => 
 export const parseFlags = (argv: string[]): ParsedFlags  => {
   return argv.reduce<ParsedFlags>(
     ({ sandbox, noTree, filteredArgv }, arg) => {
-      if (arg === "--no-sandbox") return { sandbox: false, noTree, filteredArgv };
+      if (arg === "--no-sandbox" || arg === "-ns") return { sandbox: false, noTree, filteredArgv };
       if (arg === "-nt" || arg === "--no-tree") return { sandbox, noTree: true, filteredArgv };
       if (arg === "--no-session") return { sandbox, noTree: true, filteredArgv: [...filteredArgv, arg] };
       return { sandbox, noTree, filteredArgv: [...filteredArgv, arg] };
