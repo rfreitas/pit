@@ -7,7 +7,6 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { dirname, join, resolve } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import * as undici from "undici";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { layer as NodeContextLayer, type NodeContext } from "../node-context.ts";
@@ -25,22 +24,6 @@ import { probeSocketEffect } from "../extensions/escape/client.ts";
 import { setPitEscapeSocket } from "../env.ts";
 import { createExtensionFactories } from "../extensions/index.ts";
 import { SocketAliveError } from "../errors.ts";
-
-// ── shared HTTP proxy setup ──────────────────────────────────────────────────
-
-/**
- * Configure undici to respect http(s)_proxy env vars.
- * Used by both the unsandboxed path (pit's process) and the sandboxed
- * path (inner.ts inside bwrap), so both honour the same proxy config.
- */
-export const setupProxyAgent = (): void => {
-  undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent({
-    allowH2: false,
-    bodyTimeout: 300_000,
-    headersTimeout: 300_000,
-  }));
-  undici.install?.();
-};
 
 // ── sandbox helpers ───────────────────────────────────────────────────────────
 
@@ -361,7 +344,6 @@ export const launchEffect = (
     const token = escapeHandle?.token ?? "";
     const extFlags = nonSandboxExtensionFlags(pitConfig);
     process.chdir(cwd);
-    setupProxyAgent();
     yield* Effect.promise(() =>
       main([...piArgs, ...extFlags], {
         extensionFactories: createExtensionFactories(socketPath, token, false),

@@ -7,8 +7,6 @@
 import { main } from "@earendil-works/pi-coding-agent";
 import { deletePitEscapeToken, deletePitIsInner, bootstrapProcess } from "../env.ts";
 import { createExtensionFactories } from "../extensions/index.ts";
-import { setupProxyAgent } from "./index.ts";
-
 /**
  * Bootstrap and run inner pit.
  * Exported so inner.test.ts can call it directly with controlled env/argv.
@@ -19,7 +17,6 @@ export const runInner = async (
 ): Promise<void> => {
   // Bootstrap — mirrors what the pi binary does before calling main()
   bootstrapProcess();
-  setupProxyAgent();
 
   // Read and delete env vars before any child process is spawned
   deletePitIsInner();
