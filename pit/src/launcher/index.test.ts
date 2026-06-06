@@ -95,11 +95,10 @@ describe("bwrapLaunch arg construction", () => {
     expect(launch({})).toContain("--clearenv");
   });
 
-  it("includes HOME, PATH, PI_CODING_AGENT, PIT_IS_INNER in setenv list", () => {
+  it("includes HOME, PATH, PI_CODING_AGENT in setenv list", () => {
     const pairs = setenvPairs(launch({ env: { HOME: "/home/u", PATH: "/bin" } }));
     expect(pairs["HOME"]).toBeDefined(); // comes from module-level HOME constant
     expect(pairs["PI_CODING_AGENT"]).toBe("true");
-    expect(pairs["PIT_IS_INNER"]).toBe("1");
     expect(pairs["PATH"]).toMatch(/\/bin/);
   });
 

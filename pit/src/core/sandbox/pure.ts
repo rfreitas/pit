@@ -81,7 +81,7 @@ export const buildSealedEnv = (
     "http_proxy", "https_proxy", "no_proxy",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
     "PIT_ESCAPE_SOCKET", "PIT_ESCAPE_TOKEN",
-    "PIT_IS_INNER", "PI_CODING_AGENT",
+    "PI_CODING_AGENT",
     "PI_CODING_AGENT_DIR", "PI_SKIP_VERSION_CHECK",
   ];
   const extra = config.allowEnv ?? [];
@@ -90,7 +90,6 @@ export const buildSealedEnv = (
     // so the agent can find git, node, and any Homebrew-installed tool.
     PATH: `${nodeDir}/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
     PI_CODING_AGENT: "true",
-    PIT_IS_INNER: "1",
   };
   return [...builtins, ...extra].reduce<Record<string, string>>((acc, name) =>
     env[name] !== undefined ? { ...acc, [name]: env[name]! } : acc,

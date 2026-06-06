@@ -223,7 +223,6 @@ export const bwrapLaunch = (
     "--setenv", "HOME", HOME,
     "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
     "--setenv", "PI_CODING_AGENT", "true",
-    "--setenv", "PIT_IS_INNER", "1",
     ...passEnv("TERM"), ...passEnv("LANG"),
     // Proxy vars: non-secret, needed for undici EnvHttpProxyAgent in inner.ts.
     ...passEnv("http_proxy"), ...passEnv("https_proxy"), ...passEnv("no_proxy"),

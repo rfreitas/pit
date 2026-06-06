@@ -19,7 +19,6 @@ import { runInner } from "./inner.ts";
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 const run = async (env: {
-  PIT_IS_INNER?: string;
   PIT_ESCAPE_TOKEN?: string;
   PIT_ESCAPE_SOCKET?: string;
 }) => {
@@ -51,32 +50,23 @@ describe("inner.ts bootstrap", () => {
     mockMain.mockImplementationOnce(async () => {
       envSnapshot = process.env.PIT_ESCAPE_TOKEN;
     });
-    const env = { PIT_IS_INNER: "1", PIT_ESCAPE_TOKEN: "secret", PIT_ESCAPE_SOCKET: "s" };
+    const env = { PIT_ESCAPE_TOKEN: "secret", PIT_ESCAPE_SOCKET: "s" };
     await run(env);
     expect(envSnapshot).toBeUndefined();
   });
 
-  it("deletes PIT_IS_INNER from env before main() is called", async () => {
-    let envSnapshot: string | undefined = "not-deleted";
-    mockMain.mockImplementationOnce(async () => {
-      envSnapshot = process.env.PIT_IS_INNER;
-    });
-    await run({ PIT_IS_INNER: "1", PIT_ESCAPE_TOKEN: "s", PIT_ESCAPE_SOCKET: "s" });
-    expect(envSnapshot).toBeUndefined();
-  });
-
   it("calls main() with the provided argv", async () => {
-    const { mainArgs } = await run({ PIT_IS_INNER: "1", PIT_ESCAPE_TOKEN: "s", PIT_ESCAPE_SOCKET: "s" });
+    const { mainArgs } = await run({ PIT_ESCAPE_TOKEN: "s", PIT_ESCAPE_SOCKET: "s" });
     expect(mainArgs).toEqual(["--session", "/tmp/test.json"]);
   });
 
   it("calls main() with non-empty extensionFactories when PIT_ESCAPE_SOCKET is set", async () => {
-    const { mainOpts } = await run({ PIT_IS_INNER: "1", PIT_ESCAPE_TOKEN: "s", PIT_ESCAPE_SOCKET: "mock.sock" });
+    const { mainOpts } = await run({ PIT_ESCAPE_TOKEN: "s", PIT_ESCAPE_SOCKET: "mock.sock" });
     expect(mainOpts?.extensionFactories?.length).toBeGreaterThan(0);
   });
 
   it("calls main() with mode footer only when PIT_ESCAPE_SOCKET is empty", async () => {
-    const { mainOpts } = await run({ PIT_IS_INNER: "1", PIT_ESCAPE_TOKEN: "s" });
+    const { mainOpts } = await run({ PIT_ESCAPE_TOKEN: "s" });
     // Mode footer is always registered; escape-based factories require socket.
     expect(mainOpts?.extensionFactories).toHaveLength(1);
   });
@@ -84,7 +74,7 @@ describe("inner.ts bootstrap", () => {
   it("sets process.title to 'pi' before main() is called", async () => {
     let titleSnapshot = "";
     mockMain.mockImplementationOnce(async () => { titleSnapshot = process.title; });
-    await run({ PIT_IS_INNER: "1", PIT_ESCAPE_TOKEN: "s", PIT_ESCAPE_SOCKET: "s" });
+    await run({ PIT_ESCAPE_TOKEN: "s", PIT_ESCAPE_SOCKET: "s" });
     expect(titleSnapshot).toBe("pi");
   });
 });
