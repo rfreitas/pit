@@ -129,19 +129,19 @@ describe("buildSandboxMountSpec", () => {
     expect(spec.rw.some(m => m.path === "/repo/.git")).toBe(true);
   });
 
-  it("includes default credential paths in readDeny", () => {
+  it("readDeny is empty by default (no automatic denials)", () => {
     const spec = buildSandboxMountSpec(params);
-    expect(spec.readDeny.some(m => m.path === "/home/user/.ssh")).toBe(true);
-    expect(spec.readDeny.some(m => m.path === "/home/user/.aws")).toBe(true);
-    expect(spec.readDeny.some(m => m.path === "/home/user/.gnupg")).toBe(true);
+    expect(spec.readDeny).toEqual([]);
   });
 
-  it("merges user denyRead config", () => {
+  it("includes user denyRead config in readDeny", () => {
     const spec = buildSandboxMountSpec({
       ...params,
-      pitConfig: { sandbox: { denyRead: ["/custom/secret"] } },
+      pitConfig: { sandbox: { denyRead: ["/custom/secret", "~/.ssh"] } },
     });
-    expect(spec.readDeny.some(m => m.path === "/custom/secret")).toBe(true);
+    expect(spec.readDeny).toHaveLength(2);
+    expect(spec.readDeny[0]?.path).toBe("/custom/secret");
+    expect(spec.readDeny[1]?.path).toBe("/home/user/.ssh");
   });
 
   it("merges user allowWrite config", () => {

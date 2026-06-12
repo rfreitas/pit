@@ -83,23 +83,16 @@ export const buildSandboxEnv = (
   );
 };
 
-// ── default permissions ──────────────────────────────────────────────────────
+// ── default write permissions ──────────────────────────────────────────────────
 
 /**
- * Default sandbox permissions applied to both platforms.
+ * Default sandbox write permissions applied to both platforms.
  * Path templates: ~ (home), {cwd}, {agentDir}, {nodeDir}
+ * 
+ * Note: There are no default read denials — everything is readable by default.
+ * Users can add read denials via pitConfig.sandbox.denyRead if needed.
  */
 const DEFAULT_SANDBOX_PERMISSIONS = {
-  readDeny: [
-    { path: "~/.ssh", label: "credentials" },
-    { path: "~/.aws", label: "credentials" },
-    { path: "~/.gnupg", label: "credentials" },
-    { path: "~/.config/gh", label: "credentials" },
-    { path: "~/.config/gcloud", label: "credentials" },
-    { path: "~/.azure", label: "credentials" },
-    { path: "~/.config/op", label: "credentials" },
-    { path: "~/.netrc", label: "credentials" },
-  ],
   writeAllow: [
     { path: "{cwd}", label: "worktree" },
     { path: "/tmp", label: "temp dir" },
@@ -139,12 +132,9 @@ export const buildSandboxMountSpec = (params: Readonly<{
        .replace("{agentDir}", agentDir)
        .replace("{nodeDir}", nodeDir);
 
-  // Build read deny list (defaults + user config)
+  // Build read deny list (user config only — no defaults)
   const userDeny = (pitConfig?.sandbox?.denyRead ?? []).map(p => ({ path: p, label: "user deny" }));
-  const readDeny = [
-    ...DEFAULT_SANDBOX_PERMISSIONS.readDeny.map(m => ({ ...m, path: resolve(m.path) })),
-    ...userDeny.map(m => ({ ...m, path: resolve(m.path) })),
-  ];
+  const readDeny = userDeny.map(m => ({ ...m, path: resolve(m.path) }));
 
   // Build write allow list (git mounts + defaults + user config)
   const userWrite = (pitConfig?.sandbox?.allowWrite ?? []).map(p => ({ path: p, label: "user write grant" }));
