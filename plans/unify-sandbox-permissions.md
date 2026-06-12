@@ -30,7 +30,9 @@ Make Linux match macOS: read everything by default, deny specific credential pat
 
 ## Unified Permission Spec
 
-### Schema
+### Current Schema (Implementation-Flavored)
+
+The immediate implementation uses a simplified schema focused on the deny-read model:
 
 ```typescript
 type SandboxPermissionSpec = {
@@ -38,6 +40,150 @@ type SandboxPermissionSpec = {
   writeAllow: Array<{ path: string; label: string; optional?: boolean }>;
 };
 ```
+
+This works for the unified deny-read approach but still conflates intent with implementation.
+
+### Future: Intent-Based Abstract Schema
+
+A truly abstract schema would separate **intent** (what we want) from **implementation** (how each platform enforces it).
+
+Given our commitment to a **deny-read + allow-write** model, the schema simplifies to:
+
+```typescript
+interface SandboxPermissions {
+  read: {
+    deny: PathSpec[];     // What cannot be read (everything else is readable)
+  };
+  write: {
+    allow: PathSpec[];    // What can be written (everything else is read-only)
+  };
+  overlay: OverlaySpec[]; // Intent: ephemeral copy-on-write
+}
+
+type PathSpec = {
+  path: string;
+  label?: string;
+  optional?: boolean;
+};
+```
+
+**Why this schema:**
+- Matches our security model: read everything (deny exceptions), write nothing (allow exceptions)
+- No `read.allow` because everything is readable by default
+- No `write.deny` because nothing is writable by default
+- Clear intent: "deny reads to credentials, allow writes to worktree"
+- Platform-agnostic: same mental model regardless of backend
+- Future-proof: can add new backends without changing policy definition
+
+**Platform translation table:**
+
+| Intent | Linux (bwrap) | macOS (sandbox-exec) |
+|--------|---------------|----------------------|
+| `read.deny: [~/.ssh]` | `--tmpfs ~/.ssh` (hide with empty dir) or Landlock deny | `(deny file-read* (subpath "~/.ssh"))` |
+| `write.allow: [/worktree]` | `--bind /worktree /worktree` | `(allow file-read* file-write* (subpath "/worktree"))` |
+| `overlay: [node_modules]` | `--overlay-src` + `--tmp-overlay` | APFS clone or skip (feature gap) |
+
+**Current limitations by platform:**
+
+| Capability | Linux (bwrap) | macOS (sandbox-exec) |
+|------------|---------------|----------------------|
+| Deny specific reads | Via tmpfs overlay (hacky) | Native `(deny file-read*)` |
+| Allow specific writes | Native `--bind` | Native `(allow file-write*)` |
+| Ephemeral overlays | Native overlayfs | Not supported (feature gap) |
+| Granular per-operation | Coarse (per-mount) | Fine (per-operation) |
+
+**Implementation strategy:**
+1. Start with simplified `SandboxPermissionSpec` (current plan)
+2. Refactor to intent-based `SandboxPermissions` once both platforms are unified
+3. Add platform-specific translators: `translateForLinux(perms)` and `translateForMacOS(perms)`
+4. Consider Landlock for Linux to enable native deny-read (see Landlock research below)
+
+---
+
+## Landlock Research (Linux Native Access Control)
+
+**Landlock** is a Linux Security Module (kernel 5.13+, July 2021) that allows unprivileged processes to sandbox themselves at the syscall level.
+
+### Key Characteristics
+
+- **Self-sandboxing**: Process restricts itself after starting (no external setup)
+- **Syscall interception**: Works at the kernel level, not mount namespaces
+- **Allowlist-based**: Must enumerate what's allowed, everything else is denied (same as bwrap)
+- **Monotonic restrictions**: Can only add more restrictions, never relax them
+- **Inherited**: Child processes inherit all restrictions
+
+### API Overview
+
+```c
+// 1. Create ruleset (what access rights to control)
+int ruleset_fd = landlock_create_ruleset(&attr, sizeof(attr), 0);
+
+// 2. Add rules (what's ALLOWED)
+landlock_add_rule(ruleset_fd, LANDLOCK_RULE_PATH_BENEATH, &rule);
+
+// 3. Enforce on self (everything not allowed is DENIED)
+landlock_restrict_self(ruleset_fd, 0);
+```
+
+### Comparison: Landlock vs bwrap
+
+| Feature | bwrap | Landlock |
+|---------|-------|----------|
+| **Isolation level** | Mount namespace (stronger) | Syscall interception (weaker) |
+| **Visibility** | Paths don't exist in namespace | Paths exist but access denied |
+| **Error message** | "No such file or directory" | "Permission denied" |
+| **Setup** | External tool, before exec | Self-sandboxing, after start |
+| **Granularity** | Coarse (per-mount) | Fine (per-operation) |
+| **Dynamic changes** | No (fixed at launch) | Yes (add more restrictions) |
+| **PID isolation** | Yes | No |
+| **Network isolation** | Yes (namespace) | Partial (TCP ports only) |
+| **Kernel support** | 3.8+ (2013) | 5.13+ (2021) |
+| **Inside containers** | May not work | Works |
+
+### Implications for Our Plan
+
+**Landlock doesn't solve the "deny these 5 paths" problem better than bwrap:**
+- Both are allowlist-based: must enumerate all allowed paths
+- Same complexity for implementation
+- Landlock would require Node.js bindings (native addon or FFI)
+
+**Where Landlock could help:**
+- Finer granularity: deny read but allow execute on same path
+- Better error messages: "Permission denied" vs "No such file"
+- Dynamic restrictions: lock down after initialization
+- Works inside containers where bwrap may fail
+
+**Recommendation:**
+- **Keep bwrap as primary**: Stronger isolation (paths don't exist), PID/network isolation, mature
+- **Consider Landlock as complementary**: For fine-grained control or dynamic restrictions
+- **For immediate use case**: tmpfs approach is simpler and sufficient
+
+**Security comparison:**
+- bwrap provides **stronger isolation** because paths outside the namespace literally don't exist
+- Landlock only denies access but process can still see directory structure
+- Using both provides defense in depth
+
+### Integration Complexity
+
+To use Landlock from Node.js:
+1. **Native addon (C/C++)**: Most performant, but requires compilation
+2. **FFI bindings**: Use existing C library, less performant
+3. **Helper binary**: Separate process applies Landlock before exec'ing Node
+
+**Kernel compatibility:**
+- Requires 5.13+ (July 2021)
+- Most modern distros have it, but need fallback for older kernels
+- Current test kernel: 6.6.114 (fully supports Landlock)
+
+### Conclusion
+
+For the "deny credential paths" use case, Landlock doesn't offer significant advantage over bwrap's tmpfs approach. Both require enumerating allowed paths. The tmpfs hack is simpler:
+- We're already using bwrap for isolation
+- tmpfs is a one-line addition to bwrap args
+- Landlock would require Node.js bindings and significant code
+- Security benefit is marginal (better error messages but weaker isolation)
+
+**Future consideration:** If we need fine-grained control (deny read but allow execute) or dynamic restrictions, Landlock could be valuable as a complementary layer inside bwrap.
 
 ### Default Values
 
