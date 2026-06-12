@@ -282,13 +282,12 @@ export const buildSandboxMountSpec = (params: Readonly<{
   home: string;
   cwd: string;
   agentDir: string;
-  extensionMounts: string[];
   nodeDir: string;
   gitRwMounts: Array<{ path: string; label?: string }>;
   overlayDirs: OverlayMount[];
   pitConfig?: Readonly<PitConfig>;
 }>): SandboxMounts => {
-  const { home, cwd, agentDir, extensionMounts, nodeDir, gitRwMounts, overlayDirs, pitConfig } = params;
+  const { home, cwd, agentDir, nodeDir, gitRwMounts, overlayDirs, pitConfig } = params;
 
   // Resolve path templates
   const resolve = (p: string): string =>
@@ -305,10 +304,10 @@ export const buildSandboxMountSpec = (params: Readonly<{
     .map(m => ({ ...m, path: resolve(m.path) }));
 
   const rw = [
-    ...gitRwMounts,
+    ...gitRwMounts,  // Git needs write access
     ...DEFAULT_SANDBOX_PERMISSIONS.writeAllow.map(m => ({ ...m, path: resolve(m.path) })),
-    ...extensionMounts.map(p => ({ path: p, label: "Pi extensions" })),
     ...userWrite,
+    // NOTE: extensionMounts removed — readable by default, no write needed
   ];
 
   return {
@@ -325,6 +324,8 @@ export const buildSandboxMountSpec = (params: Readonly<{
 - Platform-specific ro lists (/usr, /etc vs /usr, /private/etc, /Library)
 - The `platform` parameter
 - `MACOS_DEFAULT_READ_DENY` — merged into `DEFAULT_SANDBOX_PERMISSIONS.readDeny`
+- `extensionMounts` parameter and logic — extensions are readable by default, no need to mount
+- `getExtensionMounts()` function — no longer needed
 
 ### pit/src/launcher/index.ts (buildBwrapArgs)
 
@@ -434,15 +435,133 @@ After this change: 0 ro entries, same rw entries, 8 read deny entries. Same mode
 
 ---
 
-## Migration Checklist
+## Pre-Implementation Validation
 
+**Critical:** Before implementing Plan 2, validate that `--ro-bind / /` works in practice.
+
+### Test cases
+
+1. **Basic functionality:**
+   ```bash
+   bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-pid -- ls /
+   ```
+   Expected: Shows full host filesystem, all read-only
+
+2. **FUSE mounts:**
+   ```bash
+   # On a system with sshfs/gocryptfs/etc mounted
+   bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-pid -- ls /mnt/fuse
+   ```
+   Expected: FUSE mount is accessible (or document if it fails)
+
+3. **Network filesystems:**
+   ```bash
+   # On a system with NFS/CIFS mounts
+   bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-pid -- ls /mnt/nfs
+   ```
+   Expected: Network mount is accessible (or document if it fails)
+
+4. **Write protection:**
+   ```bash
+   bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-pid -- touch /tmp/test
+   ```
+   Expected: "Read-only file system" error
+
+5. **Credential hiding:**
+   ```bash
+   bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /home/user/.ssh --unshare-user --unshare-pid -- ls /home/user/.ssh
+   ```
+   Expected: Empty directory (not real ~/.ssh contents)
+
+### Validation criteria
+
+- ✅ All 5 test cases pass on at least 2 different Linux distros
+- ✅ Document any filesystem types that don't work (FUSE, NFS, etc.)
+- ✅ Confirm user namespace has permission to bind-mount `/`
+- ✅ No issues with special filesystems (/sys, /dev, /proc)
+
+**If validation fails:**
+- Document which filesystem types don't work
+- Consider fallback to explicit ro-bind list for those types
+- Or document as known limitation
+
+---
+
+## Dynamic Mounts and Old Model Assumptions
+
+### Old Model (Allowlist)
+
+The old model required explicit read permissions:
+- **Extension mounts** were in `ro` array — needed `--ro-bind` to allow read access
+- **Git rw mounts** were in `rw` array — needed `--bind` to allow both read AND write
+- Everything not explicitly mounted was inaccessible
+
+### New Model (Denylist)
+
+Everything is readable by default, so:
+- **Extension mounts** don't need to be in the spec at all — readable by default, no write needed
+- **Git rw mounts** stay in `writeAllow` — still need explicit write permission
+- Only things that need write access or need to be denied go in the spec
+
+### Implications
+
+This simplifies the spec significantly:
+- Remove `extensionMounts` parameter from `buildSandboxMountSpec()`
+- Remove `getExtensionMounts()` function
+- Extensions are just readable by default (no special handling)
+- Git rw mounts remain in `writeAllow` (need write access)
+
+**Dynamic mounts that still need handling:**
+- `gitRwMounts` — stay in `rw` array (need write access)
+- `overlayDirs` — stay in `overlay` array (need copy-on-write)
+- Pit source mounts (in `buildBwrapArgs`) — stay as dynamic ro-binds (for pit development)
+
+---
+
+## Implementation Order
+
+**Plan 1** (unify paths via inner.ts) should be implemented **before** **Plan 2** (unify permissions).
+
+**Rationale:**
+- Plan 1 is simpler (no type changes)
+- Plan 1 doesn't affect `SandboxMounts` consumers
+- Plan 2 changes the `SandboxMounts` type, affecting many files
+- Implementing Plan 1 first reduces merge conflicts
+
+**Dependency:** Plan 2 depends on Plan 1 (stated in doc header) because both touch `bwrapLaunch`, but they're logically independent.
+
+---
+
+## Migration Checklist (Expanded)
+
+### Plan 1: Unify paths via inner.ts
+- [ ] Define `PIT_SANDBOXED` env var
+- [ ] Update `inner.ts` to read `PIT_SANDBOXED` and pass to `createExtensionFactories`
+- [ ] Add `deletePitSandboxed()` to env.ts
+- [ ] Create `buildSandboxEnv()` function (unify env var handling)
+- [ ] Update `bwrapLaunch()` to use `buildSandboxEnv()`
+- [ ] Update `sbplLaunch()` to use `buildSandboxEnv()`
+- [ ] Remove `buildSealedEnv()` and `allowedEnvArgs()`
+- [ ] Update `launchEffect()` non-sandbox path to spawn `inner.ts`
+- [ ] Remove unused imports from `index.ts` (`main`, `createExtensionFactories`)
+- [ ] Update tests
+
+### Plan 2: Unify permissions
+- [ ] **Validate `--ro-bind / /` works** (see validation section)
 - [ ] Define `DEFAULT_SANDBOX_PERMISSIONS` in pure.ts
-- [ ] Rewrite `buildSandboxMountSpec` — remove platform parameter, remove ro lists
+- [ ] Rewrite `buildSandboxMountSpec()` — remove platform parameter, remove ro lists, remove extensionMounts
 - [ ] Remove `linuxPlatformRoMounts()`
 - [ ] Remove `MACOS_DEFAULT_READ_DENY`
-- [ ] Update `buildBwrapArgs` — `--ro-bind / /` + `--tmpfs` deny entries
-- [ ] Update `SandboxMounts` type — remove `ro`, add `readDeny`
-- [ ] Update `buildSbplProfile` — consume `readDeny` from unified spec
+- [ ] Remove `getExtensionMounts()` function
+- [ ] Update `buildBwrapArgs()` — `--ro-bind / /` + `--tmpfs` deny entries
+- [ ] Update `SandboxMounts` type — remove `ro`, add `readDeny` for both platforms
+- [ ] Update all `SandboxMounts` consumers:
+  - [ ] `program.ts` — `resolveSandboxMountsEffect()`
+  - [ ] `core/sandbox/pure.ts` — `formatSandboxNote()`
+  - [ ] `core/sandbox/sbpl.ts` — `buildSbplProfile()`
+  - [ ] `core/session/pure.ts` — `systemPromptArgs()`
+  - [ ] `core/session/io.ts` — session setup
+- [ ] Update `buildSbplProfile()` — consume `readDeny` from unified spec
 - [ ] Remove `allowRead` from `PitConfig` schema
 - [ ] Update tests — remove platform-specific ro mount tests
 - [ ] Add tests — verify deny entries produce `--tmpfs` args
