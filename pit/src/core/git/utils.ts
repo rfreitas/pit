@@ -109,11 +109,7 @@ export const resolveWorktreeGitRwMounts = (
     const content = yield* fs.readFileString(gitPath).pipe(Effect.orElse(() => Effect.succeed("")));
     const worktreeDir = content.trim().replace(/^gitdir:\s*/, "");
     if (!worktreeDir.includes("/.git/worktrees/")) return [];
-    const mainGitDir = resolve(worktreeDir, "../..");
-    return [
-      { path: worktreeDir, label: "worktree git metadata" },
-      { path: join(mainGitDir, "objects"), label: "git objects" },
-    ];
+    return [{ path: worktreeDir, label: "worktree git metadata" }];
   });
 
 // ── repo root and branch existence ────────────────────────────────────────────

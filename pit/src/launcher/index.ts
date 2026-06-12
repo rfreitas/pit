@@ -112,8 +112,6 @@ export const buildBwrapArgs = (
   mounts: Readonly<SandboxMounts>,
   opts: Readonly<{
     cwd: string;
-    /** Required for pit mount resolution. Omit if running an arbitrary script. */
-    scriptPath?: string;
   }>,
 ): string[] => {
   const rwArgs = mounts.rw.flatMap(m => [m.optional ? "--bind-try" : "--bind", m.path, m.path]);
@@ -139,44 +137,12 @@ export const buildBwrapArgs = (
     return ["--overlay-src", m.src, "--tmp-overlay", m.dest];
   });
 
-  const pitMounts = opts.scriptPath ? resolvePitMounts(opts.scriptPath, opts.cwd) : null;
-  const dynamicMountArgs = pitMounts
-    ? ["--ro-bind", pitMounts.pitSrcDir, pitMounts.pitSrcDir,
-       "--ro-bind", pitMounts.pitNodeModules, pitMounts.pitNodeModules]
-    : [];
-
   return [
     "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
-    ...rwArgs, ...denyArgs, ...overlayArgs, ...dynamicMountArgs,
+    ...rwArgs, ...denyArgs, ...overlayArgs,
     "--unshare-user", "--unshare-pid", "--die-with-parent",
     "--chdir", opts.cwd,
   ];
-};
-
-/**
- * Resolve the pit source directory and its node_modules for mounting.
- * Returns null when running from a globally-installed path (already mounted).
- */
-const resolvePitMounts = (scriptPath: string, cwd: string): { pitSrcDir: string; pitNodeModules: string } | null => {
-  const scriptDir = resolve(dirname(scriptPath));
-  if (scriptDir.includes("/lib/node_modules/")) return null;
-  
-  // If the script is physically located inside the current working directory,
-  // it is already covered by the read-write workspace mount. Adding a ro-bind
-  // here would prevent the agent from developing pit itself.
-  if (scriptDir.startsWith(cwd)) return null;
-
-  // Mount the entire pit/src directory, not just pit/src/launcher
-  const pitSrcDir = resolve(scriptDir, "..");
-  
-  const findNm = (curr: string): string | null => {
-    const nm = join(curr, "node_modules");
-    if (existsSync(nm)) return nm;
-    const up = dirname(curr);
-    return up === curr ? null : findNm(up);
-  };
-  const pitNodeModules = findNm(pitSrcDir);
-  return pitNodeModules ? { pitSrcDir, pitNodeModules } : null;
 };
 
 /**
@@ -203,7 +169,7 @@ export const bwrapLaunch = (
   ];
 
   const args: Readonly<string[]> = [
-    ...buildBwrapArgs(mounts, { cwd, scriptPath }),
+    ...buildBwrapArgs(mounts, { cwd }),
     ...envArgs,
     "--", nodeBin, "--experimental-strip-types", pitInnerScript, ...piArgs,
   ];

@@ -140,19 +140,6 @@ describe("bwrapLaunch arg construction", () => {
       .not.toContain("MISSING");
   });
 
-  it("adds --ro-bind for pitDir when script is in a local dev path", () => {
-    // Use the real pit script path — node_modules actually exist there
-    const realScript = process.argv[1] ?? "/home/ricfr/repos/agent-wt-72f91c56/pit/pit.ts";
-    const args = launch({ scriptPath: realScript });
-    // Should include at least one --ro-bind that isn't a system dir
-    expect(args).toContain("--ro-bind");
-  });
-
-  it("does NOT add pit --ro-bind when script is inside global lib/node_modules", () => {
-    const args = launch({ scriptPath: "/usr/local/lib/node_modules/@ricfr/pit/pit.ts" });
-    expect(args).not.toContain("/usr/local/lib/node_modules/@ricfr/pit");
-  });
-
   it("execs inner.ts not the pi binary", () => {
     const args = launch({});
     const sep = args.indexOf("--");
