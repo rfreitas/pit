@@ -154,10 +154,14 @@ export const buildSandboxMountSpec = (params: Readonly<{
     ...userWrite.map(m => ({ ...m, path: resolve(m.path) })),
   ];
 
+  // Set backend based on platform (for display in sandbox announcement)
+  const backend = process.platform === 'darwin' ? 'sandbox-exec' : 'bwrap';
+
   return {
     rw,
     readDeny,
     overlay: overlayDirs,
+    backend,
   };
 };
 

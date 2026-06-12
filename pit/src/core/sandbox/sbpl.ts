@@ -125,7 +125,7 @@ export const buildSbplProfile = (mounts: Readonly<SandboxMounts>): string => {
       ]
     : [];
 
-  const denied = mounts.readDeny ?? [];
+  const denied = mounts.readDeny;
   const denySection = denied.length > 0
     ? [
         "; read denylist — credential and sensitive paths",

@@ -27,6 +27,7 @@ vi.mock("node:fs", async (importOriginal) => {
     realpathSync: (p: string) => p,
     existsSync: (p: string) => {
       if (p.endsWith("/bwrap")) return true;
+      if (p === "/home/user/.aws") return true;  // For deny path test
       return real.existsSync(p);
     },
   };
@@ -167,5 +168,34 @@ describe("bwrapLaunch arg construction", () => {
     const stripIdx = tail.indexOf("--experimental-strip-types");
     const innerIdx = tail.findIndex(a => a.endsWith("inner.ts"));
     expect(stripIdx).toBeLessThan(innerIdx);
+  });
+
+  it("only includes --bind/--tmpfs for deny paths that exist", () => {
+    const mounts: SandboxMounts = {
+      rw: [{ path: "/work" }],
+      readDeny: [
+        { path: "/home/user/.aws", label: "credentials" },
+        { path: "/home/user/.nonexistent", label: "credentials" },
+      ],
+    };
+    const exitStub = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    bwrapLaunch("/work", [], mounts, baseConfig);
+    exitStub.mockRestore();
+
+    const args = mockSpawnSync.mock.calls[0]![1] as string[];
+    const bindIndices = args.reduce<number[]>((acc, a, i) => a === "--bind" ? [...acc, i] : acc, []);
+    const tmpfsIndices = args.reduce<number[]>((acc, a, i) => a === "--tmpfs" ? [...acc, i] : acc, []);
+
+    // Should have --bind and --tmpfs for /home/user/.aws (exists)
+    const awsBind = bindIndices.some(i => args[i + 2] === "/home/user/.aws");
+    const awsTmpfs = tmpfsIndices.some(i => args[i + 1] === "/home/user/.aws");
+    expect(awsBind).toBe(true);
+    expect(awsTmpfs).toBe(true);
+
+    // Should NOT have --bind or --tmpfs for /home/user/.nonexistent (doesn't exist)
+    const nonBind = bindIndices.some(i => args[i + 2] === "/home/user/.nonexistent");
+    const nonTmpfs = tmpfsIndices.some(i => args[i + 1] === "/home/user/.nonexistent");
+    expect(nonBind).toBe(false);
+    expect(nonTmpfs).toBe(false);
   });
 });

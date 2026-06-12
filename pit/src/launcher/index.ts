@@ -123,6 +123,12 @@ export const buildBwrapArgs = (
       // To hide a path with tmpfs in a read-only filesystem:
       // 1. Bind the path to itself (writable) - mount point already exists from ro-bind
       // 2. Overlay with tmpfs (empty directory)
+      //
+      // Security note: denied paths end up as writable empty tmpfs mounts inside the sandbox.
+      // This is acceptable because:
+      // - The real credentials are not readable (tmpfs is empty)
+      // - Writes to tmpfs are ephemeral and vanish when the sandbox exits
+      // - The agent cannot create fake credentials that persist or affect the host
       return [
         "--bind", m.path, m.path,
         "--tmpfs", m.path,
