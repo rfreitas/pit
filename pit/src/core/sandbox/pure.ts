@@ -11,14 +11,13 @@ import type { SandboxMounts, OverlayMount, PitConfig, RoMount } from "../../type
 /**
  * Build the sandbox section of the session announcement from the mount lists.
  *
- * Behaviour is driven by the read policy encoded in `mounts`:
- *   readDeny === undefined  → whitelist mode (Linux/bwrap):
- *     reads are closed by default; ro[] lists what is readable.
- *   readDeny !== undefined  → blacklist mode (macOS/sandbox-exec):
- *     reads are globally open; readDeny[] lists what is blocked.
+ * Both platforms now use the same denylist model:
+ *   - readDeny[] lists paths that are blocked from reading
+ *   - rw[] lists paths with write access
+ *   - Everything else is read-only
  *
  * Entries are grouped by label (or path when no label), deduplicating
- * repeated labels (e.g. several extension paths all labelled "Pi extensions").
+ * repeated labels.
  */
 export const formatSandboxNote = (mounts: Readonly<SandboxMounts>): string => {
   const dedup = (items: Array<{ path: string; label?: string }>) => {
@@ -27,29 +26,21 @@ export const formatSandboxNote = (mounts: Readonly<SandboxMounts>): string => {
   };
 
   const backend = mounts.backend ?? 'bwrap';
-  const blacklist = mounts.readDeny !== undefined;
-
   const rwLine = `- Read-write: ${dedup(mounts.rw)}`;
-
-  if (blacklist) {
-    const denied = mounts.readDeny ?? [];
-    const readLine = denied.length > 0
-      ? `- Reads unrestricted except: ${dedup(denied)}`
-      : `- Reads unrestricted`;
-    return `**Sandbox (${backend}):** This session runs inside a macOS policy sandbox. Filesystem access:
-${rwLine}
-${readLine}
-- No write access: anything outside the listed paths above`;
-  }
-
+  const denied = mounts.readDeny;
+  const readLine = denied.length > 0
+    ? `- Reads unrestricted except: ${dedup(denied)}`
+    : `- Reads unrestricted`;
+  
   const overlays = mounts.overlay ?? [];
   const overlayLine = overlays.length > 0
     ? `\n- Ephemeral overlay (reads from parent, writes vanish on exit): ${dedup(overlays.map((m) => ({ path: m.dest, label: m.label })))}`
     : "";
-  return `**Sandbox (${backend}):** This session runs inside an OS-level namespace (bubblewrap). Filesystem access is allowlist-based:
+  
+  return `**Sandbox (${backend}):** This session runs inside an OS-level sandbox. Filesystem access:
 ${rwLine}
-- Read-only: ${dedup(mounts.ro)}${overlayLine}
-- No access: anything outside the mounts listed above`;
+${readLine}${overlayLine}
+- No write access: anything outside the listed paths above`;
 };
 
 // ── env whitelist ────────────────────────────────────────────────────────────
@@ -92,116 +83,81 @@ export const buildSandboxEnv = (
   );
 };
 
-// ── mount spec builder ────────────────────────────────────────────────────────
-
-const MACOS_DEFAULT_READ_DENY: Array<{ label: string; segments: string[] }> = [
-  { label: "~/.ssh",           segments: [".ssh"] },
-  { label: "~/.aws",           segments: [".aws"] },
-  { label: "~/.gnupg",         segments: [".gnupg"] },
-  { label: "~/.config/gh",     segments: [".config", "gh"] },
-  { label: "~/.config/gcloud", segments: [".config", "gcloud"] },
-  { label: "~/.azure",         segments: [".azure"] },
-  { label: "~/.config/op",     segments: [".config", "op"] },
-  { label: "~/.netrc",         segments: [".netrc"] },
-];
+// ── default permissions ──────────────────────────────────────────────────────
 
 /**
- * Platform-specific optional ro-bind mounts for Linux.
- * Use in SandboxMounts.ro to get DNS resolution, Nix store access, etc.
- * All entries are optional — silently skipped when the path doesn't exist.
+ * Default sandbox permissions applied to both platforms.
+ * Path templates: ~ (home), {cwd}, {agentDir}, {nodeDir}
  */
-export const linuxPlatformRoMounts = (): readonly RoMount[] => [
-  // WSL: /etc/resolv.conf → /mnt/wsl/resolv.conf
-  { path: "/mnt/wsl", label: "system dirs", optional: true },
-  // Ubuntu 24.04+: /etc/resolv.conf → /run/systemd/resolve/stub-resolv.conf.
-  // Without this mount the symlink is dangling inside bwrap and all DNS fails.
-  { path: "/run/systemd/resolve", label: "system dirs", optional: true },
-  // Nix: node binary + shared libs + ELF interpreter all live under /nix/store.
-  { path: "/nix",    label: "system dirs", optional: true },
-  { path: "/lib",     label: "system dirs", optional: true },
-  { path: "/lib64",   label: "system dirs", optional: true },
-  { path: "/bin",     label: "system dirs", optional: true },
-  { path: "/sbin",    label: "system dirs", optional: true },
-];
+const DEFAULT_SANDBOX_PERMISSIONS = {
+  readDeny: [
+    { path: "~/.ssh", label: "credentials" },
+    { path: "~/.aws", label: "credentials" },
+    { path: "~/.gnupg", label: "credentials" },
+    { path: "~/.config/gh", label: "credentials" },
+    { path: "~/.config/gcloud", label: "credentials" },
+    { path: "~/.azure", label: "credentials" },
+    { path: "~/.config/op", label: "credentials" },
+    { path: "~/.netrc", label: "credentials" },
+  ],
+  writeAllow: [
+    { path: "{cwd}", label: "worktree" },
+    { path: "/tmp", label: "temp dir" },
+    { path: "{agentDir}", label: "Pi config dir" },
+    { path: "~/.npm", label: "npm cache", optional: true },
+    { path: "~/.local/share/mise/shims", label: "mise shims", optional: true },
+    { path: "{nodeDir}/lib/node_modules", label: "Node.js global modules" },
+    { path: "{nodeDir}/bin", label: "Node.js bin" },
+  ],
+} as const;
 
 /**
  * Build the canonical SandboxMounts struct from pre-resolved inputs.
  * All IO (resolveMainRepo, resolveUnversionedDirs, fs.statSync,
  * resolveWorktreeGitRwMounts) must be done by the caller before calling this.
  *
- * platform: 'linux'  → bwrap model: ro[] drives read grants, no readDeny
- * platform: 'darwin' → sandbox-exec model: ro[] is annotation-only, readDeny set
+ * Both platforms now use the same denylist model:
+ * - readDeny[] lists paths to block from reading
+ * - rw[] lists paths with write access
+ * - Everything else is read-only
  */
 export const buildSandboxMountSpec = (params: Readonly<{
   home: string;
   cwd: string;
   agentDir: string;
-  extensionMounts: string[];
   nodeDir: string;
   gitRwMounts: Array<{ path: string; label?: string }>;
   overlayDirs: OverlayMount[];
-  platform?: 'linux' | 'darwin';
   pitConfig?: Readonly<PitConfig>;
 }>): SandboxMounts => {
-  const {
-    home, cwd, agentDir, extensionMounts,
-    nodeDir, gitRwMounts, overlayDirs,
-    platform = 'linux',
-    pitConfig,
-  } = params;
+  const { home, cwd, agentDir, nodeDir, gitRwMounts, overlayDirs, pitConfig } = params;
 
-  const ro: RoMount[] = [
-    { path: join(home, ".gitconfig"),                          label: "home dotfiles", optional: true },
-    { path: join(home, ".config", "git"),                      label: "home dotfiles", optional: true },
-    { path: join(home, ".npmrc"),                              label: "home dotfiles", optional: true },
-    { path: join(home, ".local", "share", "mise", "installs"), label: "home dotfiles", optional: true },
-    ...(platform === 'linux'
-      ? [
-          { path: "/usr",     label: "system dirs" },
-          { path: "/etc",     label: "system dirs" },
-          ...linuxPlatformRoMounts(),
-        ]
-      : [
-          { path: "/usr",     label: "system dirs" },
-          { path: "/private/etc", label: "system dirs" },
-          { path: "/Library",     label: "system dirs", optional: true },
-        ]
-    ),
-    ...extensionMounts.map((p) => ({ path: p, label: "Pi extensions" })),
+  // Resolve path templates
+  const resolve = (p: string): string =>
+    p.startsWith("~") ? join(home, p.slice(2))
+    : p.replace("{cwd}", cwd)
+       .replace("{agentDir}", agentDir)
+       .replace("{nodeDir}", nodeDir);
+
+  // Build read deny list (defaults + user config)
+  const userDeny = (pitConfig?.sandbox?.denyRead ?? []).map(p => ({ path: p, label: "user deny" }));
+  const readDeny = [
+    ...DEFAULT_SANDBOX_PERMISSIONS.readDeny.map(m => ({ ...m, path: resolve(m.path) })),
+    ...userDeny.map(m => ({ ...m, path: resolve(m.path) })),
   ];
 
+  // Build write allow list (git mounts + defaults + user config)
+  const userWrite = (pitConfig?.sandbox?.allowWrite ?? []).map(p => ({ path: p, label: "user write grant" }));
   const rw = [
     ...gitRwMounts,
-    { path: cwd },
-    { path: "/tmp",                                 label: "temp dir" },
-    { path: agentDir,                                  label: "Pi config dir" },
-    { path: join(home, ".npm"),                    label: "npm cache",   optional: true as const },
-    { path: join(home, ".local/share/mise/shims"), label: "mise shims", optional: true as const },
-    { path: join(nodeDir, "lib/node_modules"),     label: "Node.js global modules" },
-    { path: join(nodeDir, "bin"),                  label: "Node.js bin" },
-    ...(pitConfig?.sandbox?.allowWrite ?? []).map(p => ({ path: p, label: "user write grant" })),
+    ...DEFAULT_SANDBOX_PERMISSIONS.writeAllow.map(m => ({ ...m, path: resolve(m.path) })),
+    ...userWrite.map(m => ({ ...m, path: resolve(m.path) })),
   ];
 
-  if (platform === 'linux') {
-    return {
-      ro, rw,
-      overlay: overlayDirs,
-      backend: 'bwrap',
-    };
-  }
-
-  // macOS: blacklist read model
-  const userDenyRead = (pitConfig?.sandbox?.denyRead ?? []).map(p => ({ path: p }));
-  const userAllowRead = new Set(pitConfig?.sandbox?.allowRead ?? []);
-
-  const defaultDeny: RoMount[] = MACOS_DEFAULT_READ_DENY
-    .filter(({ segments }) => !userAllowRead.has(join(home, ...segments)))
-    .map(({ label, segments }) => ({ path: join(home, ...segments), label }));
-
   return {
-    ro, rw,
-    readDeny: [...defaultDeny, ...userDenyRead],
-    backend: 'sandbox-exec',
+    rw,
+    readDeny,
+    overlay: overlayDirs,
   };
 };
 

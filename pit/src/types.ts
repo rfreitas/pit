@@ -49,8 +49,12 @@ export interface OverlayMount {
 }
 
 export interface SandboxMounts {
-  ro: RoMount[];
   rw: RwMount[];
+  /**
+   * Read denylist — paths that should not be readable inside the sandbox.
+   * Both platforms use this: Linux uses --tmpfs to hide, macOS uses SBPL deny rules.
+   */
+  readDeny: RoMount[];
   /**
    * Ephemeral overlay mounts: the parent repo's unversioned dirs are overlaid
    * onto the worktree using a tmpfs upper layer. Reads come from the parent;
@@ -58,13 +62,6 @@ export interface SandboxMounts {
    * Linux only — not supported on macOS (feature gap, sandbox-exec has no overlayfs).
    */
   overlay?: OverlayMount[];
-  /**
-   * Read denylist (macOS sandbox-exec only).
-   * undefined = whitelist mode (Linux bwrap): reads are closed by default.
-   * [] = blacklist mode, reads fully open, no denials.
-   * [...] = blacklist mode, reads open except listed paths.
-   */
-  readDeny?: RoMount[];
   /**
    * Which sandbox backend enforces this policy.
    * Drives the sandbox announcement header text.
@@ -90,12 +87,10 @@ export interface PitConfig {
   nonSandboxExtensions?: string[];
   /**
    * Per-platform read/write policy overrides.
-   * allowRead: Linux → adds to ro[]; macOS → removes from readDeny[].
-   * denyRead:  macOS only → adds to readDeny[]; Linux no-op.
+   * denyRead:  both platforms → adds to readDeny[].
    * allowWrite: both platforms → adds to rw[].
    */
   sandbox?: {
-    allowRead?: string[];
     denyRead?: string[];
     allowWrite?: string[];
   };

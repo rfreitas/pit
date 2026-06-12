@@ -84,7 +84,7 @@ describe("setupNewSession", () => {
   it("file has exactly 3 lines when sandboxed (adds sandbox banner)", async () => {
     const agentDir = makeSandbox("pit-session-agent-");
     const result = makeResult();
-    const mounts: SandboxMounts = { ro: [{ path: "/home/user", label: "home directory" }], rw: [{ path: result.cwd }] };
+    const mounts: SandboxMounts = { rw: [{ path: result.cwd }], readDeny: [] };
     const lines = fs.readFileSync(await run(setupNewSession(result, agentDir, mounts)), "utf8").trim().split("\n");
     expect(lines).toHaveLength(3);
     expect(JSON.parse(lines[2]).type).toBe("custom_message");

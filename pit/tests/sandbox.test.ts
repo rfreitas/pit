@@ -75,11 +75,9 @@ function runInBwrap(script: string, opts: BwrapRunOptions = {}): { stdout: strin
     home: process.env.HOME!,
     cwd: "/tmp",
     agentDir,
-    extensionMounts: [],
     nodeDir,
     gitRwMounts: [],
     overlayDirs: [],
-    platform: "linux",
   });
 
   try {
@@ -329,11 +327,9 @@ describe("tmp-overlay sandbox mounts", () => {
       home: process.env.HOME!,
       cwd: "/tmp",
       agentDir: fs.realpathSync(getAgentDir()),
-      extensionMounts: [],
       nodeDir,
       gitRwMounts: [],
       overlayDirs: [{ src, dest }],
-      platform: "linux",
     });
 
     try {

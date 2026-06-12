@@ -3,7 +3,6 @@ import { buildSbplProfile } from "./sbpl.ts";
 import type { SandboxMounts } from "../../types.ts";
 
 const base = (): SandboxMounts => ({
-  ro: [],
   rw: [{ path: "/home/user/repo-wt-abc" }, { path: "/home/user/.pi/agent", label: "Pi config dir" }],
   readDeny: [],
   backend: "sandbox-exec",
@@ -71,12 +70,6 @@ describe("buildSbplProfile", () => {
 
     it("no deny rules when readDeny is empty", () => {
       const p = buildSbplProfile({ ...base(), readDeny: [] });
-      expect(p).not.toContain("(deny file-read*");
-    });
-
-    it("no deny rules when readDeny is undefined", () => {
-      const { readDeny: _, ...rest } = base();
-      const p = buildSbplProfile(rest as SandboxMounts);
       expect(p).not.toContain("(deny file-read*");
     });
   });

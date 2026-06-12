@@ -52,7 +52,7 @@ describe("buildSessionLines", () => {
     cwd: "/tmp/repo-wt-abc",
     meta: { repo: "/tmp/repo", branch: "pi/abc12345" },
   };
-  const mounts: SandboxMounts = { ro: [{ path: "/home", label: "home directory" }], rw: [{ path: result.cwd }] };
+  const mounts: SandboxMounts = { rw: [{ path: result.cwd }], readDeny: [] };
 
   it("without sandbox: exactly 2 lines (header + pit entry)", () => {
     expect(buildSessionLines(result, "uuid-1", "ts").trim().split("\n")).toHaveLength(2);
@@ -101,7 +101,7 @@ describe("buildSessionLines", () => {
 // Passes sandbox context only — agent derives git context from git tools.
 
 describe("systemPromptArgs", () => {
-  const mounts: SandboxMounts = { ro: [{ path: "/home" }], rw: [{ path: "/work" }] };
+  const mounts: SandboxMounts = { rw: [{ path: "/work" }], readDeny: [] };
 
   it("returns empty array when not sandboxed", () => {
     expect(systemPromptArgs(undefined)).toHaveLength(0);
@@ -130,8 +130,8 @@ describe("buildSessionLines: sandbox-only, no git context", () => {
     meta: { repo: "/tmp/repo", branch: "pi/abc12345" },
   };
   const mounts: SandboxMounts = {
-    ro: [{ path: "/home/user", label: "home directory" }],
     rw: [{ path: result.cwd }],
+    readDeny: [],
   };
 
   it("sandbox message does not mention branch name", () => {

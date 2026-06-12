@@ -47,33 +47,7 @@ export const findSandboxTool = (): { kind: "bwrap"; path: string } | { kind: "sa
   return bwrapPath ? { kind: "bwrap", path: bwrapPath } : null;
 };
 
-const findNodeModules = (dir: string): string | null => {
-  const nm = join(dir, "node_modules");
-  if (existsSync(nm)) return nm;
-  const up = dirname(dir);
-  return up === dir ? null : findNodeModules(up);
-};
 
-export const getExtensionMounts = (): string[] => {
-  const settingsFile = join(AGENT_DIR, "settings.json");
-  if (!existsSync(settingsFile)) return [];
-  const settings = (() => {
-    try {
-      const raw = readFileSync(settingsFile, "utf8");
-      if (!raw.trim()) return null;
-      return JSON.parse(raw) as { extensions?: string[] };
-    } catch { return null; }
-  })();
-  if (!settings) return [];
-  return [...new Set(
-    (settings.extensions ?? [])
-      .filter(ext => existsSync(ext))
-      .flatMap(ext => {
-        const nm = findNodeModules(dirname(ext));
-        return nm ? [ext, nm] : [ext];
-      }),
-  )].sort();
-};
 
 /**
  * Build sandbox mounts.
@@ -84,7 +58,6 @@ export const getExtensionMounts = (): string[] => {
 export const buildSandboxMountsEffect = (
   cwd: string,
   agentDir: string,
-  extensionMounts: string[],
   nodeDir: string,
   pitConfig?: Readonly<PitConfig>,
 ): Effect.Effect<SandboxMounts, never, NodeContext> =>
@@ -111,8 +84,8 @@ export const buildSandboxMountsEffect = (
       : [];
     const gitRwMounts = yield* resolveWorktreeGitRwMounts(cwd);
     return buildSandboxMountSpec({
-      home: HOME, cwd, agentDir, extensionMounts, nodeDir,
-      gitRwMounts, overlayDirs, platform, pitConfig,
+      home: HOME, cwd, agentDir, nodeDir,
+      gitRwMounts, overlayDirs, pitConfig,
     });
   });
 
@@ -125,7 +98,7 @@ export const resolveSandboxMountsEffect = (
     if (!useSandbox || !findSandboxTool()) return undefined;
     const nodeDir = dirname(dirname(process.execPath));
     return yield* buildSandboxMountsEffect(
-      cwd, realpathSync(AGENT_DIR), getExtensionMounts(), nodeDir, pitConfig,
+      cwd, realpathSync(AGENT_DIR), nodeDir, pitConfig,
     );
   });
 
@@ -143,10 +116,18 @@ export const buildBwrapArgs = (
     scriptPath?: string;
   }>,
 ): string[] => {
-  const roArgs = mounts.ro.flatMap(m =>
-    [m.optional ? "--ro-bind-try" : "--ro-bind", m.path, m.path],
-  );
   const rwArgs = mounts.rw.flatMap(m => [m.optional ? "--bind-try" : "--bind", m.path, m.path]);
+  const denyArgs = mounts.readDeny
+    .filter(m => existsSync(m.path))  // Only deny paths that exist on host
+    .flatMap(m => {
+      // To hide a path with tmpfs in a read-only filesystem:
+      // 1. Bind the path to itself (writable) - mount point already exists from ro-bind
+      // 2. Overlay with tmpfs (empty directory)
+      return [
+        "--bind", m.path, m.path,
+        "--tmpfs", m.path,
+      ];
+    });
   const overlayArgs = (mounts.overlay ?? []).flatMap(m => {
     mkdirSync(m.dest, { recursive: true });
     return ["--overlay-src", m.src, "--tmp-overlay", m.dest];
@@ -159,8 +140,8 @@ export const buildBwrapArgs = (
     : [];
 
   return [
-    "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
-    ...roArgs, ...rwArgs, ...overlayArgs, ...dynamicMountArgs,
+    "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+    ...rwArgs, ...denyArgs, ...overlayArgs, ...dynamicMountArgs,
     "--unshare-user", "--unshare-pid", "--die-with-parent",
     "--chdir", opts.cwd,
   ];
@@ -294,7 +275,7 @@ export const launchEffect = (
       const tool = findSandboxTool();
       if (tool?.kind === "sandbox-exec") {
         const m = mounts ?? (yield* buildSandboxMountsEffect(
-          cwd, realpathSync(AGENT_DIR), getExtensionMounts(),
+          cwd, realpathSync(AGENT_DIR),
           dirname(dirname(process.execPath)), pitConfig,
         ));
         // sbplLaunch exits the process; promise never resolves
@@ -305,7 +286,7 @@ export const launchEffect = (
       }
       if (tool?.kind === "bwrap") {
         const m = mounts ?? (yield* buildSandboxMountsEffect(
-          cwd, realpathSync(AGENT_DIR), getExtensionMounts(),
+          cwd, realpathSync(AGENT_DIR),
           dirname(dirname(process.execPath)), pitConfig,
         ));
         bwrapLaunch(cwd, piArgs, m, pitConfig ?? {}, escapeHandle?.token); // never returns

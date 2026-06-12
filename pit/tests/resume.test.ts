@@ -25,7 +25,6 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { setupNewSession } from "../src/core/session/io.ts";
 import { cwdToBucket } from "../src/core/session/pure.ts";
 import { findBwrap, buildBwrapArgs } from "../src/launcher/index.ts";
-import { linuxPlatformRoMounts } from "../src/core/sandbox/pure.ts";
 
 const run = <A>(eff: Effect.Effect<A, unknown, NodeContext>) =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContextLayer)));
@@ -159,16 +158,11 @@ describe("bwrap sandbox bound to worktree not launch dir", () => {
     fs.mkdirSync(launchDir);
 
     const mounts: SandboxMounts = {
-      ro: [
-        { path: "/usr", label: "system dirs" },
-        { path: "/etc", label: "system dirs" },
-        { path: nodeDir, label: "runtime" },
-        ...linuxPlatformRoMounts(),
-      ],
       rw: [
         // Only bind the worktree — launchDir is intentionally NOT bound
         { path: worktree },
       ],
+      readDeny: [],
     };
 
     const result = spawnSync(

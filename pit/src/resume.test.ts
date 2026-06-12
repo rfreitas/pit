@@ -20,7 +20,6 @@ import { useTmpDirs, run } from "./tests/helpers.ts";
 import { worktreeCheckEffect, type ExistingSession } from "./core/worktree/io.ts";
 import { setupNewSession } from "./core/session/io.ts";
 import { findBwrap, buildBwrapArgs } from "./launcher/index.ts";
-import { linuxPlatformRoMounts } from "./core/sandbox/pure.ts";
 import { cwdToBucket } from "./core/session/pure.ts";
 import type { WorktreeResult, SandboxMounts } from "./types.ts";
 
@@ -172,7 +171,7 @@ describe("bwrapLaunch: --session arg reaches inner.ts argv", () => {
 
   const launchWithSession = async (sessionFile: string) => {
     const { bwrapLaunch } = await import("./launcher/index.ts");
-    const mounts = { ro: [{ path: "/etc" }], rw: [{ path: "/tmp" }] };
+    const mounts = { rw: [{ path: "/tmp" }], readDeny: [] };
     const exitStub = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     bwrapLaunch("/tmp", ["--session", sessionFile, "--append-system-prompt", "x"], mounts, {});
     exitStub.mockRestore();
@@ -233,15 +232,11 @@ describe("session file accessible inside bwrap", () => {
       const bwrap   = findBwrapReal()!;
 
       const mounts: SandboxMounts = {
-        ro: [
-          { path: "/usr", label: "system dirs" },
-          { path: "/etc", label: "system dirs" },
-          ...linuxPlatformRoMounts(),
-        ],
         rw: [
           { path: worktree },
           { path: agentDir },
         ],
+        readDeny: [],
       };
 
       const result = spawnSync(

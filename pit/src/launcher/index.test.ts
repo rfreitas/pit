@@ -38,8 +38,8 @@ import { bwrapLaunch } from "./index.ts";
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
 const dummyMounts: SandboxMounts = {
-  ro: [{ path: "/etc", label: "system dirs" }],
   rw: [{ path: "/work" }],
+  readDeny: [],
 };
 
 const baseConfig: PitConfig = { allowEnv: [] };
