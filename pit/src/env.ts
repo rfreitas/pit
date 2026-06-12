@@ -13,6 +13,10 @@ export const deletePitEscapeToken = (): void => {
   delete process.env.PIT_ESCAPE_TOKEN;
 };
 
+export const deletePitSandboxed = (): void => {
+  delete process.env.PIT_SANDBOXED;
+};
+
 export const bootstrapProcess = (): void => {
   process.title = "pi";
   process.emitWarning = () => {};

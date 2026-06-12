@@ -102,6 +102,16 @@ describe("bwrapLaunch arg construction", () => {
     expect(pairs["PATH"]).toMatch(/\/bin/);
   });
 
+  it("includes PIT_SANDBOXED=1 in setenv list", () => {
+    const pairs = setenvPairs(launch({}));
+    expect(pairs["PIT_SANDBOXED"]).toBe("1");
+  });
+
+  it("forwards PATH from host env instead of hardcoding", () => {
+    const pairs = setenvPairs(launch({ env: { HOME: "/h", PATH: "/custom/path:/usr/bin" } }));
+    expect(pairs["PATH"]).toBe("/custom/path:/usr/bin");
+  });
+
   it("includes PIT_ESCAPE_TOKEN when escapeToken is provided", () => {
     const pairs = setenvPairs(launch({ escapeToken: "tok-secret" }));
     expect(pairs["PIT_ESCAPE_TOKEN"]).toBe("tok-secret");

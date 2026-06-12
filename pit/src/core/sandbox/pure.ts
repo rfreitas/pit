@@ -55,43 +55,38 @@ ${rwLine}
 // ── env whitelist ────────────────────────────────────────────────────────────
 
 /**
- * Build --setenv pairs for each name in config.allowEnv that is present in env.
- * Used by bwrapLaunch. Pure — no IO, no side effects.
- */
-export const allowedEnvArgs = (
-  config: Readonly<PitConfig>,
-  env: Readonly<Record<string, string | undefined>>,
-): string[] =>
-  (config.allowEnv ?? []).flatMap((name) =>
-    env[name] !== undefined ? ["--setenv", name, env[name]!] : [],
-  );
-
-/**
- * Build a filtered env Record for the macOS sandbox-exec spawn call.
- * Includes built-in defaults plus any names from config.allowEnv.
+ * Build a unified environment for sandboxed child processes.
+ * Used by both bwrap (as --setenv args) and sandbox-exec (as spawn env).
+ *
+ * Forwards PATH from host instead of constructing platform-specific paths.
+ * This eliminates hardcoded /opt/homebrew paths and works with any package
+ * manager (nix, asdf, mise, volta, etc.).
+ *
  * Pure — no IO, no side effects.
  */
-export const buildSealedEnv = (
+export const buildSandboxEnv = (
   config: Readonly<PitConfig>,
   env: Readonly<Record<string, string | undefined>>,
-  nodeDir: string,
+  escapeToken?: string,
 ): Record<string, string> => {
-  const builtins = [
-    "HOME", "TERM", "LANG",
+  const base: Record<string, string> = {
+    PI_CODING_AGENT: "true",
+    PIT_SANDBOXED: "1",
+    ...(escapeToken ? { PIT_ESCAPE_TOKEN: escapeToken } : {}),
+  };
+
+  // Forward these from host env if present
+  const forwardIfPresent = [
+    "HOME", "PATH", "TERM", "LANG",
     "http_proxy", "https_proxy", "no_proxy",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-    "PIT_ESCAPE_SOCKET", "PIT_ESCAPE_TOKEN",
-    "PI_CODING_AGENT",
+    "PIT_ESCAPE_SOCKET",
     "PI_CODING_AGENT_DIR", "PI_SKIP_VERSION_CHECK",
   ];
+
   const extra = config.allowEnv ?? [];
-  const base: Record<string, string> = {
-    // PATH must include Homebrew (Apple Silicon /opt/homebrew, Intel /usr/local)
-    // so the agent can find git, node, and any Homebrew-installed tool.
-    PATH: `${nodeDir}/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
-    PI_CODING_AGENT: "true",
-  };
-  return [...builtins, ...extra].reduce<Record<string, string>>((acc, name) =>
+
+  return [...forwardIfPresent, ...extra].reduce<Record<string, string>>((acc, name) =>
     env[name] !== undefined ? { ...acc, [name]: env[name]! } : acc,
     base,
   );

@@ -5,7 +5,7 @@
  * extensions registered as closures (no jiti, no --extension flags).
  */
 import { main } from "@earendil-works/pi-coding-agent";
-import { deletePitEscapeToken, bootstrapProcess } from "../env.ts";
+import { deletePitEscapeToken, deletePitSandboxed, bootstrapProcess } from "../env.ts";
 import { createExtensionFactories } from "../extensions/index.ts";
 /**
  * Bootstrap and run inner pit.
@@ -19,12 +19,15 @@ export const runInner = async (
   bootstrapProcess();
 
   // Read and delete env vars before any child process is spawned
+  const sandboxed = env.PIT_SANDBOXED === "1";
+  deletePitSandboxed();
+
   const token = env.PIT_ESCAPE_TOKEN ?? "";
   deletePitEscapeToken();
   const socketPath = env.PIT_ESCAPE_SOCKET ?? "";
 
   await main(argv, {
-    extensionFactories: createExtensionFactories(socketPath, token, true),
+    extensionFactories: createExtensionFactories(socketPath, token, sandboxed),
   });
 };
 

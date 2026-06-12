@@ -18,7 +18,7 @@ import {
   resolveWorktreeGitRwMounts,
 } from "../core/git/utils.ts";
 import { resolveUnversionedDirs } from "../core/sandbox/io.ts";
-import { buildSandboxMountSpec, allowedEnvArgs, buildSealedEnv, nonSandboxExtensionFlags } from "../core/sandbox/pure.ts";
+import { buildSandboxMountSpec, buildSandboxEnv, nonSandboxExtensionFlags } from "../core/sandbox/pure.ts";
 import { buildSbplProfile } from "../core/sandbox/sbpl.ts";
 import { probeSocketEffect } from "../extensions/escape/client.ts";
 import { setPitEscapeSocket } from "../env.ts";
@@ -166,14 +166,6 @@ export const buildBwrapArgs = (
   ];
 };
 
-// ── env helpers ─────────────────────────────────────────────────────────────
-
-/** Return ["--setenv", name, value] if the var is set in process.env, else []. */
-const passEnv = (name: string): string[] =>
-  process.env[name] ? ["--setenv", name, process.env[name]!] : [];
-
-
-
 /**
  * Resolve the pit source directory and its node_modules for mounting.
  * Returns null when running from a globally-installed path (already mounted).
@@ -214,22 +206,13 @@ export const bwrapLaunch = (
 ): never => {
   const bwrap = findBwrap()!;
   const nodeBin = process.execPath;
-  const nodeDir = dirname(dirname(nodeBin));
   const scriptPath = process.argv[1]!;
   const pitInnerScript = resolve(dirname(scriptPath), "src", "launcher", "inner.ts");
 
+  const env = buildSandboxEnv(pitConfig, process.env as Record<string, string | undefined>, escapeToken);
   const envArgs: string[] = [
     "--clearenv",
-    "--setenv", "HOME", HOME,
-    "--setenv", "PATH", `${nodeDir}/bin:/usr/local/bin:/usr/bin:/bin`,
-    "--setenv", "PI_CODING_AGENT", "true",
-    ...passEnv("TERM"), ...passEnv("LANG"),
-    // Proxy vars: non-secret, needed for undici EnvHttpProxyAgent in inner.ts.
-    ...passEnv("http_proxy"), ...passEnv("https_proxy"), ...passEnv("no_proxy"),
-    ...passEnv("HTTP_PROXY"), ...passEnv("HTTPS_PROXY"), ...passEnv("NO_PROXY"),
-    ...passEnv("PIT_ESCAPE_SOCKET"),
-    ...(escapeToken ? ["--setenv", "PIT_ESCAPE_TOKEN", escapeToken] : []),
-    ...allowedEnvArgs(pitConfig, process.env as Record<string, string | undefined>),
+    ...Object.entries(env).flatMap(([k, v]) => ["--setenv", k, v]),
   ];
 
   const args: Readonly<string[]> = [
@@ -258,7 +241,6 @@ export const sbplLaunch = (
   escapeToken?: string,
 ): Promise<never> => {
   const nodeBin = process.execPath;
-  const nodeDir = dirname(dirname(nodeBin));
   const scriptPath = process.argv[1]!;
   const pitInnerScript = resolve(dirname(scriptPath), "src", "launcher", "inner.ts");
 
@@ -272,10 +254,7 @@ export const sbplLaunch = (
   };
 
   const profile = buildSbplProfile(resolvedMounts);
-  const env = {
-    ...buildSealedEnv(pitConfig, process.env as Record<string, string | undefined>, nodeDir),
-    ...(escapeToken ? { PIT_ESCAPE_TOKEN: escapeToken } : {}),
-  };
+  const env = buildSandboxEnv(pitConfig, process.env as Record<string, string | undefined>, escapeToken);
 
   const child = spawn(
     "/usr/bin/sandbox-exec",
