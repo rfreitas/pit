@@ -31,10 +31,12 @@ All standard Pi flags pass through unchanged.
 
 ## Security model
 
-pit's sandbox is **OS-level** and **allowlist-based**. The backend depends on the platform:
+pit's sandbox is **OS-level** and uses a **denylist model** (reads open by default, writes restricted). The backend depends on the platform:
 
-- **Linux**: [`bwrap`](https://github.com/containers/bubblewrap) (Bubblewrap) user/PID namespace. Closed filesystem — the agent can only read paths in an explicit allowlist.
-- **macOS**: `sandbox-exec` (Seatbelt). Write-closed filesystem — writes outside the allowlist are blocked; reads are globally open except for a default credential denylist (`~/.ssh`, `~/.aws`, `~/.gnupg`, etc.).
+- **Linux**: [`bwrap`](https://github.com/containers/bubblewrap) (Bubblewrap) user/PID namespace. Write-closed filesystem — writes outside the allowlist are blocked.
+- **macOS**: `sandbox-exec` (Seatbelt). Write-closed filesystem — writes outside the allowlist are blocked.
+
+Both platforms use the same permission model: reads are globally open (no default credential blocking), writes are restricted to explicit grants.
 
 On both platforms the agent can read and write its worktree, git metadata, and the Pi config directory. Everything else is restricted.
 
@@ -78,7 +80,6 @@ Create `~/.pi/pit/config.json` to customise pit's behaviour. All fields are opti
   "nonSandboxExtensions": [],
   "allowEnv": [],
   "sandbox": {
-    "allowRead": [],
     "denyRead": [],
     "allowWrite": []
   }
@@ -89,8 +90,7 @@ Create `~/.pi/pit/config.json` to customise pit's behaviour. All fields are opti
 |---|---|---|
 | `nonSandboxExtensions` | both | Package sources loaded only in non-sandbox mode. Same format as `packages` in `settings.json`. Passed as `--extension` flags when sandbox is disabled; ignored when sandboxed. Useful for security monitoring extensions that need host access. |
 | `allowEnv` | both | Extra env var names to forward into the sandbox beyond the built-in defaults. |
-| `sandbox.allowRead` | Linux: adds to read allowlist · macOS: removes from read denylist | Grant read access to specific paths. |
-| `sandbox.denyRead` | macOS only | Block read access to additional credential paths beyond the defaults. No effect on Linux. |
+| `sandbox.denyRead` | both | Block read access to additional paths. Both platforms. |
 | `sandbox.allowWrite` | both | Allow the agent to write to additional paths. |
 
 ---

@@ -47,8 +47,8 @@ pit wraps Pi in an OS-level sandbox so the agent can only access what it needs. 
 
 | Platform | Backend | Model |
 |---|---|---|
-| Linux | [`bwrap`](https://github.com/containers/bubblewrap) (Bubblewrap) | Closed filesystem — reads and writes to unlisted paths are blocked |
-| macOS | `sandbox-exec` (Seatbelt) | Write-closed filesystem — writes outside the allowlist are blocked; reads are globally open except for a default credential denylist |
+| Linux | [`bwrap`](https://github.com/containers/bubblewrap) (Bubblewrap) | Write-closed filesystem — writes outside the allowlist are blocked |
+| macOS | `sandbox-exec` (Seatbelt) | Write-closed filesystem — writes outside the allowlist are blocked |
 
 If the sandbox backend is not available, pit warns and runs without a sandbox.
 
@@ -69,24 +69,15 @@ The sandbox features below use implementation-neutral names. Each has a platform
 
 ### Closed filesystem
 
-On **Linux**: nothing is accessible unless explicitly granted via a read or write grant. Anything outside the grant lists — home directory contents, other projects, shell credentials, system state — is inaccessible.
+Both platforms use the same permission model: reads are globally open by default (no default credential blocking), writes are restricted to explicit grants. The agent can read most of the filesystem but can only write to paths in the write allowlist.
 
-On **macOS**: writes outside the grant list are blocked. Reads are globally open except for a default credential denylist (`~/.ssh`, `~/.aws`, `~/.gnupg`, and similar). The denylist is user-extensible via `sandbox.denyRead` in [config](#config).
-
-### Read grants
-
-Paths the agent may read but not write:
-
-- System directories (`/usr`, `/etc`, and platform equivalents)
-- Selective home dotfiles: `.gitconfig`, `.config/git`, `.npmrc`, mise installs
-- Any Pi extensions currently active in `settings.json`
+Write restrictions are user-configurable via `sandbox.denyRead` and `sandbox.allowWrite` in [config](#config).
 
 ### Write grants
 
 Paths the agent may read and write:
-
 - The worktree directory
-- Worktree git metadata (`.git/worktrees/…`, `.git/objects`)
+- Worktree git metadata (`.git/worktrees/…`)
 - Pi config directory (sessions, auth)
 - npm cache (`~/.npm`)
 - mise shims (`~/.local/share/mise/shims`)
@@ -102,7 +93,7 @@ This lets the agent run tests, execute build scripts, and import packages withou
 
 Pi's config directory (`~/.pi/agent`) is mounted read-write in the sandbox. Pi reads and writes `settings.json` directly — there is no filtering, no virtual path, and no temp file. All config files (sessions, auth, settings) are accessible normally and changes persist across sessions.
 
-**Symlinks:** the kernel resolves symlinks to their final target before checking mount permissions. If `settings.json` is a symlink to a path outside the sandbox (e.g. a dotfiles-managed path elsewhere in the home directory), reads and writes fail with `ENOENT`. pit does not automatically follow or translate symlinks. The recommended setup is a real file or hardlink at `~/.pi/agent/settings.json`. If you must use a symlink, mount the target path via `sandbox.allowRead` / `sandbox.allowWrite` in [config](#config).
+**Symlinks:** the kernel resolves symlinks to their final target before checking mount permissions. If `settings.json` is a symlink to a path outside the sandbox (e.g. a dotfiles-managed path elsewhere in the home directory), reads and writes fail with `ENOENT`. pit does not automatically follow or translate symlinks. The recommended setup is a real file or hardlink at `~/.pi/agent/settings.json`. If you must use a symlink, mount the target path via `sandbox.allowWrite` in [config](#config).
 
 ### Package filtering
 
@@ -140,8 +131,7 @@ The agent process starts with a clean environment. Variables forwarded by defaul
 |---|---|---|
 | `nonSandboxExtensions` | `string[]` | Package sources to load only when sandbox is disabled. Same format as `packages` in `settings.json` — see [Non-sandbox extensions](#non-sandbox-extensions) |
 | `allowEnv` | `string[]` | Extra env var names to forward into the sandbox — see [Env seal](#env-seal) |
-| `sandbox.allowRead` | `string[]` | Linux: adds paths to the read allowlist. macOS: removes paths from the read denylist (grant read access to a path that would otherwise be denied). |
-| `sandbox.denyRead` | `string[]` | macOS only: adds paths to the read denylist beyond the defaults. No effect on Linux. |
+| `sandbox.denyRead` | `string[]` | Both platforms: adds paths to the read denylist. |
 | `sandbox.allowWrite` | `string[]` | Both platforms: adds paths the agent may write to. |
 
 ---

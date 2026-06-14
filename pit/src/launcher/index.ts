@@ -3,7 +3,7 @@
  * pit-escape out-of-sandbox helper.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";

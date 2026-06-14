@@ -47,11 +47,10 @@ network access as the host user.
 
 ## What bwrap does cover
 
-- Files outside mounted paths are inaccessible (home dir is read-only, parent
-  repo not mounted at all)
 - The agent cannot write outside the worktree without going through the socket,
   which has no general file-write op
 - Overlay writes to unversioned dirs (node_modules etc.) are ephemeral
+- Path-based read restrictions via `denyRead` config (both platforms)
 
 ## Mitigations not yet implemented
 
