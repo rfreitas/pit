@@ -57,7 +57,11 @@ function makePlainDir(tmpDirs: string[]): string {
  * setup (worktree, session, sandbox) completes before that.
  */
 function makeAgentDir(tmpDirs: string[]): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pit-e2e-agent-"));
+  // Use /tmp (not os.tmpdir()) to keep socket paths short: macOS limits
+  // Unix domain socket paths to 104 chars, and os.tmpdir() on macOS is
+  // /var/folders/wr/.../T (70+ chars), which leaves insufficient room for
+  // the pit-<uuid>.sock suffix (46 chars).
+  const dir = fs.mkdtempSync(path.join("/tmp", "pit-e2e-agent-"));
   tmpDirs.push(dir);
   fs.writeFileSync(path.join(dir, "auth.json"), "{}");
   fs.mkdirSync(path.join(dir, "sessions"), { recursive: true });

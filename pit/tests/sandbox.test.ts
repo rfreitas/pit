@@ -101,16 +101,16 @@ function runInBwrap(script: string, opts: BwrapRunOptions = {}): { stdout: strin
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-const hasBwrap = !!findBwrap();
+const isLinux = process.platform === "linux";
 
 /**
- * Check if bwrap can actually create user namespaces on this kernel.
- * Uses a minimal but complete bwrap invocation — bwrap 0.11.0 requires at
- * least a root filesystem before it can exec anything, even for a probe.
+ * Check if bwrap supports --overlay-src / --tmp-overlay (added in 0.10.0).
+ * Used only as an internal guard for the overlay capability probe below.
  */
 function bwrapCanUnshareUser(): boolean {
-  if (!hasBwrap) return false;
-  const r = spawnSync(findBwrap()!, [
+  const bwrap = findBwrap();
+  if (!bwrap) return false;
+  const r = spawnSync(bwrap, [
     "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
     "--ro-bind", "/usr", "/usr",
     "--ro-bind-try", "/bin", "/bin",
@@ -121,14 +121,13 @@ function bwrapCanUnshareUser(): boolean {
   ], { encoding: "utf8" });
   return r.status === 0;
 }
-const hasBwrapUserNS = bwrapCanUnshareUser();
 
 /**
  * Check if bwrap supports --overlay-src / --tmp-overlay (added in 0.10.0).
  * Ubuntu 24.04 ships 0.9.0 which lacks these flags.
  */
 function bwrapSupportsOverlay(): boolean {
-  if (!hasBwrapUserNS) return false;
+  if (!bwrapCanUnshareUser()) return false;
   const src = fs.mkdtempSync(path.join("/tmp", "bwrap-overlay-check-"));
   const dest = fs.mkdtempSync(path.join("/tmp", "bwrap-overlay-dest-"));
   try {
@@ -160,7 +159,7 @@ describe("pit bwrap sandbox", () => {
     for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
     tmpDirs.length = 0;
   });
-  it("resolves DNS inside bwrap", async () => {
+  it.skipIf(!isLinux)("resolves DNS inside bwrap", async () => {
     // /etc/resolv.conf is a symlink on both WSL (/mnt/wsl/resolv.conf) and
     // Ubuntu 24.04+ (/run/systemd/resolve/stub-resolv.conf). Both targets are
     // mounted via --ro-bind-try in runInBwrap. Uses dns.lookup (getaddrinfo)
@@ -176,7 +175,7 @@ describe("pit bwrap sandbox", () => {
     expect(address.length).toBeGreaterThan(0);
   });
 
-  it("reaches api.anthropic.com over HTTPS inside bwrap", async () => {
+  it.skipIf(!isLinux)("reaches api.anthropic.com over HTTPS inside bwrap", async () => {
     // Verifies that fixing DNS also unblocks outbound HTTPS to Anthropic's API.
     const result = runInBwrap(`
       import { request } from "node:https";
@@ -195,7 +194,7 @@ describe("pit bwrap sandbox", () => {
     expect(result.stdout).toBe("ok");
   });
 
-  it("reaches api.githubcopilot.com over HTTPS inside bwrap", async () => {
+  it.skipIf(!isLinux)("reaches api.githubcopilot.com over HTTPS inside bwrap", async () => {
     // Verifies connectivity to the GitHub Copilot API (default provider).
     const result = runInBwrap(`
       import { request } from "node:https";
@@ -214,7 +213,7 @@ describe("pit bwrap sandbox", () => {
     expect(result.stdout).toBe("ok");
   });
 
-  it("agent dir is readable and writable inside bwrap", async () => {
+  it.skipIf(!isLinux)("agent dir is readable and writable inside bwrap", async () => {
     // Bug: when the agent dir was --ro-bind'd, proper-lockfile could not create
     // auth.json.lock (EROFS). AuthStorage caught the error silently and left
     // this.data={}, so getApiKey() returned null for every provider.
@@ -245,7 +244,7 @@ describe("pit bwrap sandbox", () => {
     expect(providers.length).toBeGreaterThan(0);
   });
 
-  it.skipIf(!hasBwrapUserNS || !hasPiSdk)("models are available via SDK inside bwrap", async () => {
+  it.skipIf(!isLinux || !hasPiSdk)("models are available via SDK inside bwrap", async () => {
     // End-to-end check: if either the DNS fix or the auth fix regresses,
     // getAvailable() returns [] and this test fails before the user even
     // tries to send a message.
@@ -263,7 +262,7 @@ describe("pit bwrap sandbox", () => {
     expect(count, "no models — DNS or auth broken inside bwrap").toBeGreaterThanOrEqual(0);
   });
 
-  it("settings.json at real agent dir path is readable and writable", () => {
+  it.skipIf(!isLinux)("settings.json at real agent dir path is readable and writable", () => {
     // After removing shadow mounts, pi reads/writes settings.json directly
     // from the rw-mounted agent dir — no /pit-agent, no filtered temp file.
     const agentDir = fs.mkdtempSync(path.join("/tmp", "pit-agent-rw-"));
@@ -350,7 +349,7 @@ describe("tmp-overlay sandbox mounts", () => {
     }
   }
 
-  it("file from src is readable at dest inside the sandbox", async () => {
+  it.skipIf(!hasBwrapOverlay)("file from src is readable at dest inside the sandbox", async () => {
     const src  = makeTmpDir(); // lower layer (parent repo dir)
     const dest = makeTmpDir(); // mount point (worktree dir, must pre-exist)
     fs.writeFileSync(path.join(src, "sentinel.txt"), "hello-from-parent");
@@ -364,7 +363,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(result.stdout).toBe("hello-from-parent");
   });
 
-  it("writes inside the sandbox succeed (no EROFS)", async () => {
+  it.skipIf(!hasBwrapOverlay)("writes inside the sandbox succeed (no EROFS)", async () => {
     const src  = makeTmpDir();
     const dest = makeTmpDir();
 
@@ -377,7 +376,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(result.stdout).toBe("ok");
   });
 
-  it("writes inside the sandbox do NOT persist to the host src", async () => {
+  it.skipIf(!hasBwrapOverlay)("writes inside the sandbox do NOT persist to the host src", async () => {
     const src  = makeTmpDir();
     const dest = makeTmpDir();
 
@@ -391,7 +390,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(fs.existsSync(path.join(dest, "ephemeral.txt"))).toBe(false);
   });
 
-  it("host src file is unchanged after overwrite inside the sandbox", async () => {
+  it.skipIf(!hasBwrapOverlay)("host src file is unchanged after overwrite inside the sandbox", async () => {
     const src  = makeTmpDir();
     const dest = makeTmpDir();
     fs.writeFileSync(path.join(src, "original.txt"), "original-content");
@@ -404,7 +403,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(fs.readFileSync(path.join(src, "original.txt"), "utf8")).toBe("original-content");
   });
 
-  it("nested subdirectory inside src is accessible at dest", async () => {
+  it.skipIf(!hasBwrapOverlay)("nested subdirectory inside src is accessible at dest", async () => {
     // Verifies the overlay covers the whole subtree, not just the top level.
     const src  = makeTmpDir();
     const dest = makeTmpDir();
@@ -420,7 +419,7 @@ describe("tmp-overlay sandbox mounts", () => {
     expect(result.stdout).toBe("nested-content");
   });
 
-  it("write then read within the same session sees the written content", async () => {
+  it.skipIf(!hasBwrapOverlay)("write then read within the same session sees the written content", async () => {
     // The tmpfs upper layer must be coherent within a session: a file written
     // to the overlay must be immediately readable back with the new content.
     const src  = makeTmpDir();

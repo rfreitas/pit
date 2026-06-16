@@ -15,6 +15,7 @@ import { layer as NodeContextLayer, type NodeContext } from "../src/node-context
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { worktreeCheckEffect } from "../src/core/worktree/io.ts";
 
@@ -34,7 +35,7 @@ function makeTmp(prefix = "pit-wc-"): string {
 }
 
 function makeGitRepo(): string {
-  const repo = makeTmp("pit-repo-");
+  const repo = realpathSync(makeTmp("pit-repo-"));
   execFileSync("git", ["-C", repo, "init", "-b", "main", "-q"]);
   execFileSync("git", ["-C", repo, "config", "user.email", "t@t.t"]);
   execFileSync("git", ["-C", repo, "config", "user.name", "t"]);
