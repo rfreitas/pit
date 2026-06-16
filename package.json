@@ -12,7 +12,7 @@
     "packages/*"
   ],
   "scripts": {
-    "prepare": "git config core.hooksPath .githooks || true; find node_modules/node-pty/prebuilds -name 'spawn-helper' -exec chmod +x {} \\; 2>/dev/null || true",
+    "prepare": "git config core.hooksPath .githooks || true",
     "typecheck": "tsc",
     "lint": "tsx node_modules/.bin/eslint 'pit/**/*.ts' && tsx pit/scripts/check-no-disable.ts",
     "test": "vitest run",

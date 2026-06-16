@@ -20,7 +20,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn as ptySpawn } from "node-pty";
+import { spawn as ptySpawn } from "@lydell/node-pty";
 import { findBwrap } from "../src/launcher/index.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
