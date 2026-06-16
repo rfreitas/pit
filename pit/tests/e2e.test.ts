@@ -20,6 +20,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn as ptySpawn } from "node-pty";
 import { findBwrap } from "../src/launcher/index.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -475,3 +476,75 @@ describe("pit E2E — extension loading", () => {
   });
 });
 
+// ── TUI launch ────────────────────────────────────────────────────────────────
+//
+// Verifies that pit can enter interactive mode (the TUI) without crashing.
+// Requires a real PTY — without one, process.stdin.isTTY is false and pi
+// silently falls back to non-interactive mode, bypassing setRawMode entirely.
+//
+// Current failure: sandbox-exec blocks ioctl(TIOCSETA) on /dev/ttys* because
+// the SBPL profile only grants file-read*/file-write* on those nodes, not
+// file-ioctl. Fix: add (allow file-ioctl (regex #"^/dev/ttys")) to sbpl.ts.
+
+describe("pit E2E — TUI launch", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+    tmpDirs.length = 0;
+  });
+
+  // Only meaningful on macOS where sandbox-exec is the sandbox backend.
+  // On Linux the bwrap sandbox does not restrict TTY ioctls.
+  it.skipIf(process.platform !== "darwin")(
+    "interactive (TUI) launch inside sandbox-exec does not crash with setRawMode EPERM",
+    { timeout: 6000 },
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const repo = makeGitRepo(tmpDirs);
+        const agentDir = makeAgentDir(tmpDirs);
+
+        // Collect all output written to the PTY (stdout + stderr of the child
+        // are both funnelled through the PTY slave).
+        let output = "";
+        const pty = ptySpawn(
+          process.execPath,
+          ["--experimental-strip-types", PIT_SCRIPT],
+          {
+            name: "xterm-256color",
+            cols: 120,
+            rows: 30,
+            cwd: repo,
+            env: {
+              ...process.env,
+              PI_CODING_AGENT_DIR: agentDir,
+              PI_SKIP_VERSION_CHECK: "1",
+              // Make any LLM call fail instantly (ECONNREFUSED) so the
+              // process exits on its own rather than waiting for a prompt.
+              HTTPS_PROXY: "http://127.0.0.1:1",
+              HTTP_PROXY: "http://127.0.0.1:1",
+            },
+          },
+        );
+
+        pty.onData((chunk) => { output += chunk; });
+
+        // Kill after 4 s max — the crash (if present) happens within ms.
+        const timer = setTimeout(() => {
+          pty.kill();
+        }, 4000);
+
+        pty.onExit(() => {
+          clearTimeout(timer);
+          try {
+            // The crash manifests as an uncaughtException on stderr.
+            expect(output, `PTY output:\n${output}`).not.toMatch(
+              /setRawMode|uncaughtException/,
+            );
+            resolve();
+          } catch (e) {
+            reject(e);
+          }
+        });
+      }),
+  );
+});
