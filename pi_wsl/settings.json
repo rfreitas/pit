@@ -1,9 +1,9 @@
 {
-  "lastChangelogVersion": "0.75.5",
-  "defaultProvider": "opencode-go",
-  "defaultModel": "qwen3.7-max",
+  "lastChangelogVersion": "0.79.4",
+  "defaultProvider": "ollama",
+  "defaultModel": "gemma4:26b",
   "extensions": [
-    "/home/ricfr/repos/agent/extensions"
+    "~/repos/pit/extensions"
   ],
   "packages": [
     "npm:pi-agent-browser-native",
@@ -28,6 +28,9 @@
     "opencode-go/qwen3.7-plus",
     "opencode-go/mimo-v2.5-pro",
     "opencode-go/deepseek-v4-flash",
-    "google/gemini-3.1-flash-lite"
-  ]
+    "google/gemini-3.1-flash-lite",
+    "ollama/gemma4:26b",
+    "ollama/gemma4-pro:latest"
+  ],
+  "theme": "dark"
 }
