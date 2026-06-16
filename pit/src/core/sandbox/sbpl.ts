@@ -106,6 +106,7 @@ export const buildSbplProfile = (mounts: Readonly<SandboxMounts>): string => {
     "(allow pseudo-tty)",
     `(allow file-read* file-write* (literal "/dev/ptmx"))`,
     `(allow file-read* file-write* (regex #"^/dev/ttys"))`,
+    `(allow file-ioctl (regex #"^/dev/ttys"))`,
     `(allow file-ioctl (literal "/dev/null") (literal "/dev/tty") (literal "/dev/ptmx"))`,
     `(allow file-read* file-write* (literal "/dev/null"))`,
     `(allow file-read* file-write* (literal "/dev/tty"))`,
