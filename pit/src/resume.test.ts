@@ -469,14 +469,19 @@ describe("new session metadata shape (worktreeCheckEffect with no existing)", ()
   beforeEach(() => { savedCwd = process.cwd(); });
   afterEach(() => { try { process.chdir(savedCwd); } catch { /* ignore */ } });
 
-  it("no-tree (no git repo): meta has branch \'\' and repo === cwd", async () => {
+  it("no-tree (no git repo): meta has branch '' and repo === cwd", async () => {
     const cwd = makeTmp("notree-cwd-");
     process.chdir(cwd);
+    // On macOS, os.tmpdir() returns a symlinked path (/var/folders/…) but
+    // process.cwd() after chdir returns the real path (/private/var/…) because
+    // the kernel resolves symlinks on chdir. The production code calls
+    // process.cwd() to build meta.repo, so compare against the resolved path.
+    const resolvedCwd = process.cwd();
     const result = await Effect.runPromise(
       worktreeCheckEffect(undefined, false).pipe(Effect.provide(NodeContextLayer)),
     );
     expect(result.meta.branch).toBe("");
-    expect(result.meta.repo).toBe(cwd);
+    expect(result.meta.repo).toBe(resolvedCwd);
   });
 
   it("no-tree: meta stores no mode, id, created, or noTreeReason fields", async () => {

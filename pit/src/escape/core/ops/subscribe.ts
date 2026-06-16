@@ -55,8 +55,6 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
     return;
   }
 
-  socket.write(JSON.stringify({ ok: true, watching: parentBranch }) + "\n");
-
   const mainGitDir = join(mainRepo, ".git");
   const refsHeadsDir = join(mainGitDir, "refs", "heads");
   const reftableDir = join(mainGitDir, "reftable");
@@ -72,7 +70,10 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
     }, 100);
   };
 
-  const makeWatcher = (target: string, filter?: (f: string | null) => boolean): FSWatcher | null => {
+  const makeWatcher = (
+    target: string,
+    filter?: (f: string | null) => boolean,
+  ): FSWatcher | null => {
     try {
       return watch(target, (_type, filename) => {
         // On Linux (inotify), filename is not guaranteed when watching a
@@ -96,12 +97,23 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
   const setupBranchWatcher = (): void => {
     if (branchWatcher) { try { branchWatcher.close(); } catch { /* */ } }
     const branch = currentBranch; // capture: TS can't narrow a let inside a callback
-    branchWatcher = branch
-      ? makeWatcher(
-          join(refsHeadsDir, dirname(branch)),
-          (f) => f === basename(branch),
-        )
-      : null;
+    if (!branch) { branchWatcher = null; return; }
+    // Record the branch ref mtime at setup time. On macOS (FSEvents), creating
+    // a worktree causes a delayed event for refs/heads/pi/<branch> to arrive
+    // AFTER the watcher is registered. By snapshotting the mtime now, we can
+    // suppress that initial event and only notify on genuine future changes.
+    const branchFile = join(refsHeadsDir, branch);
+    let setupMtime: number;
+    try { setupMtime = statSync(branchFile).mtimeMs; } catch { setupMtime = 0; }
+    branchWatcher = makeWatcher(
+      join(refsHeadsDir, dirname(branch)),
+      (f) => {
+        if (f !== null && f !== basename(branch)) return false;
+        // Suppress the initial FSEvents delivery of the watcher-setup file state
+        try { return statSync(branchFile).mtimeMs !== setupMtime; }
+        catch { return true; } // file deleted or renamed — that's a real change
+      },
+    );
   };
 
   setupBranchWatcher();
@@ -127,16 +139,47 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
       })()
     : null;
 
-  // ── index watcher — detects staged changes ────────────────────────────
+  // ── index watcher — detects staged changes (git add / git reset / git commit) ──
   //
-  // Watches the git index file. git add / git reset / git commit all touch
-  // this file, so a single watch covers all staged-change scenarios.
+  // Watches the git index file directly. This covers changes that git diff
+  // --numstat won't see: adding gitignored files, renaming staged files, etc.
+  //
+  // On macOS, git diff --numstat performs a stat refresh that causes FSEvents
+  // to deliver an index change event ~100–200ms after the poll completes.
+  //
+  // A stat refresh does NOT change staged content — it only updates cached
+  // file metadata (ctime, mtime, size) in the index. A real git add / git
+  // reset DOES change staged content and shows a different `git diff --cached
+  // --numstat` output. By running that command in the callback and comparing
+  // against the last known staged diff, we distinguish real staging operations
+  // from poll-induced stat refreshes without any timing-based suppression.
 
-  const indexWatcher: FSWatcher | null = worktreeGitdir
-    ? makeWatcher(join(worktreeGitdir, "index"))
+  const indexPath = worktreeGitdir ? join(worktreeGitdir, "index") : null;
+  const readStagedHash = (): string => {
+    try {
+      return execFileSync("git", ["diff", "--cached", "--numstat"], {
+        cwd: worktreePath,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch { return ""; }
+  };
+
+  // Seed the staged hash at subscribe time so the first callback can compare.
+  // Seeding BEFORE sending the ack ensures the snapshot reflects the repository
+  // state BEFORE the subscriber has a chance to make changes.
+  let lastStagedHash = readStagedHash();
+
+  const indexWatcher: FSWatcher | null = indexPath
+    ? makeWatcher(indexPath, () => {
+        const current = readStagedHash();
+        if (current === lastStagedHash) return false; // stat refresh only — suppress
+        lastStagedHash = current;
+        return true; // real staging change — notify
+      })
     : null;
 
-  // ── poll for unstaged changes ───────────────────────────────────────────
+  // ── poll for unstaged changes ─────────────────────────────────────────────
   //
   // fs.watch on the worktree itself would risk ENOSPC on large repos.
   // Instead, run a cheap git diff --numstat on a configurable interval.
@@ -147,25 +190,37 @@ export const handleSubscribe = (socket: Socket, worktreePath: string): void => {
     100,
     parseInt(process.env.PIT_ESCAPE_POLL_MS ?? "2000", 10) || 2000,
   );
-  let lastUnstagedHash = "";
 
-  const pollUnstaged = (): void => {
+  // Seed the poll hash BEFORE sending the ack. In a multi-process environment,
+  // the client can receive the ack and start modifying the repository before
+  // the server processes the next line of handleSubscribe. Seeding first
+  // ensures the baseline captures the repo state at subscription time, so any
+  // change made AFTER the ack is guaranteed to produce a different hash.
+  let lastHash = execFileSync("git", ["diff", "--numstat"], {
+    cwd: worktreePath,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+  // Now send the ack. The client is unblocked only after both seeds have run,
+  // so any modification it makes thereafter will be detected by the first poll.
+  socket.write(JSON.stringify({ ok: true, watching: parentBranch }) + "\n");
+
+  const pollChanges = (): void => {
     try {
       const out = execFileSync("git", ["diff", "--numstat"], {
         cwd: worktreePath,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       });
-      if (out !== lastUnstagedHash) {
-        lastUnstagedHash = out;
+      if (out !== lastHash) {
+        lastHash = out;
         notify();
       }
     } catch { /* ignore errors during teardown */ }
   };
 
-  // Run the first poll synchronously to seed lastUnstagedHash
-  pollUnstaged();
-  const pollTimer = setInterval(pollUnstaged, pollMs);
+  const pollTimer = setInterval(pollChanges, pollMs);
 
   // ── static watchers ───────────────────────────────────────────────────────
 

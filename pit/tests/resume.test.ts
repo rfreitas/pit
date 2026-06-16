@@ -40,22 +40,8 @@ const TEST_SANDBOX = path.join(
   "test-sandbox"
 );
 
-const hasBwrap = !!findBwrap();
+const isLinux = process.platform === "linux";
 
-function bwrapCanUnshareUser(): boolean {
-  if (!hasBwrap) return false;
-  const r = spawnSync(findBwrap()!, [
-    "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc",
-    "--ro-bind", "/usr", "/usr",
-    "--ro-bind-try", "/bin", "/bin",
-    "--ro-bind-try", "/lib", "/lib",
-    "--ro-bind-try", "/lib64", "/lib64",
-    "--unshare-user",
-    "--", "/bin/true",
-  ], { encoding: "utf8" });
-  return r.status === 0;
-}
-const hasBwrapUserNS = bwrapCanUnshareUser();
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -146,7 +132,7 @@ describe("session metadata extraction for pit -r", () => {
 // meta.worktree. This test verifies the isolation is correct.
 
 describe("bwrap sandbox bound to worktree not launch dir", () => {
-  it("writes to worktree succeed, writes to launch dir are blocked", () => {
+  it.skipIf(!isLinux)("writes to worktree succeed, writes to launch dir are blocked", () => {
     const nodeBin = process.execPath;
     const nodeDir = path.dirname(path.dirname(nodeBin));
     // Both dirs are under /tmp, but only worktree is explicitly bound.
