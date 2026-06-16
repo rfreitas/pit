@@ -116,12 +116,18 @@ export async function waitForOllama(
 // Extension factory
 // ---------------------------------------------------------------------------
 
-export default function (pi: ExtensionAPI) {
-	const fetchFn: FetchFn = fetch;
-	const execFn: ExecFn = async (cmd, args) => {
+export default function (
+	pi: ExtensionAPI,
+	{
+		fetch: testFetch,
+		exec: testExec,
+	}: { fetch?: FetchFn; exec?: ExecFn } = {},
+) {
+	const fetchFn: FetchFn = testFetch ?? fetch;
+	const execFn: ExecFn = testExec ?? (async (cmd, args) => {
 		const result = await execFileAsync(cmd, args);
 		return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
-	};
+	});
 
 	pi.on("before_provider_request", async (_event, ctx) => {
 		if (ctx.model?.provider !== "ollama") return;
