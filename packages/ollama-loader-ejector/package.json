@@ -1,0 +1,18 @@
+{
+  "name": "@ricfr/pi-ollama-loader-ejector",
+  "version": "0.1.0",
+  "description": "Pi extension — ejects stale Ollama models from VRAM before each request and restarts Ollama if it's down",
+  "keywords": ["pi-package", "ollama", "pi-extension"],
+  "license": "MIT",
+  "type": "module",
+  "main": "src/ollama-loader-ejector.ts",
+  "files": ["src"],
+  "scripts": {
+    "install:ext": "cp src/ollama-loader-ejector.ts ../../extensions/ollama-loader-ejector.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "*"
+  }
+}
