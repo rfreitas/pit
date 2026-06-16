@@ -15,8 +15,8 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@lydell/node-pty": "^1.2.0-beta.12",
     "@types/node": "*",
-    "node-pty": "^1.1.0",
     "typescript": "^5.0.0"
   },
   "dependencies": {
