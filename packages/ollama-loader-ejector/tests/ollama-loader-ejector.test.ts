@@ -256,19 +256,34 @@ describe("before_provider_request handler", () => {
 
 	it("sets footer while ejecting a stale model and clears it after", async () => {
 		const pi = makeMockPi();
-		ollamaLoaderEjectorFactory(pi);
 
-		// Ollama is healthy; gemma4:26b is loaded but we want llama3:8b
-		// We need to intercept the internal fetch calls made by the handler.
-		// The handler is injected with fetch; the factory accepts an optional
-		// testFetch parameter for this purpose.
-		// (See implementation: export default function(pi, { fetch: testFetch } = {}))
-		// This test is intentionally left as an integration-style smoke test using
-		// real internal helpers — we trust unit tests above for correctness.
+		// Stub fetch: healthy on /  and returns gemma4:26b loaded on /api/ps,
+		// then accepts the eject POST on /api/generate.
+		const fetchMock = vi.fn().mockImplementation((url: string) => {
+			if (url.endsWith("/")) {
+				return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+			}
+			if (url.endsWith("/api/ps")) {
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					json: () => Promise.resolve(makeApiPsBody([{ name: "gemma4:26b" }])),
+				});
+			}
+			// /api/generate (eject)
+			return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+		});
+		const execMock = makeExec();
+
+		ollamaLoaderEjectorFactory(pi, { fetch: fetchMock, exec: execMock });
+
 		const ctx = makeMockCtx("ollama", "llama3:8b");
-		// Handler should not throw regardless of Ollama state
 		await expect(
 			pi.beforeProviderHandler?.({ type: "before_provider_request", payload: {} }, ctx),
 		).resolves.not.toThrow();
+
+		// Footer set while ejecting, then cleared
+		expect(ctx.ui.setFooter).toHaveBeenCalledWith(expect.stringContaining("gemma4:26b"));
+		expect(ctx.ui.setFooter).toHaveBeenLastCalledWith(undefined);
 	});
 });
