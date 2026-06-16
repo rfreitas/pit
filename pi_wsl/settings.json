@@ -8,7 +8,8 @@
   "packages": [
     "npm:pi-agent-browser-native",
     "npm:agent-browser",
-    "npm:pi-subagents"
+    "npm:pi-subagents",
+    "~/repos/pit/packages/ollama-loader-ejector/src/ollama-loader-ejector.ts"
   ],
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,

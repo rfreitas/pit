@@ -13,6 +13,7 @@ This repo contains personal Pi agent extensions and tooling. Read `README.md` fo
 Each package in `packages/` has its own `AGENTS.md`. Read it before making changes:
 
 - `packages/handoff/AGENTS.md` — `/handoff` extension
+- `packages/ollama-loader-ejector/AGENTS.md` — `ollama-loader-ejector` extension
 - `pit/AGENTS.md` — pit worktree sandbox (read before touching anything in `pit/`)
 
 ## Extension dependencies

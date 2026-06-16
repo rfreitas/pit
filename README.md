@@ -116,3 +116,4 @@ Requires: Node.js ≥ 22, git.
 | `/rename` | Ask the model to name the session |
 | `/chat-summary` | Summarise the conversation |
 | `sudo` | Prompt before running privileged commands |
+| `ollama-loader-ejector` | Eject stale Ollama models from VRAM and restart Ollama if it's down, before each request |
