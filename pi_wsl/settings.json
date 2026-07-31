@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.79.4",
-  "defaultProvider": "ollama",
-  "defaultModel": "gemma4:26b",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "kimi-k3",
   "extensions": [
     "~/repos/pit/extensions"
   ],
@@ -11,17 +11,9 @@
     "npm:pi-subagents",
     "~/repos/pit/packages/ollama-loader-ejector/src/ollama-loader-ejector.ts"
   ],
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "max",
   "hideThinkingBlock": true,
   "enabledModels": [
-    "github-copilot/claude-haiku-4.5",
-    "github-copilot/claude-opus-4.7",
-    "github-copilot/claude-sonnet-4.6",
-    "github-copilot/gemini-3.1-pro-preview",
-    "github-copilot/gemini-3.5-flash",
-    "google/gemini-3.1-pro-preview",
-    "google/gemini-3.5-flash",
-    "google/gemini-flash-lite-latest",
     "opencode-go/deepseek-v4-pro",
     "opencode-go/kimi-k2.6",
     "opencode-go/qwen3.6-plus",
@@ -29,9 +21,7 @@
     "opencode-go/qwen3.7-plus",
     "opencode-go/mimo-v2.5-pro",
     "opencode-go/deepseek-v4-flash",
-    "google/gemini-3.1-flash-lite",
-    "ollama/gemma4:26b",
-    "ollama/gemma4-pro:latest"
+    "opencode-go/glm-5.2"
   ],
   "theme": "dark"
 }
